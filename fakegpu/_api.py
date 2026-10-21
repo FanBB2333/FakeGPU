@@ -25,7 +25,11 @@ _PRELOAD_LIBS: tuple[str, ...] = (
 
 _LIBRARY_PATH_VAR = "DYLD_LIBRARY_PATH" if _is_macos() else "LD_LIBRARY_PATH"
 _PRELOAD_VAR = "DYLD_INSERT_LIBRARIES" if _is_macos() else "LD_PRELOAD"
-_MACOS_PROTECTED_PREFIXES = ("/System/", "/usr/bin/", "/usr/libexec/")
+# SIP purges DYLD_* variables when it launches a protected executable. Apple's
+# System Integrity Protection Guide lists /System, /bin, /sbin and /usr, except
+# /usr/local, as system-only locations.
+_MACOS_PROTECTED_PREFIXES = ("/System/", "/bin/", "/sbin/", "/usr/")
+_MACOS_UNPROTECTED_PREFIXES = ("/usr/local/",)
 
 _state_lock = threading.Lock()
 _initialized = False
@@ -472,14 +476,40 @@ def _warn_if_macos_injection_may_be_blocked(executable: str | os.PathLike[str] |
     if not resolved:
         return
 
-    if any(resolved.startswith(prefix) for prefix in _MACOS_PROTECTED_PREFIXES):
-        warnings.warn(
-            "FakeGPU may not inject correctly because macOS strips DYLD_* variables for protected system executables. "
-            f"Resolved command: {resolved}. Use a Homebrew, conda, or pyenv-managed binary instead.",
-            RuntimeWarning,
-            stacklevel=3,
-        )
-        _macos_injection_warning_emitted = True
+    # A script runs under its "#!" interpreter, so a script started through
+    # /bin/sh or /usr/bin/env loses the DYLD_* variables before its own code runs.
+    interpreter = _script_interpreter(resolved)
+    if _is_macos_protected(resolved):
+        detail = resolved
+    elif interpreter and _is_macos_protected(interpreter):
+        detail = f"{resolved} (interpreter {interpreter})"
+    else:
+        return
+    warnings.warn(
+        "FakeGPU may not inject correctly because macOS strips DYLD_* variables for protected system executables. "
+        f"Resolved command: {detail}. Use a Homebrew, conda, or pyenv-managed binary instead.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+    _macos_injection_warning_emitted = True
+
+
+def _is_macos_protected(path: str) -> bool:
+    return path.startswith(_MACOS_PROTECTED_PREFIXES) and not path.startswith(_MACOS_UNPROTECTED_PREFIXES)
+
+
+def _script_interpreter(path: str) -> str:
+    """Return the resolved "#!" interpreter of a script, or "" for other files."""
+
+    try:
+        with open(path, "rb") as stream:
+            first_line = stream.readline(512)
+    except OSError:
+        return ""
+    if not first_line.startswith(b"#!"):
+        return ""
+    words = first_line[2:].split()
+    return _resolve_executable_path(os.fsdecode(words[0])) if words else ""
 
 
 def _resolve_executable_path(executable: str | os.PathLike[str]) -> str:

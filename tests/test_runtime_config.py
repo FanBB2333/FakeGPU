@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import warnings
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import Mock
@@ -132,6 +133,56 @@ def test_preload_names_the_files_of_a_fallback_only_directory(tmp_path: Path, mo
     entries = environment[_api._PRELOAD_VAR].split(":")
     assert entries
     assert all(Path(entry).is_file() for entry in entries)
+
+
+@pytest.fixture
+def macos_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_api, "_is_macos", lambda: True)
+    monkeypatch.setattr(_api, "_macos_injection_warning_emitted", False)
+
+
+# Apple's System Integrity Protection Guide lists /System, /bin, /sbin and
+# /usr (except /usr/local) as system-only; SIP purges DYLD_* variables when it
+# launches an executable from there.
+@pytest.mark.parametrize(
+    ("command", "protected"),
+    [
+        ("/bin/sh", True),
+        ("/bin/bash", True),
+        ("/sbin/ping", True),
+        ("/usr/sbin/sysctl", True),
+        ("/usr/bin/env", True),
+        ("/System/Library/Frameworks/Python.framework/python3", True),
+        ("/usr/local/bin/python3", False),
+        ("/opt/homebrew/bin/python3", False),
+    ],
+)
+def test_macos_warning_covers_sip_protected_locations(
+    macos_warning: None, monkeypatch: pytest.MonkeyPatch, command: str, protected: bool,
+) -> None:
+    monkeypatch.setattr(_api, "_resolve_executable_path", lambda executable: os.fspath(executable))
+    monkeypatch.setattr(_api, "_script_interpreter", lambda path: "")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _api._warn_if_macos_injection_may_be_blocked(command)
+    assert bool(caught) == protected
+
+
+@pytest.mark.parametrize(
+    ("interpreter", "protected"),
+    [("/usr/bin/env python3", True), ("/bin/sh", True), ("{tmp}/python3", False)],
+)
+def test_macos_warning_follows_the_script_interpreter(
+    macos_warning: None, tmp_path: Path, interpreter: str, protected: bool,
+) -> None:
+    script = tmp_path / "train.sh"
+    script.write_text(f"#!{interpreter.format(tmp=tmp_path)}\necho ok\n", encoding="utf-8")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _api._warn_if_macos_injection_may_be_blocked(script)
+    assert bool(caught) == protected
+    if protected:
+        assert "interpreter" in str(caught[0].message)
 
 
 def test_native_init_honors_physical_visibility(native_directory: Path, monkeypatch) -> None:

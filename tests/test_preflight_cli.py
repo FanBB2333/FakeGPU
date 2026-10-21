@@ -7,6 +7,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -580,3 +583,27 @@ def test_preflight_does_not_reuse_stale_runtime_reports(tmp_path: Path) -> None:
         "fakecuda_child": None,
         "stage_log": None,
     }
+
+
+@pytest.mark.parametrize(("runtime", "warned"), [("fakecuda", False), ("native", True), ("hybrid", True)])
+def test_preflight_sip_warning_only_covers_injecting_runtimes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runtime: str, warned: bool,
+) -> None:
+    # SIP purges only DYLD_* variables; FakeCUDA does not inject libraries.
+    from fakegpu import preflight
+
+    warn = Mock()
+    monkeypatch.setattr(preflight, "_warn_if_macos_injection_may_be_blocked", warn)
+    monkeypatch.setattr(preflight, "fakegpu_env", lambda **kwargs: dict(kwargs["base_env"]))
+    monkeypatch.setattr(
+        preflight.subprocess,
+        "run",
+        Mock(return_value=subprocess.CompletedProcess(["python3"], 0, "", "")),
+    )
+    ns = preflight.build_parser().parse_args(
+        ["--runtime", runtime, "--report-dir", str(tmp_path), "--", "/usr/bin/python3", "-c", "pass"]
+    )
+
+    preflight.run_preflight(ns, ["/usr/bin/python3", "-c", "pass"])
+
+    assert warn.called == warned
