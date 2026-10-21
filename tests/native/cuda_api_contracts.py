@@ -391,6 +391,20 @@ def check_versioned_driver_exports(driver: ctypes.CDLL) -> None:
     driver.cuMemFreeHost(host)
 
 
+
+def check_zero_size_managed_allocation(runtime: ctypes.CDLL, driver: ctypes.CDLL) -> None:
+    # cuda.h (cuMemAllocManaged) and cuda_runtime_api.h (cudaMallocManaged):
+    # a size of 0 returns CUDA_ERROR_INVALID_VALUE / cudaErrorInvalidValue.
+    driver.cuMemAllocManaged.argtypes = [ctypes.POINTER(ctypes.c_ulonglong), ctypes.c_size_t, ctypes.c_uint]
+    runtime.cudaMallocManaged.argtypes = [ctypes.POINTER(c_void_p), ctypes.c_size_t, ctypes.c_uint]
+    dptr = ctypes.c_ulonglong()
+    driver_result = driver.cuMemAllocManaged(ctypes.byref(dptr), 0, 1)
+    ptr = c_void_p()
+    runtime_result = runtime.cudaMallocManaged(ctypes.byref(ptr), 0, 1)
+    runtime.cudaGetLastError()
+    actual = (driver_result, runtime_result)
+    _check(actual == (1, 1), f"zero-size managed allocation returned {actual}")
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -426,6 +440,7 @@ def main(argv: list[str] | None = None) -> int:
     check_get_proc_address_versioned_abi(driver)
     check_interior_pointers_resolve_to_allocation(runtime, driver)
     check_versioned_driver_exports(driver)
+    check_zero_size_managed_allocation(runtime, driver)
     print("CUDA API contract validation passed")
     return 0
 

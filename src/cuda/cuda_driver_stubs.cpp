@@ -2032,6 +2032,8 @@ CUresult cuMemAllocManaged(CUdeviceptr *dptr, size_t bytesize, unsigned int flag
         return CUDA_SUCCESS;
     }
 
+    if (bytesize == 0) return CUDA_ERROR_INVALID_VALUE;
+
     GlobalState::instance().initialize();
     void* ptr = malloc(bytesize);
     if (!ptr) {
