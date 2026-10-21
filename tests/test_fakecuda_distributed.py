@@ -162,6 +162,19 @@ def test_launched_ranks_match_gloo(tmp_path: Path) -> None:
             lambda out: dist.all_reduce(out, op=dist.ReduceOp.AVG, group=pair, async_op=True) is None))
         probe("pair/reduce_avg_async", outside(
             lambda out: dist.reduce(out, dst=0, op=dist.ReduceOp.AVG, group=pair, async_op=True) is None))
+        def work_handles():
+            handles = []
+            x = t(rank + 1.0)
+            gathered = torch.empty(3, device="cuda")
+            part = torch.empty(1, device="cuda")
+            for output, work in ((x, dist.all_reduce(x, async_op=True)),
+                                 (gathered, dist.all_gather_into_tensor(gathered, t(rank * 1.0), async_op=True)),
+                                 (part, dist.reduce_scatter_tensor(part, t(1.0, 2.0, 3.0), async_op=True))):
+                future = work.get_future()
+                handles.append([isinstance(work, dist.Work), work.wait(), work.is_completed(),
+                                future.wait()[0] is output, output.tolist()])
+            return handles
+        probe("work", work_handles)
     """)
     for rank in range(3):
         assert ranks[rank]["barrier_timeout"] is None
@@ -176,3 +189,22 @@ def test_launched_ranks_match_gloo(tmp_path: Path) -> None:
         assert ranks[2][name] == [[-1.0], None], name
     assert ranks[2]["pair/all_reduce_avg_async"] == [[-1.0], True]
     assert ranks[2]["pair/reduce_avg_async"] == [[-1.0], True]
+    # Finished work whose future holds the outputs, as gloo's and NCCL's work does.
+    for rank in range(3):
+        assert ranks[rank]["work"] == [
+            [True, True, True, True, [6.0]],
+            [True, True, True, True, [0.0, 1.0, 2.0]],
+            [True, True, True, True, [3.0 * (rank + 1)]],
+        ]
+
+
+def test_simulated_async_work_completes_with_its_outputs(tmp_path: Path) -> None:
+    results = _simulate(tmp_path, """
+        x = torch.ones(2, device="cuda")
+        work = dist.all_reduce(x, async_op=True)
+        results["all_reduce"] = [isinstance(work, dist.Work), work.wait(), work.is_completed(),
+                                 work.get_future().wait()[0] is x]
+        work = dist.barrier(async_op=True)
+        results["barrier"] = [work.is_completed(), work.get_future().wait()]
+    """)
+    assert results == {"all_reduce": [True, True, True, True], "barrier": [True, []]}

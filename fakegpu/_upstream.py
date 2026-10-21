@@ -349,8 +349,31 @@ class _FakeDistributedDataParallel(torch.nn.Module):
 
 
 class _FakeAsyncWork:
+    """A finished work handle, where torch cannot wrap a future in a real one."""
+
+    def __init__(self, future: Any) -> None:
+        self._future = future
+
     def wait(self, timeout: Any = None) -> bool:
         return True
+
+    def is_completed(self) -> bool:
+        return True
+
+    def is_success(self) -> bool:
+        return True
+
+    def exception(self) -> None:
+        return None
+
+    def synchronize(self) -> None:
+        return None
+
+    def get_future(self) -> Any:
+        return self._future
+
+    def result(self) -> list[torch.Tensor]:
+        return self._future.value()
 
 
 def _split_sizes(total: int, parts: int) -> list[int]:
@@ -647,8 +670,18 @@ def _real_all_reduce(raw: torch.Tensor, op: Any, group: Any) -> None:
     _ORIG_DIST["all_reduce"](raw, op=_sum_op() if op is None else op, group=group)
 
 
-def _done(async_op: bool) -> Any:
-    return _FakeAsyncWork() if async_op else None
+def _done(async_op: bool, outputs: list[torch.Tensor] | None = None) -> Any:
+    """The handle of a collective FakeGPU already finished, or None without ``async_op``.
+
+    Like NCCL's work, it is completed and its future holds the output tensors.
+    """
+
+    if not async_op:
+        return None
+    future: Any = torch.futures.Future()
+    future.set_result(list(outputs or []))
+    create = getattr(getattr(torch._C, "_distributed_c10d", None), "_create_work_from_future", None)
+    return _FakeAsyncWork(future) if create is None else create(future)
 
 
 def _dist_barrier(group: Any = None, async_op: bool = False, device_ids: Any = None, timeout: Any = None) -> Any:
@@ -657,7 +690,7 @@ def _dist_barrier(group: Any = None, async_op: bool = False, device_ids: Any = N
     if _DIST_REAL:
         options = {"timeout": timeout} if timeout is not None else {}
         return _ORIG_DIST["barrier"](group=group, async_op=async_op, **options)
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op)
 
 
 def _dist_all_reduce(tensor: torch.Tensor, op: Any = None, group: Any = None, async_op: bool = False) -> Any:
@@ -665,8 +698,8 @@ def _dist_all_reduce(tensor: torch.Tensor, op: Any = None, group: Any = None, as
         return None
     if _DIST_REAL:
         _real_all_reduce(unwrap_tensor(tensor), op, group)
-        return _done(async_op)
-    return _FakeAsyncWork() if async_op else None
+        return _done(async_op, [tensor])
+    return _done(async_op, [tensor])
 
 
 def _dist_broadcast(
@@ -681,7 +714,7 @@ def _dist_broadcast(
     if _DIST_REAL:
         options = {"group_src": group_src} if group_src is not None else {"src": src}
         return _ORIG_DIST["broadcast"](unwrap_tensor(tensor), group=group, async_op=async_op, **options)
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [tensor])
 
 
 def _dist_all_gather(
@@ -699,7 +732,7 @@ def _dist_all_gather(
     source = unwrap_tensor(tensor)
     for target in tensor_list:
         unwrap_tensor(target).copy_(source)
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, tensor_list)
 
 
 def _copy_collective_tensor(destination: torch.Tensor, source: torch.Tensor) -> None:
@@ -749,9 +782,9 @@ def _dist_all_gather_into_tensor(
         target = unwrap_tensor(output_tensor)
         # Rank-major order covers both the concatenated and the stacked layout.
         target.copy_(torch.cat([part.reshape(-1) for part in parts]).reshape(target.shape))
-        return _done(async_op)
+        return _done(async_op, [output_tensor])
     _copy_collective_tensor(output_tensor, input_tensor)
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [output_tensor])
 
 
 def _dist_reduce(
@@ -773,9 +806,9 @@ def _dist_reduce(
             _ORIG_DIST["reduce"](raw, dst=dst, op=_sum_op(), group=group)
             if torch.distributed.distributed_c10d.get_rank() == dst:
                 _divide(raw, _ORIG_DIST["get_world_size"](group))
-            return _done(async_op)
+            return _done(async_op, [tensor])
         return _ORIG_DIST["reduce"](raw, dst=dst, op=_sum_op() if op is None else op, group=group, async_op=async_op)
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [tensor])
 
 
 def _dist_gather(
@@ -794,7 +827,7 @@ def _dist_gather(
         return _ORIG_DIST["gather"](unwrap_tensor(tensor), targets, group=group, async_op=async_op, **options)
     if gather_list:
         unwrap_tensor(gather_list[0]).copy_(unwrap_tensor(tensor))
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, gather_list or [])
 
 
 def _dist_scatter(
@@ -813,7 +846,7 @@ def _dist_scatter(
         return _ORIG_DIST["scatter"](unwrap_tensor(tensor), sources, group=group, async_op=async_op, **options)
     if scatter_list:
         unwrap_tensor(tensor).copy_(unwrap_tensor(scatter_list[0]))
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [tensor])
 
 
 def _dist_reduce_scatter(
@@ -830,10 +863,10 @@ def _dist_reduce_scatter(
         _real_all_reduce(stacked, op, group)
         target = unwrap_tensor(output)
         target.copy_(stacked[_ORIG_DIST["get_rank"](group)].reshape(target.shape))
-        return _done(async_op)
+        return _done(async_op, [output])
     if input_list:
         _copy_collective_tensor(output, input_list[0])
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [output])
 
 
 def _dist_reduce_scatter_tensor(
@@ -851,9 +884,9 @@ def _dist_reduce_scatter_tensor(
         target = unwrap_tensor(output)
         size = _ORIG_DIST["get_world_size"](group)
         target.copy_(reduced.reshape(size, -1)[_ORIG_DIST["get_rank"](group)].reshape(target.shape))
-        return _done(async_op)
+        return _done(async_op, [output])
     _copy_collective_tensor(output, input)
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [output])
 
 
 def _dist_all_to_all(
@@ -873,7 +906,7 @@ def _dist_all_to_all(
         )
     for output, source in zip(output_tensor_list, input_tensor_list):
         unwrap_tensor(output).copy_(unwrap_tensor(source))
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, output_tensor_list)
 
 
 def _dist_all_to_all_single(
@@ -896,7 +929,7 @@ def _dist_all_to_all_single(
             async_op=async_op,
         )
     unwrap_tensor(output).copy_(unwrap_tensor(input))
-    return _FakeAsyncWork() if async_op else None
+    return _done(async_op, [output])
 
 
 def _dist_broadcast_object_list(
