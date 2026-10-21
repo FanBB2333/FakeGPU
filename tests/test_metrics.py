@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -131,6 +132,24 @@ def test_metrics_snapshot_bounds_process_series_and_renders_prometheus(
     assert "fakegpu_device_native_activity" in rendered
     assert 'process_name="high\\"\\nworker"' in rendered
     assert "fakegpu_exporter_history_samples 3" in rendered
+
+
+def test_metrics_label_values_stay_utf8_for_undecodable_process_names(
+    tmp_path: Path,
+) -> None:
+    # The text format carries UTF-8 label values. Python decodes an argv byte
+    # that is not UTF-8 to a lone surrogate, which the JSON state preserves.
+    _published_state(
+        tmp_path / "33.json",
+        pid=33,
+        process_name=os.fsdecode(b"train-\xff.py"),
+        used_bytes=2**30,
+    )
+    collector = MetricsCollector(state_dir=tmp_path)
+
+    rendered = render_prometheus(collector.collect_once()).encode("utf-8")
+
+    assert b'process_name="train-?.py"' in rendered
 
 
 def test_metrics_history_is_bounded_and_returns_copies() -> None:

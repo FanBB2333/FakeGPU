@@ -1069,6 +1069,9 @@ def _prometheus_labels(labels: Mapping[str, Any]) -> str:
 
 
 def _escape_label(value: str) -> str:
+    # Label values are UTF-8. A lone surrogate, such as an undecodable byte in
+    # a published sys.argv[0], would otherwise fail encoding the whole page.
+    value = value.encode("utf-8", "replace").decode("utf-8")
     return (
         value.replace("\\", "\\\\")
         .replace("\n", "\\n")
