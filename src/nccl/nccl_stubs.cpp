@@ -48,6 +48,7 @@ struct ncclComm {
     void* real_comm = nullptr;
     bool destroyed = false;
     bool suspended = false;
+    bool finalized = false;
     bool fault_injected = false;
     ncclResult_t async_error = ncclSuccess;
     std::string last_error;
@@ -57,6 +58,8 @@ namespace {
 
 constexpr int kFakeNcclVersion = NCCL_VERSION_CODE;
 constexpr int kDefaultCoordinatorTimeoutMs = 1000;
+// Magic value of NCCL_SIM_INFO_INITIALIZER in nccl.h.
+constexpr unsigned int kSimInfoMagic = 0x74685283U;
 
 thread_local int g_group_depth = 0;
 thread_local std::string g_last_error;
@@ -2788,14 +2791,25 @@ ncclResult_t ncclCommInitRankScalable(
 }
 
 ncclResult_t ncclCommFinalize(ncclComm_t comm) {
+    // NCCL treats a null communicator as a no-op (init.cc, ncclCommFinalize),
+    // e.g. the NCCL_SPLIT_NOCOLOR result of ncclCommSplit.
     if (!comm) {
-        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+        return ncclSuccess;
     }
+    if (comm->finalized) {
+        return fail_with(comm, ncclInvalidArgument, "communicator is already finalized");
+    }
+    comm->finalized = true;
     clear_last_error(comm);
     return ncclSuccess;
 }
 
 ncclResult_t ncclCommDestroy(ncclComm_t comm) {
+    // As in NCCL (init.cc, ncclCommDestroy), destroying a null communicator
+    // succeeds.
+    if (!comm) {
+        return ncclSuccess;
+    }
     return do_destroy(comm, false);
 }
 
@@ -3308,9 +3322,21 @@ ncclResult_t ncclRedOpCreatePreMulSum(
 }
 
 ncclResult_t ncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm) {
+    // Argument checks follow NCCL's enqueue.cc, ncclRedOpDestroy.
+    if (static_cast<int>(op) >= 0 && static_cast<int>(op) < static_cast<int>(ncclNumOps)) {
+        return fail_with(comm, ncclInvalidArgument, "ncclRedOpDestroy: operator is a NCCL builtin");
+    }
+    if (static_cast<int>(op) < 0) {
+        return fail_with(comm, ncclInvalidArgument, "ncclRedOpDestroy: operator is garbage");
+    }
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "ncclRedOpDestroy: invalid communicator passed");
+    }
     {
         std::lock_guard<std::mutex> lock(g_premul_sum_ops_mutex);
-        g_premul_sum_ops.erase(static_cast<int>(op));
+        if (g_premul_sum_ops.erase(static_cast<int>(op)) == 0) {
+            return fail_with(comm, ncclInvalidArgument, "ncclRedOpDestroy: operator unknown to this communicator");
+        }
     }
     clear_last_error(comm);
     return ncclSuccess;
@@ -3777,23 +3803,42 @@ ncclResult_t ncclGroupStart(void) {
 }
 
 ncclResult_t ncclGroupEnd(void) {
-    if (g_group_depth > 0) {
-        --g_group_depth;
+    // NCCL rejects an unmatched ncclGroupEnd (group.cc, ncclGroupEndInternal).
+    if (g_group_depth == 0) {
+        return fail_with(nullptr, ncclInvalidUsage, "ncclGroupEnd: not in a group call");
     }
-    if (g_group_depth > 0) {
+    if (--g_group_depth > 0) {
         return ncclSuccess;
     }
     return flush_grouped_operations();
 }
 
 ncclResult_t ncclGroupSimulateEnd(ncclSimInfo_t* sim_info) {
-    if (sim_info) {
-        sim_info->estimatedTime = 0.0f;
+    if (g_group_depth == 0) {
+        return fail_with(nullptr, ncclInvalidUsage, "ncclGroupSimulateEnd: not in a group call");
     }
-    if (g_group_depth > 0) {
-        --g_group_depth;
+    if (--g_group_depth > 0) {
+        return ncclSuccess;
     }
+    // The simulated group is never launched, whatever the outcome below.
     g_group_operations.clear();
+    if (sim_info) {
+        // Like NCCL, read only the caller's declared size and require the
+        // NCCL_SIM_INFO_INITIALIZER magic.
+        std::size_t real_size = 0;
+        std::memcpy(&real_size, &sim_info->size, sizeof(real_size));
+        real_size = std::min(real_size, sizeof(ncclSimInfo_t));
+        ncclSimInfo_t internal {};
+        std::memcpy(&internal, sim_info, real_size);
+        if (internal.magic != kSimInfoMagic) {
+            return fail_with(
+                nullptr,
+                ncclInvalidArgument,
+                "ncclSimInfo_t argument not initialized via NCCL_SIM_INFO_INITIALIZER");
+        }
+        internal.estimatedTime = 0.0f;
+        std::memcpy(sim_info, &internal, real_size);
+    }
     g_last_error.clear();
     return ncclSuccess;
 }
