@@ -795,7 +795,10 @@ class PatchResult:
 # ---------------------------------------------------------------------------
 def _checked_ordinal(index: int) -> int:
     if index < 0 or index >= _NUM_DEVICES:
-        raise RuntimeError(
+        import torch
+
+        # C10_CUDA_CHECK raises c10::AcceleratorError, a RuntimeError subclass.
+        raise getattr(torch, "AcceleratorError", RuntimeError)(
             f"CUDA error: invalid device ordinal "
             f"(requested cuda:{index}, available: {_NUM_DEVICES})"
         )

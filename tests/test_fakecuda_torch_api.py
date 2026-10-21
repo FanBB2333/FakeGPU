@@ -213,8 +213,13 @@ torch.cuda.set_device(-1)
 assert torch.cuda.current_device() == 1
 raises(ValueError, "Expected a torch.device with a specified index", lambda: torch.cuda.set_device("cuda"))
 raises(ValueError, "Expected a cuda device, but got: cpu", lambda: torch.cuda.set_device("cpu"))
-raises(RuntimeError, "invalid device ordinal", lambda: torch.cuda.set_device(2))
-raises(RuntimeError, "invalid device ordinal", lambda: torch.cuda.synchronize(2))
+# c10/cuda/CUDAException.cpp: C10_CUDA_CHECK raises c10::AcceleratorError.
+for call in (
+    lambda: torch.cuda.set_device(2),
+    lambda: torch.cuda.synchronize(2),
+    lambda: torch.ones(1, device="cuda:2"),
+):
+    raises(torch.AcceleratorError, "CUDA error: invalid device ordinal", call)
 
 for no_op in (-1, None):
     with torch.cuda.device(no_op):
