@@ -273,6 +273,19 @@ def test_versioned_temperature_matches_the_legacy_reading(tmp_path: Path) -> Non
     assert result[0] == 0 and result[1] == result[2]
 
 
+def test_memory_info_v2_keeps_the_nvml_struct_version(tmp_path: Path) -> None:
+    # nvml.h: nvmlMemory_v2 = NVML_STRUCT_VERSION(Memory, 2) = 0x02000028.
+    result = _nvml(
+        tmp_path,
+        """
+        memory = N.nvmlDeviceGetMemoryInfo(N.nvmlDeviceGetHandleByIndex(0), version=N.nvmlMemory_v2)
+        result = [memory.version, memory.total == memory.free + memory.used + memory.reserved]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    assert result == [0x02000028, True]
+
+
 def test_bridge_power_fields_follow_power_queries(tmp_path: Path) -> None:
     # docs/en/fakegpu-smi.md: without reference telemetry the bridge reports
     # power draw as unavailable; the field-value path must agree.
