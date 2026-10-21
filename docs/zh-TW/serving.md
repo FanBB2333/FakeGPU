@@ -66,6 +66,8 @@ python3 -m fakegpu plan-serving \
   非 PyTorch 記憶體與 CUDA graph）取代建模的非 KV 值。
 - `--vllm-kv-cache-memory-bytes` 指定每張 GPU 的精確 cache 大小。與 vLLM 一致，
   此時不再使用 `--memory-utilization`。
+- 與 vLLM 的 `--dtype auto` 一致，float32 checkpoint 以 bfloat16 計算；compute
+  capability 低於 8.0 時以 float16 計算。
 - `--memory-utilization` 預設 `0.92`，與
   [vLLM CacheConfig 文件](https://docs.vllm.ai/en/latest/api/vllm/config/cache/)
   一致。固定軟體版本的報告建議明確填入。

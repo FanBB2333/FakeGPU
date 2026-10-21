@@ -1484,6 +1484,48 @@ def test_vllm_runtime_concurrency_counts_whole_blocks_per_request(
     assert runtime_cache["max_model_len_concurrency"] == pytest.approx(10.0)
 
 
+@pytest.mark.parametrize(
+    ("runtime", "target_profile", "expected_dtype"),
+    [
+        # vLLM v0.32.0 vllm/config/model.py:2405-2426 downcasts float32 to
+        # the platform's first dtype; vllm/platforms/cuda.py:255-261 puts
+        # bfloat16 first from compute capability 8.0 and float16 before.
+        ("vllm", "a100", "bfloat16"),
+        ("vllm", "t4", "float16"),
+        ("generic", "a100", "float32"),
+    ],
+)
+def test_vllm_runtime_auto_dtype_downcasts_float32_checkpoints(
+    tmp_path: Path,
+    runtime: str,
+    target_profile: str,
+    expected_dtype: str,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(
+        model_dir,
+        config_overrides={"torch_dtype": "float32"},
+        checkpoint_dtype="F32",
+    )
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=1,
+        max_batch_size=1,
+        prompt_tokens=16,
+        runtime=runtime,
+        target_profile=target_profile,
+    )
+
+    element_bytes = 4 if expected_dtype == "float32" else 2
+    assert report["inputs"]["dtype"] == expected_dtype
+    assert report["inputs"]["element_bytes"] == element_bytes
+    assert report["memory"]["target_parameter_bytes"] == 320 * element_bytes
+    assert report["kv_cache"][
+        "bytes_per_token_per_sequence_at_compute_dtype"
+    ] == 2 * 2 * 1 * 4 * element_bytes
+
+
 def test_vllm_runtime_rejects_unsupported_or_misplaced_options(
     tmp_path: Path,
 ) -> None:

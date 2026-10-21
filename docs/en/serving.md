@@ -71,6 +71,8 @@ python3 -m fakegpu plan-serving \
   and CUDA graphs).
 - `--vllm-kv-cache-memory-bytes` sets an exact per-GPU cache size. Like vLLM,
   it then ignores `--memory-utilization`.
+- Like vLLM's `--dtype auto`, float32 checkpoints are planned in bfloat16, or
+  in float16 below compute capability 8.0.
 - `--memory-utilization` defaults to `0.92`, matching the
   [vLLM CacheConfig reference](https://docs.vllm.ai/en/latest/api/vllm/config/cache/).
   Set it explicitly for version-locked reports.

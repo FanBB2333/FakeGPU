@@ -136,15 +136,13 @@ def estimate_serving_plan(
     runtime = capacity.runtime
     memory_utilization = capacity.memory_utilization
 
-    base = estimate_decoder_inference(
+    base = _estimate_serving_decoder(
         model_dir,
-        batch_size=1,
         prompt_tokens=prompt_tokens,
-        generated_tokens=1,
         dtype=dtype,
-        use_cache=False,
+        runtime=runtime,
+        target=capacity.target,
         attention_implementation=attention_implementation,
-        runtime_overhead_bytes=0,
         adapter_dirs=adapter_dirs,
     )
     dimensions = dict(base["model"])
@@ -390,15 +388,13 @@ def estimate_serving_request_set(
     max_prompt_tokens = max(
         request["prompt_tokens"] for request in normalized
     )
-    base = estimate_decoder_inference(
+    base = _estimate_serving_decoder(
         model_dir,
-        batch_size=1,
         prompt_tokens=max_prompt_tokens,
-        generated_tokens=1,
         dtype=dtype,
-        use_cache=False,
+        runtime=runtime,
+        target=capacity.target,
         attention_implementation=attention_implementation,
-        runtime_overhead_bytes=0,
         adapter_dirs=adapter_dirs,
     )
     dimensions = dict(base["model"])
@@ -746,6 +742,46 @@ def _build_serving_report(
         "unmodeled_components": unmodeled_components,
         "notes": report_notes,
     }
+
+
+def _estimate_serving_decoder(
+    model_dir: str | Path,
+    *,
+    prompt_tokens: int,
+    dtype: str,
+    runtime: str,
+    target: Mapping[str, Any] | None,
+    attention_implementation: str,
+    adapter_dirs: Sequence[str | Path] | None,
+) -> dict[str, Any]:
+    """Read the decoder shape at the dtype the serving runtime computes in."""
+
+    def estimate(selected_dtype: str) -> dict[str, Any]:
+        return estimate_decoder_inference(
+            model_dir,
+            batch_size=1,
+            prompt_tokens=prompt_tokens,
+            generated_tokens=1,
+            dtype=selected_dtype,
+            use_cache=False,
+            attention_implementation=attention_implementation,
+            runtime_overhead_bytes=0,
+            adapter_dirs=adapter_dirs,
+        )
+
+    base = estimate(dtype)
+    if (
+        runtime == "vllm"
+        and dtype == "auto"
+        and base["inputs"]["dtype"] == "float32"
+    ):
+        # vLLM's dtype="auto" downcasts float32 checkpoints to the
+        # platform's first supported dtype: bfloat16 from compute
+        # capability 8.0, float16 before it.
+        capability = (target or {}).get("compute_capability")
+        major = int(str(capability).split(".")[0]) if capability else 8
+        base = estimate("bfloat16" if major >= 8 else "float16")
+    return base
 
 
 @dataclass(frozen=True, slots=True)
