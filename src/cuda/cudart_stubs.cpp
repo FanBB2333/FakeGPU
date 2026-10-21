@@ -14,8 +14,24 @@
 #include <unordered_map>
 #include <vector>
 
-// Thread-local error tracking
-static __thread cudaError_t last_error = cudaSuccess;
+// Thread-local error tracking. Assigning stores the status of the current call;
+// only errors overwrite the value cudaGetLastError/cudaPeekAtLastError report
+// (CUDA C++ Programming Guide 12.4, section 3.2.12 "Error Checking").
+namespace {
+struct LastError {
+    cudaError_t result = cudaSuccess;
+    cudaError_t recorded = cudaSuccess;
+
+    LastError& operator=(cudaError_t error) {
+        result = error;
+        if (error != cudaSuccess) recorded = error;
+        return *this;
+    }
+    operator cudaError_t() const { return result; }
+};
+}  // namespace
+
+static thread_local LastError last_error;
 
 namespace {
 
@@ -191,41 +207,150 @@ static cudaError_t newPlaceholder(T* out) {
 }
 
 struct ErrorDescription {
-    cudaError_t code;
+    int code;
     const char* name;
     const char* text;
 };
 
+// Names and descriptions as returned by libcudart.so.12 (CUDA 12.4).
 static const ErrorDescription& describeError(cudaError_t error) {
     static const ErrorDescription kErrors[] = {
-        {cudaSuccess, "cudaSuccess", "no error"},
-        {cudaErrorInvalidValue, "cudaErrorInvalidValue", "invalid argument"},
-        {cudaErrorMemoryAllocation, "cudaErrorMemoryAllocation", "out of memory"},
-        {cudaErrorInitializationError, "cudaErrorInitializationError", "initialization error"},
-        {cudaErrorInvalidDevice, "cudaErrorInvalidDevice", "invalid device ordinal"},
-        {cudaErrorInvalidMemcpyDirection, "cudaErrorInvalidMemcpyDirection", "invalid memcpy direction"},
-        {cudaErrorNotReady, "cudaErrorNotReady", "not ready"},
-        {cudaErrorNotSupported, "cudaErrorNotSupported", "operation not supported"},
-        {cudaErrorPeerAccessUnsupported,
-         "cudaErrorPeerAccessUnsupported",
-         "peer access is not supported between these two devices"},
-        {cudaErrorInvalidDeviceFunction, "cudaErrorInvalidDeviceFunction", "invalid device function"},
-        {cudaErrorInvalidSymbol, "cudaErrorInvalidSymbol", "invalid device symbol"},
-        {cudaErrorInvalidKernelImage, "cudaErrorInvalidKernelImage", "invalid kernel image"},
-        {cudaErrorNoKernelImageForDevice,
-         "cudaErrorNoKernelImageForDevice",
-         "no kernel image is available for execution on the device"},
-        {cudaErrorInvalidPtx, "cudaErrorInvalidPtx", "invalid PTX"},
-        {cudaErrorInvalidResourceHandle, "cudaErrorInvalidResourceHandle", "invalid resource handle"},
-        {cudaErrorIllegalAddress, "cudaErrorIllegalAddress", "an illegal memory access was encountered"},
-        {cudaErrorLaunchOutOfResources, "cudaErrorLaunchOutOfResources", "too many resources requested for launch"},
-        {cudaErrorLaunchFailure, "cudaErrorLaunchFailure", "kernel execution failed"},
+        {0, "cudaSuccess", "no error"},
+        {1, "cudaErrorInvalidValue", "invalid argument"},
+        {2, "cudaErrorMemoryAllocation", "out of memory"},
+        {3, "cudaErrorInitializationError", "initialization error"},
+        {4, "cudaErrorCudartUnloading", "driver shutting down"},
+        {5, "cudaErrorProfilerDisabled", "profiler disabled while using external profiling tool"},
+        {6, "cudaErrorProfilerNotInitialized", "profiler not initialized: call cudaProfilerInitialize()"},
+        {7, "cudaErrorProfilerAlreadyStarted", "profiler already started"},
+        {8, "cudaErrorProfilerAlreadyStopped", "profiler already stopped"},
+        {9, "cudaErrorInvalidConfiguration", "invalid configuration argument"},
+        {12, "cudaErrorInvalidPitchValue", "invalid pitch argument"},
+        {13, "cudaErrorInvalidSymbol", "invalid device symbol"},
+        {16, "cudaErrorInvalidHostPointer", "invalid host pointer"},
+        {17, "cudaErrorInvalidDevicePointer", "invalid device pointer"},
+        {18, "cudaErrorInvalidTexture", "invalid texture reference"},
+        {19, "cudaErrorInvalidTextureBinding", "texture is not bound to a pointer"},
+        {20, "cudaErrorInvalidChannelDescriptor", "invalid channel descriptor"},
+        {21, "cudaErrorInvalidMemcpyDirection", "invalid copy direction for memcpy"},
+        {22, "cudaErrorAddressOfConstant", "invalid address of constant"},
+        {23, "cudaErrorTextureFetchFailed", "fetch from texture failed"},
+        {24, "cudaErrorTextureNotBound", "cannot fetch from a texture that is not bound"},
+        {25, "cudaErrorSynchronizationError", "incorrect use of __syncthreads()"},
+        {26, "cudaErrorInvalidFilterSetting", "linear filtering not supported for non-float type"},
+        {27, "cudaErrorInvalidNormSetting", "read as normalized float not supported for 32-bit non float type"},
+        {28, "cudaErrorMixedDeviceExecution", "device emulation mode and device execution mode cannot be mixed"},
+        {31, "cudaErrorNotYetImplemented", "feature not yet implemented"},
+        {32, "cudaErrorMemoryValueTooLarge", "memory size or pointer value too large to fit in 32 bit"},
+        {34, "cudaErrorStubLibrary", "CUDA driver is a stub library"},
+        {35, "cudaErrorInsufficientDriver", "CUDA driver version is insufficient for CUDA runtime version"},
+        {36, "cudaErrorCallRequiresNewerDriver", "API call is not supported in the installed CUDA driver"},
+        {37, "cudaErrorInvalidSurface", "invalid surface reference"},
+        {43, "cudaErrorDuplicateVariableName", "duplicate global variable looked up by string name"},
+        {44, "cudaErrorDuplicateTextureName", "duplicate texture looked up by string name"},
+        {45, "cudaErrorDuplicateSurfaceName", "duplicate surface looked up by string name"},
+        {46, "cudaErrorDevicesUnavailable", "CUDA-capable device(s) is/are busy or unavailable"},
+        {49, "cudaErrorIncompatibleDriverContext", "incompatible driver context"},
+        {52, "cudaErrorMissingConfiguration", "__global__ function call is not configured"},
+        {53, "cudaErrorPriorLaunchFailure", "unspecified launch failure in prior launch"},
+        {65, "cudaErrorLaunchMaxDepthExceeded", "launch would exceed maximum depth of nested launches"},
+        {66, "cudaErrorLaunchFileScopedTex", "launch failed because kernel uses unsupported, file-scoped textures (texture objects are supported)"},
+        {67, "cudaErrorLaunchFileScopedSurf", "launch failed because kernel uses unsupported, file-scoped surfaces (surface objects are supported)"},
+        {68, "cudaErrorSyncDepthExceeded", "cudaDeviceSynchronize failed because caller's grid depth exceeds cudaLimitDevRuntimeSyncDepth"},
+        {69, "cudaErrorLaunchPendingCountExceeded", "launch failed because launch would exceed cudaLimitDevRuntimePendingLaunchCount"},
+        {98, "cudaErrorInvalidDeviceFunction", "invalid device function"},
+        {100, "cudaErrorNoDevice", "no CUDA-capable device is detected"},
+        {101, "cudaErrorInvalidDevice", "invalid device ordinal"},
+        {102, "cudaErrorDeviceNotLicensed", "device doesn't have valid Grid license"},
+        {103, "cudaErrorSoftwareValidityNotEstablished", "integrity checks failed"},
+        {127, "cudaErrorStartupFailure", "startup failure in cuda runtime"},
+        {200, "cudaErrorInvalidKernelImage", "device kernel image is invalid"},
+        {201, "cudaErrorDeviceUninitialized", "invalid device context"},
+        {205, "cudaErrorMapBufferObjectFailed", "mapping of buffer object failed"},
+        {206, "cudaErrorUnmapBufferObjectFailed", "unmapping of buffer object failed"},
+        {207, "cudaErrorArrayIsMapped", "array is mapped"},
+        {208, "cudaErrorAlreadyMapped", "resource already mapped"},
+        {209, "cudaErrorNoKernelImageForDevice", "no kernel image is available for execution on the device"},
+        {210, "cudaErrorAlreadyAcquired", "resource already acquired"},
+        {211, "cudaErrorNotMapped", "resource not mapped"},
+        {212, "cudaErrorNotMappedAsArray", "resource not mapped as array"},
+        {213, "cudaErrorNotMappedAsPointer", "resource not mapped as pointer"},
+        {214, "cudaErrorECCUncorrectable", "uncorrectable ECC error encountered"},
+        {215, "cudaErrorUnsupportedLimit", "limit is not supported on this architecture"},
+        {216, "cudaErrorDeviceAlreadyInUse", "exclusive-thread device already in use by a different thread"},
+        {217, "cudaErrorPeerAccessUnsupported", "peer access is not supported between these two devices"},
+        {218, "cudaErrorInvalidPtx", "a PTX JIT compilation failed"},
+        {219, "cudaErrorInvalidGraphicsContext", "invalid OpenGL or DirectX context"},
+        {220, "cudaErrorNvlinkUncorrectable", "uncorrectable NVLink error detected during the execution"},
+        {221, "cudaErrorJitCompilerNotFound", "PTX JIT compiler library not found"},
+        {222, "cudaErrorUnsupportedPtxVersion", "the provided PTX was compiled with an unsupported toolchain."},
+        {223, "cudaErrorJitCompilationDisabled", "PTX JIT compilation was disabled"},
+        {224, "cudaErrorUnsupportedExecAffinity", "the provided execution affinity is not supported"},
+        {225, "cudaErrorUnsupportedDevSideSync", "the provided PTX contains unsupported call to cudaDeviceSynchronize"},
+        {300, "cudaErrorInvalidSource", "device kernel image is invalid"},
+        {301, "cudaErrorFileNotFound", "file not found"},
+        {302, "cudaErrorSharedObjectSymbolNotFound", "shared object symbol not found"},
+        {303, "cudaErrorSharedObjectInitFailed", "shared object initialization failed"},
+        {304, "cudaErrorOperatingSystem", "OS call failed or operation not supported on this OS"},
+        {400, "cudaErrorInvalidResourceHandle", "invalid resource handle"},
+        {401, "cudaErrorIllegalState", "the operation cannot be performed in the present state"},
+        {402, "cudaErrorLossyQuery", "attempted introspection would be semantically lossy"},
+        {500, "cudaErrorSymbolNotFound", "named symbol not found"},
+        {600, "cudaErrorNotReady", "device not ready"},
+        {700, "cudaErrorIllegalAddress", "an illegal memory access was encountered"},
+        {701, "cudaErrorLaunchOutOfResources", "too many resources requested for launch"},
+        {702, "cudaErrorLaunchTimeout", "the launch timed out and was terminated"},
+        {703, "cudaErrorLaunchIncompatibleTexturing", "launch uses incompatible texturing mode"},
+        {704, "cudaErrorPeerAccessAlreadyEnabled", "peer access is already enabled"},
+        {705, "cudaErrorPeerAccessNotEnabled", "peer access has not been enabled"},
+        {708, "cudaErrorSetOnActiveProcess", "cannot set while device is active in this process"},
+        {709, "cudaErrorContextIsDestroyed", "context is destroyed"},
+        {710, "cudaErrorAssert", "device-side assert triggered"},
+        {711, "cudaErrorTooManyPeers", "peer mapping resources exhausted"},
+        {712, "cudaErrorHostMemoryAlreadyRegistered", "part or all of the requested memory range is already mapped"},
+        {713, "cudaErrorHostMemoryNotRegistered", "pointer does not correspond to a registered memory region"},
+        {714, "cudaErrorHardwareStackError", "hardware stack error"},
+        {715, "cudaErrorIllegalInstruction", "an illegal instruction was encountered"},
+        {716, "cudaErrorMisalignedAddress", "misaligned address"},
+        {717, "cudaErrorInvalidAddressSpace", "operation not supported on global/shared address space"},
+        {718, "cudaErrorInvalidPc", "invalid program counter"},
+        {719, "cudaErrorLaunchFailure", "unspecified launch failure"},
+        {720, "cudaErrorCooperativeLaunchTooLarge", "too many blocks in cooperative launch"},
+        {800, "cudaErrorNotPermitted", "operation not permitted"},
+        {801, "cudaErrorNotSupported", "operation not supported"},
+        {802, "cudaErrorSystemNotReady", "system not yet initialized"},
+        {803, "cudaErrorSystemDriverMismatch", "system has unsupported display driver / cuda driver combination"},
+        {804, "cudaErrorCompatNotSupportedOnDevice", "forward compatibility was attempted on non supported HW"},
+        {805, "cudaErrorMpsConnectionFailed", "MPS client failed to connect to the MPS control daemon or the MPS server"},
+        {806, "cudaErrorMpsRpcFailure", "the remote procedural call between the MPS server and the MPS client failed"},
+        {807, "cudaErrorMpsServerNotReady", "MPS server is not ready to accept new MPS client requests"},
+        {808, "cudaErrorMpsMaxClientsReached", "the hardware resources required to create MPS client have been exhausted"},
+        {809, "cudaErrorMpsMaxConnectionsReached", "the hardware resources required to support device connections have been exhausted"},
+        {810, "cudaErrorMpsClientTerminated", "the MPS client has been terminated by the server"},
+        {811, "cudaErrorCdpNotSupported", "is using CUDA Dynamic Parallelism, but the current configuration, like MPS, does not support it"},
+        {812, "cudaErrorCdpVersionMismatch", "unsupported interaction between different versions of CUDA Dynamic Parallelism"},
+        {900, "cudaErrorStreamCaptureUnsupported", "operation not permitted when stream is capturing"},
+        {901, "cudaErrorStreamCaptureInvalidated", "operation failed due to a previous error during capture"},
+        {902, "cudaErrorStreamCaptureMerge", "operation would result in a merge of separate capture sequences"},
+        {903, "cudaErrorStreamCaptureUnmatched", "capture was not ended in the same stream as it began"},
+        {904, "cudaErrorStreamCaptureUnjoined", "capturing stream has unjoined work"},
+        {905, "cudaErrorStreamCaptureIsolation", "dependency created on uncaptured work in another stream"},
+        {906, "cudaErrorStreamCaptureImplicit", "operation would make the legacy stream depend on a capturing blocking stream"},
+        {907, "cudaErrorCapturedEvent", "operation not permitted on an event last recorded in a capturing stream"},
+        {908, "cudaErrorStreamCaptureWrongThread", "attempt to terminate a thread-local capture sequence from another thread"},
+        {909, "cudaErrorTimeout", "wait operation timed out"},
+        {910, "cudaErrorGraphExecUpdateFailure", "the graph update was not performed because it included changes which violated constraints specific to instantiated graph update"},
+        {911, "cudaErrorExternalDevice", "an async error has occured in external entity outside of CUDA"},
+        {912, "cudaErrorInvalidClusterSize", "a kernel launch error has occurred due to cluster misconfiguration"},
+        {999, "cudaErrorUnknown", "unknown error"},
+        {10000, "cudaErrorApiFailureBase", "api failure base"},
     };
-    static const ErrorDescription kUnknown = {cudaErrorUnknown, "cudaErrorUnknown", "unknown error"};
+    // cuda_runtime_api.h: both functions return this text for unknown codes.
+    static const ErrorDescription kUnrecognized = {-1, "unrecognized error code", "unrecognized error code"};
     for (const ErrorDescription& entry : kErrors) {
-        if (entry.code == error) return entry;
+        if (entry.code == static_cast<int>(error)) return entry;
     }
-    return kUnknown;
+    return kUnrecognized;
 }
 
 static cudaError_t allocDevice(void** out, size_t size) {
@@ -344,6 +469,53 @@ static cudaError_t getDeviceProperties(Properties *prop, int device) {
     cuDeviceGetAttribute(&prop->pciDeviceID, CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID, device);
     cuDeviceGetAttribute(&prop->pciDomainID, CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID, device);
 
+    // The remaining fields mirror the cudaDevAttr values of the same name
+    // (cuda_runtime_api.h, cudaGetDeviceProperties and cudaDeviceGetAttribute).
+    auto attribute = [device](CUdevice_attribute attrib) {
+        int value = 0;
+        cuDeviceGetAttribute(&value, attrib, device);
+        return value;
+    };
+    CUuuid uuid{};
+    if (cuDeviceGetUuid(&uuid, device) == CUDA_SUCCESS) memcpy(prop->uuid, uuid.bytes, sizeof(prop->uuid));
+    prop->totalConstMem = attribute(CU_DEVICE_ATTRIBUTE_TOTAL_CONSTANT_MEMORY);
+    prop->memPitch = attribute(CU_DEVICE_ATTRIBUTE_MAX_PITCH);
+    prop->textureAlignment = attribute(CU_DEVICE_ATTRIBUTE_TEXTURE_ALIGNMENT);
+    prop->deviceOverlap = attribute(CU_DEVICE_ATTRIBUTE_GPU_OVERLAP);
+    prop->kernelExecTimeoutEnabled = attribute(CU_DEVICE_ATTRIBUTE_KERNEL_EXEC_TIMEOUT);
+    prop->integrated = attribute(CU_DEVICE_ATTRIBUTE_INTEGRATED);
+    prop->canMapHostMemory = attribute(CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY);
+    prop->computeMode = attribute(CU_DEVICE_ATTRIBUTE_COMPUTE_MODE);
+    prop->concurrentKernels = attribute(CU_DEVICE_ATTRIBUTE_CONCURRENT_KERNELS);
+    prop->ECCEnabled = attribute(CU_DEVICE_ATTRIBUTE_ECC_ENABLED);
+    prop->tccDriver = attribute(CU_DEVICE_ATTRIBUTE_TCC_DRIVER);
+    prop->asyncEngineCount = attribute(CU_DEVICE_ATTRIBUTE_ASYNC_ENGINE_COUNT);
+    prop->unifiedAddressing = attribute(CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING);
+    prop->persistingL2CacheMaxSize = attribute(CU_DEVICE_ATTRIBUTE_MAX_PERSISTING_L2_CACHE_SIZE);
+    prop->streamPrioritiesSupported = attribute(CU_DEVICE_ATTRIBUTE_STREAM_PRIORITIES_SUPPORTED);
+    prop->globalL1CacheSupported = attribute(CU_DEVICE_ATTRIBUTE_GLOBAL_L1_CACHE_SUPPORTED);
+    prop->localL1CacheSupported = attribute(CU_DEVICE_ATTRIBUTE_LOCAL_L1_CACHE_SUPPORTED);
+    prop->sharedMemPerMultiprocessor = attribute(CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR);
+    prop->regsPerMultiprocessor = attribute(CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR);
+    prop->managedMemory = attribute(CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY);
+    prop->isMultiGpuBoard = attribute(CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD);
+    prop->multiGpuBoardGroupID = attribute(CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD_GROUP_ID);
+    prop->hostNativeAtomicSupported = attribute(CU_DEVICE_ATTRIBUTE_HOST_NATIVE_ATOMIC_SUPPORTED);
+    prop->singleToDoublePrecisionPerfRatio = attribute(CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO);
+    prop->pageableMemoryAccess = attribute(CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS);
+    prop->concurrentManagedAccess = attribute(CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS);
+    prop->computePreemptionSupported = attribute(CU_DEVICE_ATTRIBUTE_COMPUTE_PREEMPTION_SUPPORTED);
+    prop->canUseHostPointerForRegisteredMem = attribute(CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM);
+    prop->cooperativeLaunch = attribute(CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH);
+    prop->cooperativeMultiDeviceLaunch = attribute(CU_DEVICE_ATTRIBUTE_COOPERATIVE_MULTI_DEVICE_LAUNCH);
+    prop->sharedMemPerBlockOptin = attribute(CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN);
+    prop->pageableMemoryAccessUsesHostPageTables =
+        attribute(CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES);
+    prop->directManagedMemAccessFromHost = attribute(CU_DEVICE_ATTRIBUTE_DIRECT_MANAGED_MEM_ACCESS_FROM_HOST);
+    prop->maxBlocksPerMultiProcessor = attribute(CU_DEVICE_ATTRIBUTE_MAX_BLOCKS_PER_MULTIPROCESSOR);
+    prop->accessPolicyMaxWindowSize = attribute(CU_DEVICE_ATTRIBUTE_MAX_ACCESS_POLICY_WINDOW_SIZE);
+    prop->reservedSharedMemPerBlock = attribute(CU_DEVICE_ATTRIBUTE_RESERVED_SHARED_MEMORY_PER_BLOCK);
+
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaGetDeviceProperties(%d)\n", device);
     return last_error;
@@ -406,11 +578,24 @@ cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device) {
 cudaError_t cudaGetDeviceProperties_v2(cudaDevicePropV2 *prop, int device) {
     const cudaError_t result = getDeviceProperties(prop, device);
     if (result != cudaSuccess) return result;
-    int shared_mem = 0;
-    cuDeviceGetAttribute(&shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device);
-    prop->sharedMemPerBlockOptin = shared_mem;
-    cuDeviceGetAttribute(&prop->hostRegisterSupported, CU_DEVICE_ATTRIBUTE_HOST_REGISTER_SUPPORTED, device);
-    cuDeviceGetAttribute(&prop->memoryPoolsSupported, CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED, device);
+    auto attribute = [device](CUdevice_attribute attrib) {
+        int value = 0;
+        cuDeviceGetAttribute(&value, attrib, device);
+        return value;
+    };
+    prop->hostRegisterSupported = attribute(CU_DEVICE_ATTRIBUTE_HOST_REGISTER_SUPPORTED);
+    prop->sparseCudaArraySupported = attribute(CU_DEVICE_ATTRIBUTE_SPARSE_CUDA_ARRAY_SUPPORTED);
+    prop->hostRegisterReadOnlySupported = attribute(CU_DEVICE_ATTRIBUTE_READ_ONLY_HOST_REGISTER_SUPPORTED);
+    prop->timelineSemaphoreInteropSupported = attribute(CU_DEVICE_ATTRIBUTE_TIMELINE_SEMAPHORE_INTEROP_SUPPORTED);
+    prop->memoryPoolsSupported = attribute(CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED);
+    prop->gpuDirectRDMASupported = attribute(CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_SUPPORTED);
+    prop->gpuDirectRDMAFlushWritesOptions = attribute(CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_FLUSH_WRITES_OPTIONS);
+    prop->gpuDirectRDMAWritesOrdering = attribute(CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING);
+    prop->memoryPoolSupportedHandleTypes = attribute(CU_DEVICE_ATTRIBUTE_MEMPOOL_SUPPORTED_HANDLE_TYPES);
+    prop->deferredMappingCudaArraySupported = attribute(CU_DEVICE_ATTRIBUTE_DEFERRED_MAPPING_CUDA_ARRAY_SUPPORTED);
+    prop->ipcEventSupported = attribute(CU_DEVICE_ATTRIBUTE_IPC_EVENT_SUPPORTED);
+    prop->clusterLaunch = attribute(CU_DEVICE_ATTRIBUTE_CLUSTER_LAUNCH);
+    prop->unifiedFunctionPointers = attribute(CU_DEVICE_ATTRIBUTE_UNIFIED_FUNCTION_POINTERS);
     return cudaSuccess;
 }
 
@@ -634,15 +819,15 @@ cudaError_t cudaEventRecordWithFlags(cudaEvent_t event, cudaStream_t stream, uns
 // ============================================================================
 
 cudaError_t cudaGetLastError(void) {
-    cudaError_t err = last_error;
-    last_error = cudaSuccess;  // Clear error
+    const cudaError_t err = last_error.recorded;
+    last_error.recorded = cudaSuccess;  // Clear error
     FGPU_LOG("[FakeCUDART] cudaGetLastError returning %d\n", err);
     return err;
 }
 
 cudaError_t cudaPeekAtLastError(void) {
-    FGPU_LOG("[FakeCUDART] cudaPeekAtLastError returning %d\n", last_error);
-    return last_error;
+    FGPU_LOG("[FakeCUDART] cudaPeekAtLastError returning %d\n", last_error.recorded);
+    return last_error.recorded;
 }
 
 const char* cudaGetErrorString(cudaError_t error) {
@@ -835,7 +1020,7 @@ cudaError_t cudaDeviceEnablePeerAccess(int peerDevice, unsigned int flags) {
     const int device = fake_gpu::GlobalState::instance().get_current_device();
     const bool allowed = modeled_peer_access(device, peerDevice, error);
     last_error = error != cudaSuccess ? error : allowed ? cudaSuccess : cudaErrorPeerAccessUnsupported;
-    FGPU_LOG("[FakeCUDART] cudaDeviceEnablePeerAccess(%d -> %d) = %d\n", device, peerDevice, last_error);
+    FGPU_LOG("[FakeCUDART] cudaDeviceEnablePeerAccess(%d -> %d) = %d\n", device, peerDevice, last_error.result);
     return last_error;
 }
 
@@ -863,8 +1048,9 @@ cudaError_t cudaGetDriverEntryPointByVersion(const char *symbol, void **funcPtr,
     return setLastError(convertDriverError(result));
 }
 
-cudaError_t cudaGetDriverEntryPoint(const char *symbol, void **funcPtr, unsigned long long flags) {
-    return cudaGetDriverEntryPointByVersion(symbol, funcPtr, 12000, flags, NULL);
+// CUDA 12 added the optional driverStatus argument (cuda_runtime_api.h).
+cudaError_t cudaGetDriverEntryPoint(const char *symbol, void **funcPtr, unsigned long long flags, int *driverStatus) {
+    return cudaGetDriverEntryPointByVersion(symbol, funcPtr, 12000, flags, driverStatus);
 }
 
 // ============================================================================
@@ -1302,8 +1488,14 @@ cudaError_t cudaPointerGetAttributes(cudaPointerAttributes *attributes, const vo
         }
         attributes->device = alloc_device;
     }
-    attributes->devicePointer = const_cast<void*>(ptr);
-    attributes->hostPointer = const_cast<void*>(ptr);
+    // Each alias is NULL when that side cannot access the memory directly:
+    // the host cannot dereference device memory, nor the device unregistered memory.
+    if (attributes->type != cudaMemoryTypeUnregistered) {
+        attributes->devicePointer = const_cast<void*>(ptr);
+    }
+    if (attributes->type != cudaMemoryTypeDevice) {
+        attributes->hostPointer = const_cast<void*>(ptr);
+    }
 
     return setLastError(cudaSuccess);
 }
@@ -1691,7 +1883,7 @@ cudaError_t cudaFuncGetAttributes(void *attr, const void *func) {
     if (!attr) return setLastError(cudaErrorInvalidValue);
 
     // Simplified: zero out attributes
-    memset(attr, 0, 64);  // Assume structure is ~64 bytes
+    memset(attr, 0, sizeof(cudaFuncAttributes));
     return setLastError(cudaSuccess);
 }
 

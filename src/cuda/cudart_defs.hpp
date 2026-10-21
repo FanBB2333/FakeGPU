@@ -49,7 +49,7 @@ typedef struct CUstream_st *cudaStream_t;
 // Event type
 typedef struct CUevent_st *cudaEvent_t;
 
-// Device properties
+// Device properties (CUDA 11.8 layout, used by the unversioned symbol)
 typedef struct cudaDeviceProp {
     char name[256];
     char uuid[16];
@@ -117,6 +117,7 @@ typedef struct cudaDeviceProp {
     int managedMemory;
     int isMultiGpuBoard;
     int multiGpuBoardGroupID;
+    int hostNativeAtomicSupported;
     int singleToDoublePrecisionPerfRatio;
     int pageableMemoryAccess;
     int concurrentManagedAccess;
@@ -306,7 +307,7 @@ cudaError_t cudaDeviceDisablePeerAccess(int peerDevice);
 
 // Driver Entry Point (CUDA 12+)
 cudaError_t cudaGetDriverEntryPointByVersion(const char *symbol, void **funcPtr, unsigned int cudaVersion, unsigned long long flags, int *driverStatus);
-cudaError_t cudaGetDriverEntryPoint(const char *symbol, void **funcPtr, unsigned long long flags);
+cudaError_t cudaGetDriverEntryPoint(const char *symbol, void **funcPtr, unsigned long long flags, int *driverStatus);
 
 // Additional Stream Management
 cudaError_t cudaStreamCreateWithFlags(cudaStream_t *pStream, unsigned int flags);
@@ -374,10 +375,10 @@ cudaError_t cudaDeviceGetMemPool(cudaMemPool_t *memPool, int device);
 
 // Pointer Attributes
 typedef enum {
+    cudaMemoryTypeUnregistered = 0,
     cudaMemoryTypeHost = 1,
     cudaMemoryTypeDevice = 2,
-    cudaMemoryTypeManaged = 3,
-    cudaMemoryTypeUnregistered = 4
+    cudaMemoryTypeManaged = 3
 } cudaMemoryType;
 
 typedef struct cudaPointerAttributes {
@@ -536,7 +537,27 @@ cudaError_t cudaLaunchCooperativeKernelMultiDevice(void *launchParamsList, unsig
 cudaError_t cudaThreadSynchronize(void);
 cudaError_t cudaThreadExit(void);
 
-// Function Attributes
+// Function Attributes (CUDA 12.4 layout, 144 bytes on LP64)
+typedef struct cudaFuncAttributes {
+    size_t sharedSizeBytes;
+    size_t constSizeBytes;
+    size_t localSizeBytes;
+    int maxThreadsPerBlock;
+    int numRegs;
+    int ptxVersion;
+    int binaryVersion;
+    int cacheModeCA;
+    int maxDynamicSharedSizeBytes;
+    int preferredShmemCarveout;
+    int clusterDimMustBeSet;
+    int requiredClusterWidth;
+    int requiredClusterHeight;
+    int requiredClusterDepth;
+    int clusterSchedulingPolicyPreference;
+    int nonPortableClusterSizeAllowed;
+    int reserved[16];
+} cudaFuncAttributes;
+
 cudaError_t cudaFuncGetAttributes(void *attr, const void *func);
 cudaError_t cudaFuncSetCacheConfig(const void *func, int cacheConfig);
 cudaError_t cudaFuncSetSharedMemConfig(const void *func, int config);
