@@ -949,11 +949,21 @@ nvmlReturn_t nvmlDeviceWorkloadPowerProfileClearRequestedProfiles(nvmlDevice_t d
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
-// Architecture info
+// Architecture info. GpuArch values follow compute capability, not NVML ids.
 nvmlReturn_t nvmlDeviceGetArchitecture(nvmlDevice_t device, unsigned int *arch) {
     if (!device || !arch) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
-    *arch = static_cast<unsigned int>(dev->profile.architecture);
+    switch (dev->profile.architecture) {
+        case GpuArch::Maxwell: *arch = NVML_DEVICE_ARCH_MAXWELL; break;
+        case GpuArch::Pascal: *arch = NVML_DEVICE_ARCH_PASCAL; break;
+        case GpuArch::Volta: *arch = NVML_DEVICE_ARCH_VOLTA; break;
+        case GpuArch::Turing: *arch = NVML_DEVICE_ARCH_TURING; break;
+        case GpuArch::Ampere: *arch = NVML_DEVICE_ARCH_AMPERE; break;
+        case GpuArch::Ada: *arch = NVML_DEVICE_ARCH_ADA; break;
+        case GpuArch::Hopper: *arch = NVML_DEVICE_ARCH_HOPPER; break;
+        case GpuArch::Blackwell: *arch = NVML_DEVICE_ARCH_BLACKWELL; break;
+        default: *arch = NVML_DEVICE_ARCH_UNKNOWN; break;
+    }
     return NVML_SUCCESS;
 }
 

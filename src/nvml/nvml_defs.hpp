@@ -247,6 +247,17 @@ typedef struct nvmlGpuFabricInfo_v3_st {
     unsigned char reserved[3];
 } nvmlGpuFabricInfo_v3_t;
 
+// nvmlDeviceArchitecture_t values (nvml.h NVML_DEVICE_ARCH_*)
+#define NVML_DEVICE_ARCH_MAXWELL 3
+#define NVML_DEVICE_ARCH_PASCAL 4
+#define NVML_DEVICE_ARCH_VOLTA 5
+#define NVML_DEVICE_ARCH_TURING 6
+#define NVML_DEVICE_ARCH_AMPERE 7
+#define NVML_DEVICE_ARCH_ADA 8
+#define NVML_DEVICE_ARCH_HOPPER 9
+#define NVML_DEVICE_ARCH_BLACKWELL 10
+#define NVML_DEVICE_ARCH_UNKNOWN 0xffffffff
+
 // Virtualization mode
 typedef enum {
     NVML_GPU_VIRTUALIZATION_MODE_NONE = 0,
