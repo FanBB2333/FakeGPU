@@ -1104,7 +1104,7 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
 
         def __init__(
             self,
-            device_type: str = "cuda",
+            device_type: str,
             dtype: Any = None,
             enabled: bool = True,
             cache_enabled: bool | None = None,
@@ -1156,6 +1156,9 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
                 "cuda", dtype=dtype, enabled=enabled, cache_enabled=cache_enabled
             )
 
+    # ``torch.autocast`` is a separate binding of the same class; Accelerate
+    # and most training code use it.
+    torch_mod.autocast = _PatchedAutocast
     torch_mod.amp.autocast = _PatchedAutocast
     torch_mod.cuda.amp.autocast = _PatchedCudaAmpAutocast
 

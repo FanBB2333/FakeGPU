@@ -98,3 +98,39 @@ assert torch.cuda.memory_allocated(0) - base == (1024 * 1024 + 1024) * 2
 print("to overloads passed")
 """
     )
+
+
+def test_torch_autocast_alias_autocasts_cuda_ops() -> None:
+    # torch.autocast is the documented spelling; on CUDA, linear and matmul
+    # run in the autocast dtype (CPU autocast applies the same op lists).
+    _run(
+        """
+import torch
+
+assert torch.autocast is torch.amp.autocast
+reference = torch.nn.Linear(4, 4)
+with torch.autocast("cpu", dtype=torch.float16):
+    assert reference(torch.ones(2, 4)).dtype == torch.float16
+
+fakegpu.init(runtime="fakecuda", devices="a100")
+layer = torch.nn.Linear(4, 4).cuda()
+x = torch.ones(2, 4, device="cuda")
+for ctx in (
+    lambda: torch.autocast("cuda", dtype=torch.float16),
+    lambda: torch.autocast(device_type="cuda"),
+    lambda: torch.amp.autocast("cuda"),
+):
+    with ctx():
+        assert layer(x).dtype == torch.float16
+        assert (x @ x.T).dtype == torch.float16
+assert layer(x).dtype == torch.float32
+
+try:
+    torch.autocast()
+except TypeError:
+    pass
+else:
+    raise AssertionError("device_type is a required argument of torch.autocast")
+print("torch.autocast passed")
+"""
+    )
