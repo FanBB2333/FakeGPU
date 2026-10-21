@@ -356,6 +356,10 @@ class _DeviceMemoryTracker:
         self._used = [0] * len(per_device_bytes)
         self._peak = [0] * len(per_device_bytes)
         self._stats = [_DeviceStats() for _ in per_device_bytes]
+        # set_per_process_memory_fraction() cap on reserved bytes, if any.
+        self._allowed_memory_maximum: list[int | None] = [
+            None for _ in per_device_bytes
+        ]
         self._alloc_calls = [0] * len(per_device_bytes)
         self._free_calls = [0] * len(per_device_bytes)
         self._peak_by_stage: list[dict[str, int]] = [dict() for _ in per_device_bytes]
@@ -494,10 +498,14 @@ class _DeviceMemoryTracker:
         reserved = self._stats[device].total("reserved_bytes").current
         allocated = self._stats[device].total("allocated_bytes").current
         free = max(0, total - reserved)
+        allowed = self._allowed_memory_maximum[device]
+        allowed_info = (
+            "" if allowed is None else f"{_format_size(allowed)} allowed; "
+        )
         return (
             f"CUDA out of memory. Tried to allocate {_format_size(alloc_size)}. "
             f"GPU {device} has a total capacity of {_format_size(total)} "
-            f"of which {_format_size(free)} is free. "
+            f"of which {_format_size(free)} is free. {allowed_info}"
             f"Of the allocated memory {_format_size(allocated)} is allocated "
             f"by PyTorch, and {_format_size(reserved - allocated)} is reserved "
             "by PyTorch but unallocated. If reserved but unallocated memory is "
@@ -635,6 +643,32 @@ class _DeviceMemoryTracker:
                 return (0, 0)
             free = self._total[device] - self._reserved[device]
             return (max(0, free), self._total[device])
+
+    def _check_fraction_device(self, device: int) -> None:
+        if device < 0 or device >= len(self._total):
+            raise RuntimeError(
+                f"Allocator not initialized for device {device}: did you call init?"
+            )
+
+    def set_memory_fraction(self, fraction: float, device: int) -> None:
+        """Mirror ``DeviceCachingAllocator::setMemoryFraction``."""
+        with self._lock:
+            self._check_fraction_device(device)
+            if not 0 <= fraction <= 1:
+                raise RuntimeError(
+                    f"invalid fraction:{fraction}. Please set within [0, 1]."
+                )
+            self._allowed_memory_maximum[device] = (
+                round(fraction * self._total[device]) if fraction < 1.0 else None
+            )
+
+    def get_memory_fraction(self, device: int) -> float:
+        with self._lock:
+            self._check_fraction_device(device)
+            allowed = self._allowed_memory_maximum[device]
+            if allowed is None:
+                return 1.0
+            return allowed / self._total[device]
 
     def reset_peak(self, device: int) -> None:
         with self._lock:
@@ -849,7 +883,12 @@ class _DeviceMemoryTracker:
                 block_size,
                 min(segment_size, self._total[device]),
             )
-            if self._reserved[device] + segment_size > self._total[device]:
+            reserved = self._stats[device].total("reserved_bytes").current
+            if reserved + segment_size > self._total[device]:
+                return None
+            # alloc_block() refuses cudaMalloc beyond the fraction's cap.
+            allowed = self._allowed_memory_maximum[device]
+            if allowed is not None and reserved + segment_size > allowed:
                 return None
             segment = {
                 "id": self._next_segment_id,

@@ -1547,6 +1547,18 @@ def _install_tracked_memory_api(torch_mod: Any) -> None:
 
     torch_mod._C._cuda_memoryStats = _tracked_cuda_memory_stats
 
+    # torch.cuda.set/get_per_process_memory_fraction() and
+    # get_allocator_backend() validate in Python and then call these.
+    def _tracked_set_memory_fraction(fraction, device):
+        _memory_tracker.set_memory_fraction(float(fraction), int(device))
+
+    def _tracked_get_memory_fraction(device):
+        return _memory_tracker.get_memory_fraction(int(device))
+
+    torch_mod._C._cuda_setMemoryFraction = _tracked_set_memory_fraction
+    torch_mod._C._cuda_getMemoryFraction = _tracked_get_memory_fraction
+    torch_mod._C._cuda_getAllocatorBackend = lambda: "native"
+
 
 def _install_fake_grad_scaler(torch_mod: Any) -> None:
     class _FakeGradScaler(torch_mod.amp.GradScaler):

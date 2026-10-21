@@ -206,6 +206,70 @@ def test_allocator_oom_message_matches_cuda_caching_allocator() -> None:
     )
 
 
+def test_allocator_memory_fraction_caps_reserved_memory() -> None:
+    # DeviceCachingAllocator::setMemoryFraction()/alloc_block(): a fraction
+    # below 1 caps the bytes obtained from cudaMalloc at round(f * total).
+    torch = pytest.importorskip("torch")
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.set_memory_fraction(0.5, 0)
+    assert tracker.get_memory_fraction(0) == 0.5
+    tracker.allocate(1, 30 * MIB, 0)
+    with pytest.raises(torch.OutOfMemoryError, match=r"is free\. 32\.00 MiB allowed; "):
+        tracker.allocate(2, 5 * MIB, 0)
+
+    tracker.set_memory_fraction(1.0, 0)
+    assert tracker.get_memory_fraction(0) == 1.0
+    tracker.allocate(3, 5 * MIB, 0)
+    assert tracker.memory_reserved(0) == 50 * MIB
+    with pytest.raises(RuntimeError, match="Allocator not initialized for device 1"):
+        tracker.set_memory_fraction(0.5, 1)
+
+
+def test_fakecuda_memory_fraction_and_backend_apis() -> None:
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", profile="test-512m", device_count=1)
+
+        import torch
+
+        result = {"backend": torch.cuda.get_allocator_backend()}
+        torch.cuda.set_per_process_memory_fraction(0.25)
+        result["fraction"] = torch.cuda.get_per_process_memory_fraction()
+        try:
+            torch.cuda.set_per_process_memory_fraction(1)
+        except TypeError:
+            result["int_fraction"] = "TypeError"
+        try:
+            torch.empty(160 * 1024**2, dtype=torch.uint8, device="cuda")
+        except torch.OutOfMemoryError as exc:
+            result["oom"] = str(exc)
+        print(json.dumps(result))
+        """
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert payload["backend"] == "native"
+    assert payload["fraction"] == 0.25
+    assert payload["int_fraction"] == "TypeError"
+    assert "128.00 MiB allowed; " in payload["oom"]
+
+
 def test_allocator_memory_stats_follow_cuda_caching_allocator() -> None:
     # Expected values follow DeviceStats updates in CUDACachingAllocator.cpp
     # and the key layout of torch.cuda.memory_stats() (PyTorch v2.14.1).
