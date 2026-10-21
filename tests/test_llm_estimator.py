@@ -1001,27 +1001,48 @@ def test_serving_kv_pool_shares_prefix_across_active_sequences() -> None:
     assert shared["decode"]["allocation_utilization_percent"] == 100
 
 
-def test_serving_prefix_segments_are_rounded_independently() -> None:
+@pytest.mark.parametrize(
+    ("prompt_tokens", "shared_prefix_tokens", "shared_blocks", "private_blocks"),
+    [
+        # A 1-token prefix fills no block, so nothing is shared.
+        (17, 1, 0, 2),
+        # 20 prefix tokens share one full block; each 40-token sequence
+        # still holds cdiv(40, 16) - 1 = 2 blocks of its own.
+        (40, 20, 1, 2),
+    ],
+)
+def test_serving_paged_prefix_shares_only_full_blocks(
+    prompt_tokens: int,
+    shared_prefix_tokens: int,
+    shared_blocks: int,
+    private_blocks: int,
+) -> None:
+    # vLLM v0.32.0 vllm/v1/core/kv_cache_utils.py:980-982 hashes, and so
+    # shares, only full blocks of a prompt prefix.
     report = estimate_serving_kv_pool(
         num_hidden_layers=2,
         num_key_value_heads=1,
         head_dim=4,
         active_sequences=2,
-        prompt_tokens=17,
+        prompt_tokens=prompt_tokens,
         element_bytes=2,
         strategy="paged",
-        shared_prefix_tokens=1,
+        shared_prefix_tokens=shared_prefix_tokens,
         block_tokens=16,
     )
 
+    block_bytes = 16 * 32
     prefill = report["prefill"]
-    assert prefill["shared_segment"]["allocated_tokens_per_sequence"] == 16
+    assert prefill["retained_shared_prefix_tokens"] == 16 * shared_blocks
+    assert prefill["shared_segment"]["allocated_tokens_per_sequence"] == (
+        16 * shared_blocks
+    )
     assert prefill["private_segments"][
         "allocated_tokens_per_sequence"
-    ] == 16
-    assert prefill["without_prefix_cache_bytes"] == 2048
-    assert prefill["allocated_bytes"] == 1536
-    assert prefill["reservation_overhead_bytes"] == 480
+    ] == 16 * private_blocks
+    assert prefill["allocated_bytes"] == block_bytes * (
+        shared_blocks + 2 * private_blocks
+    )
 
 
 def test_serving_prefix_cache_rejects_unsupported_storage() -> None:
@@ -1296,10 +1317,11 @@ def test_vllm_runtime_admission_is_limited_by_reserved_kv_pool(
         active_sequences=2,
         **common,
     )
+    # vLLM holds one block back as the null block.
     cache_bytes = max(
         phase["components"]["kv_cache"]
         for phase in two_sequences["memory_timeline"]["phases"]
-    )
+    ) + 16 * 32
 
     report = estimate_serving_plan(
         model_dir,
@@ -1335,10 +1357,11 @@ def test_vllm_runtime_supports_ordered_request_prefix_admission(
         requests[:2],
         max_batch_size=3,
     )
+    # vLLM holds one block back as the null block.
     cache_bytes = max(
         phase["components"]["kv_cache"]
         for phase in prefix["memory_timeline"]["phases"]
-    )
+    ) + 16 * 32
 
     report = estimate_serving_request_set(
         model_dir,
@@ -1358,6 +1381,149 @@ def test_vllm_runtime_supports_ordered_request_prefix_admission(
     assert report["scheduler"]["limiting_factor"] == (
         "vllm_kv_cache_capacity"
     )
+
+
+def test_vllm_runtime_holds_back_the_null_block(tmp_path: Path) -> None:
+    # vLLM v0.32.0 vllm/v1/core/block_pool.py:184-188 pops block 0 as the
+    # null block, so ten blocks hold four 31-token requests (2 blocks each).
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    block_bytes = 16 * 32
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=5,
+        max_batch_size=8,
+        prompt_tokens=16,
+        generated_tokens=16,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=10 * block_bytes,
+        vllm_non_kv_cache_memory_bytes=0,
+    )
+
+    runtime_cache = report["runtime"]["kv_cache"]
+    assert runtime_cache["num_gpu_blocks"] == 10
+    assert runtime_cache["allocatable_bytes"] == 10 * block_bytes
+    assert runtime_cache["usable_bytes"] == 9 * block_bytes
+    assert runtime_cache["logical_requested_fits"] is False
+    assert runtime_cache["headroom_bytes"] == -block_bytes
+    assert report["scheduler"]["admissible_active_sequences"] == 4
+    assert report["scheduler"]["limiting_factor"] == (
+        "vllm_kv_cache_capacity"
+    )
+
+
+@pytest.mark.parametrize(
+    ("cache_blocks", "failure"),
+    [
+        # check_memory = available - one null block must be positive.
+        (1, "no_available_kv_cache_memory"),
+        # max_model_len 33 needs cdiv(33, 16) = 3 blocks beyond the null one.
+        (2, "max_model_len_exceeds_kv_cache"),
+        (3, "max_model_len_exceeds_kv_cache"),
+        (4, None),
+    ],
+)
+def test_vllm_runtime_startup_requires_one_max_model_len_request(
+    tmp_path: Path,
+    cache_blocks: int,
+    failure: str | None,
+) -> None:
+    # vLLM v0.32.0 vllm/v1/core/kv_cache_utils.py:1003-1040 and 2617-2637
+    # raise at startup instead of serving fewer requests.
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=1,
+        max_batch_size=1,
+        prompt_tokens=16,
+        generated_tokens=17,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=cache_blocks * 16 * 32,
+        vllm_non_kv_cache_memory_bytes=0,
+    )
+
+    memory = report["runtime"]["memory"]
+    assert report["runtime"]["kv_cache"]["max_model_len_blocks"] == 3
+    assert memory["initialization_failure"] == failure
+    assert memory["initialization_fits"] is (failure is None)
+    assert report["scheduler"]["requested_fits"] is (failure is None)
+    if failure is not None:
+        assert report["scheduler"]["admissible_active_sequences"] == 0
+        assert report["scheduler"]["limiting_factor"] == (
+            "vllm_model_executor_budget"
+        )
+
+
+def test_vllm_runtime_concurrency_counts_whole_blocks_per_request(
+    tmp_path: Path,
+) -> None:
+    # vLLM v0.32.0 vllm/v1/core/kv_cache_utils.py:1195-1227 divides
+    # num_blocks by cdiv(max_model_len, block_size): 60 / cdiv(81, 16).
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=1,
+        max_batch_size=1,
+        prompt_tokens=64,
+        generated_tokens=17,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=60 * 16 * 32,
+        vllm_non_kv_cache_memory_bytes=0,
+    )
+
+    runtime_cache = report["runtime"]["kv_cache"]
+    assert runtime_cache["max_model_len_blocks"] == 6
+    assert runtime_cache["max_model_len_concurrency"] == pytest.approx(10.0)
+
+
+@pytest.mark.parametrize(
+    ("runtime", "target_profile", "expected_dtype"),
+    [
+        # vLLM v0.32.0 vllm/config/model.py:2405-2426 downcasts float32 to
+        # the platform's first dtype; vllm/platforms/cuda.py:255-261 puts
+        # bfloat16 first from compute capability 8.0 and float16 before.
+        ("vllm", "a100", "bfloat16"),
+        ("vllm", "t4", "float16"),
+        ("generic", "a100", "float32"),
+    ],
+)
+def test_vllm_runtime_auto_dtype_downcasts_float32_checkpoints(
+    tmp_path: Path,
+    runtime: str,
+    target_profile: str,
+    expected_dtype: str,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(
+        model_dir,
+        config_overrides={"torch_dtype": "float32"},
+        checkpoint_dtype="F32",
+    )
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=1,
+        max_batch_size=1,
+        prompt_tokens=16,
+        runtime=runtime,
+        target_profile=target_profile,
+    )
+
+    element_bytes = 4 if expected_dtype == "float32" else 2
+    assert report["inputs"]["dtype"] == expected_dtype
+    assert report["inputs"]["element_bytes"] == element_bytes
+    assert report["memory"]["target_parameter_bytes"] == 320 * element_bytes
+    assert report["kv_cache"][
+        "bytes_per_token_per_sequence_at_compute_dtype"
+    ] == 2 * 2 * 1 * 4 * element_bytes
 
 
 def test_vllm_runtime_rejects_unsupported_or_misplaced_options(

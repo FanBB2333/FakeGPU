@@ -34,7 +34,9 @@ KV segments, runtime overhead, and usable headroom.
 
 - Use `--device-memory-gib` instead of `--target-profile` for a custom
   capacity.
-- Prefix sharing needs a dynamic or paged cache.
+- Prefix sharing needs a dynamic or paged cache. Like vLLM, a paged cache
+  shares only full prefix blocks; a partial last block stays private to
+  each request.
 - Capacity search never goes beyond `--max-batch-size`.
 
 ## Match vLLM's memory reservation
@@ -62,11 +64,15 @@ python3 -m fakegpu plan-serving \
   report shows `num_gpu_blocks`, cache token capacity, whether initialization
   fits, and concurrency at `max_model_len`, separately from the logical KV
   demand of the requests.
+- Like vLLM, one block is held back as the null block. Initialization fails
+  unless one `max_model_len` request fits in the remaining blocks.
 - `--vllm-non-kv-cache-memory-bytes` replaces the modeled non-KV value with
   one from a vLLM startup profile (weights, peak activations, non-torch memory,
   and CUDA graphs).
 - `--vllm-kv-cache-memory-bytes` sets an exact per-GPU cache size. Like vLLM,
   it then ignores `--memory-utilization`.
+- Like vLLM's `--dtype auto`, float32 checkpoints are planned in bfloat16, or
+  in float16 below compute capability 8.0.
 - `--memory-utilization` defaults to `0.92`, matching the
   [vLLM CacheConfig reference](https://docs.vllm.ai/en/latest/api/vllm/config/cache/).
   Set it explicitly for version-locked reports.

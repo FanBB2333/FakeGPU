@@ -94,44 +94,63 @@ def _build_vllm_runtime_report(
     logical_requested_kv_cache_bytes = _logical_kv_peak_bytes(
         requested_memory
     )
+    max_model_len_blocks = math.ceil(max_model_len_tokens / block_tokens)
     if available_before_rounding is None:
         num_gpu_blocks = None
         allocatable_kv_cache_bytes = None
+        usable_kv_cache_bytes = None
         block_rounding_tail_bytes = None
         kv_cache_size_tokens = None
         requested_kv_cache_fits = None
+        max_model_len_fits = None
         initialization_required_bytes = None
         max_model_len_concurrency = None
         headroom_bytes = None
     else:
         num_gpu_blocks = available_before_rounding // block_bytes
         allocatable_kv_cache_bytes = num_gpu_blocks * block_bytes
+        # vLLM's BlockPool permanently holds block 0 back as the null
+        # block, so requests can only use the remaining blocks.
+        usable_kv_cache_bytes = max(0, num_gpu_blocks - 1) * block_bytes
         block_rounding_tail_bytes = (
             available_before_rounding - allocatable_kv_cache_bytes
         )
         kv_cache_size_tokens = num_gpu_blocks * block_tokens
         requested_kv_cache_fits = (
-            logical_requested_kv_cache_bytes <= allocatable_kv_cache_bytes
+            logical_requested_kv_cache_bytes <= usable_kv_cache_bytes
         )
+        # vLLM refuses to start unless one request at max_model_len fits
+        # in the cache after the null block is held back.
+        max_model_len_fits = num_gpu_blocks - 1 >= max_model_len_blocks
         initialization_required_bytes = (
             selected_non_kv_peak + allocatable_kv_cache_bytes
         )
-        max_model_len_concurrency = (
-            kv_cache_size_tokens / max_model_len_tokens
-        )
+        # vLLM divides the block count by the whole blocks one
+        # max_model_len request occupies.
+        max_model_len_concurrency = num_gpu_blocks / max_model_len_blocks
         headroom_bytes = (
-            allocatable_kv_cache_bytes - logical_requested_kv_cache_bytes
+            usable_kv_cache_bytes - logical_requested_kv_cache_bytes
         )
-    if memory_limit_bytes is None:
-        initialization_fits = None
-    elif not explicit_kv_cache and (
-        selected_non_kv_peak > memory_limit_bytes
+    if (
+        available_before_rounding is not None
+        and available_before_rounding <= block_bytes
     ):
-        initialization_fits = False
+        initialization_failure = "no_available_kv_cache_memory"
+    elif max_model_len_fits is False:
+        initialization_failure = "max_model_len_exceeds_kv_cache"
+    elif (
+        memory_limit_bytes is not None
+        and initialization_required_bytes > memory_limit_bytes
+    ):
+        initialization_failure = "device_memory_exceeded"
     else:
-        initialization_fits = (
-            initialization_required_bytes <= memory_limit_bytes
-        )
+        initialization_failure = None
+    if initialization_failure is not None:
+        initialization_fits = False
+    elif memory_limit_bytes is None:
+        initialization_fits = None
+    else:
+        initialization_fits = True
     if requested_kv_cache_fits is False or initialization_fits is False:
         requested_fits_memory = False
     elif requested_kv_cache_fits is True and initialization_fits is True:
@@ -171,6 +190,7 @@ def _build_vllm_runtime_report(
                 initialization_required_bytes
             ),
             "initialization_fits": initialization_fits,
+            "initialization_failure": initialization_failure,
         },
         "kv_cache": {
             "source": kv_cache_source,
@@ -180,9 +200,13 @@ def _build_vllm_runtime_report(
                 available_before_rounding
             ),
             "allocatable_bytes": allocatable_kv_cache_bytes,
+            "usable_bytes": usable_kv_cache_bytes,
+            "null_block_count": 1,
             "block_rounding_tail_bytes": block_rounding_tail_bytes,
             "num_gpu_blocks": num_gpu_blocks,
             "size_tokens": kv_cache_size_tokens,
+            "max_model_len_blocks": max_model_len_blocks,
+            "max_model_len_fits": max_model_len_fits,
             "max_model_len_concurrency": max_model_len_concurrency,
             "logical_requested_peak_bytes": (
                 logical_requested_kv_cache_bytes
@@ -200,6 +224,11 @@ def _build_vllm_runtime_report(
             (
                 "kv_cache_memory_bytes overrides utilization-based KV "
                 "sizing, matching vLLM configuration semantics."
+            ),
+            (
+                "Like vLLM's block pool, one block is held back as the null "
+                "block; startup fails unless one max_model_len request fits "
+                "in the remaining blocks."
             ),
             (
                 "A supplied non-KV value should come from the matching vLLM "

@@ -115,6 +115,8 @@ def estimate_serving_kv_pool(
             shared_prefix_tokens=shared_prefix_tokens,
             logical_tokens=logical_tokens,
             effective_tokens=effective_tokens,
+            strategy=strategy,
+            block_tokens=block_tokens,
         )
         private_tokens = effective_tokens - retained_prefix_tokens
         without_prefix_bytes = int(baseline_phase["allocated_bytes"])
@@ -327,6 +329,8 @@ def estimate_serving_request_kv_pool(
                 ],
                 logical_tokens=logical_tokens,
                 effective_tokens=effective_tokens,
+                strategy=strategy,
+                block_tokens=block_tokens,
             )
             private_tokens = effective_tokens - retained_prefix_tokens
             without_bytes = int(baseline_phase["allocated_bytes"])
@@ -547,9 +551,16 @@ def _retained_prefix_tokens(
     shared_prefix_tokens: int,
     logical_tokens: int,
     effective_tokens: int,
+    strategy: str,
+    block_tokens: int,
 ) -> int:
     evicted_tokens = max(0, logical_tokens - effective_tokens)
-    return max(0, shared_prefix_tokens - evicted_tokens)
+    retained_tokens = max(0, shared_prefix_tokens - evicted_tokens)
+    if strategy == "paged":
+        # A block table can share only full blocks; the partial last block
+        # of the prefix belongs to each sequence (vLLM hashes full blocks).
+        return retained_tokens // block_tokens * block_tokens
+    return retained_tokens
 
 
 def _transient_bytes(

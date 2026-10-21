@@ -32,7 +32,8 @@ python3 -m fakegpu plan-serving \
 开销和可用余量。
 
 - 自定义容量时，用 `--device-memory-gib` 代替 `--target-profile`。
-- Prefix 共享需要 dynamic 或 paged cache。
+- Prefix 共享需要 dynamic 或 paged cache。与 vLLM 一致，paged cache 只共享
+  填满的 prefix block，最后一个未填满的 block 由每个请求各自保存。
 - 容量搜索不会超过 `--max-batch-size`。
 
 ## 对齐 vLLM 的显存预留
@@ -59,10 +60,14 @@ python3 -m fakegpu plan-serving \
   非 KV 显存，再向下取整为完整 block。报告给出 `num_gpu_blocks`、cache token
   容量、初始化能否放下，以及 `max_model_len` 下的并发量，并与请求实际需要的
   逻辑 KV 分开列出。
+- 与 vLLM 一致，有一个 block 作为 null block 保留不用。剩余 block 放不下一个
+  `max_model_len` 请求时，初始化失败。
 - `--vllm-non-kv-cache-memory-bytes` 用 vLLM 启动 profile 中的值（权重、activation
   峰值、非 torch 显存和 CUDA graph）替代建模的非 KV 值。
 - `--vllm-kv-cache-memory-bytes` 指定每张 GPU 的精确 cache 大小。与 vLLM 一致，
   这时不再使用 `--memory-utilization`。
+- 与 vLLM 的 `--dtype auto` 一致，float32 checkpoint 按 bfloat16 计算；compute
+  capability 低于 8.0 时按 float16 计算。
 - `--memory-utilization` 默认 `0.92`，与
   [vLLM CacheConfig 文档](https://docs.vllm.ai/en/latest/api/vllm/config/cache/)
   一致。需要锁定版本的报告建议显式填写。
