@@ -12,13 +12,34 @@
   memory category again instead of `tensor`.
 - Calling `patch_torch()` again with more devices now records copies on the
   added devices; transfer counters restart with the new topology.
-- FakeCUDA `torch.cuda.get_device_properties()` reports the profile's SM
-  count, threads per multiprocessor, and register limits instead of A100
-  values for every profile, matching the native runtime.
+- FakeCUDA `torch.cuda.get_device_properties()` reports the profile's
+  threads per multiprocessor, register limits, and SM count (when the
+  profile publishes one), as the native runtime does, instead of A100 values
+  for every profile.
 - The first virtual-SMI state written by a FakeCUDA process reports the
   `upstream` backend instead of `unknown`.
 - Under FakeCUDA, `torch.get_float32_matmul_precision()` returns `medium`
   after `torch.set_float32_matmul_precision("medium")` instead of `high`.
+- `fakegpu nvidia-smi events` treats a non-object `publisher.health` in a
+  state file as empty, as `-q` and `--query-runtime` already do, instead of
+  crashing.
+- A stopped virtual-SMI state publisher releases its exit and `SIGTERM`
+  hooks. After FakeGPU is initialized again, the replaced publisher no longer
+  rewrites the state file at exit, and the new publisher installs its own
+  `SIGTERM` handler.
+- The background machine no longer crashes on a process state with a null
+  or string device `index`, a non-numeric `reported_peak_memory`, or a
+  non-object `fakegpu` or `software` field.
+- The background machine describes a process's devices whose profile is not
+  in its catalog from the state that process published instead of crashing.
+- The console's Machine settings form loads a configuration whose platform
+  name differs in letter case or surrounding spaces (such as `Auto`) or whose
+  PCIe slot generation is 1 or 2, and offers PCIe Gen1 and Gen2.
+- Machine settings of the wrong type, such as a list for `devices` or a
+  string for `stale_after_seconds`, and a settings file that is not a JSON
+  object are reported as invalid settings (exit code 2 from
+  `fakegpu daemon config`, `invalid_params` from the control API) instead of
+  raising `AttributeError` or `TypeError`.
 - `fakegpu bandwidth --size`/`--bytes` rejects a bare `ib` suffix with a usage
   error instead of crashing with `KeyError`.
 - `fakegpu bandwidth --listen` without `--cluster-report` no longer prints the
@@ -32,6 +53,18 @@
   processes that do not publish SMI state.
 - `fakegpu platform show`/`env` report an invalid machine configuration with
   exit code 2 instead of silently showing the default HGX A100 machine.
+- Static memory analysis fingerprints the storages of a multi-output graph
+  node in tensor order instead of storage-address order, so the same graph no
+  longer gets a different `graph_fingerprint` between runs and static
+  validation bundles no longer report false fingerprint mismatches.
+- Workspace profile catalogs with an unknown `match` field or a non-list
+  `match` value are rejected when loaded. A misspelled field applied the
+  profile to every stack, and a scalar value made it never match.
+- `build_cuda_serving_sample()` and `fakegpu calibrate emit-serving-sample`
+  reject a serving plan whose target profile has no positive integer
+  `memory_bytes` with `CalibrationError`, as `collect-serving` does, instead
+  of failing with `KeyError` or `ZeroDivisionError` or accepting a negative
+  capacity.
 - Count MoE layers with both `mlp_only_layers` and `decoder_sparse_step`, as
   Transformers' Qwen MoE models do. Saved Qwen MoE configs always list
   `mlp_only_layers`, so a sparse step above one was ignored and every
@@ -44,6 +77,16 @@
 - Report a malformed `model.safetensors.index.json` (non-object index,
   non-object `metadata`, or non-numeric `total_size`) as a usage error
   instead of an uncaught `AttributeError` or `TypeError`.
+- `fakegpu plan-diffusion-training` reports a `text_time` UNet config without
+  `addition_time_embed_dim` or `projection_class_embeddings_input_dim` as a
+  usage error instead of an uncaught `KeyError`.
+- `fakegpu estimate-diffusion --model-dir` treats a null `up_block_types` or
+  `mlp_ratio` in a local denoiser config as missing, as it already did for
+  `down_block_types`, instead of crashing with `TypeError`.
+- `fakegpu estimate-finetune-pipeline` and `estimate_finetuning_memory()`
+  reject a native calibration run without a recorded `peak_reserved_bytes`
+  (a usage error from the command) instead of failing with an uncaught
+  `KeyError`.
 - Fine-tuning pipeline and transfer plans now resolve a fractional
   `logging_steps` against the planned duration for every logging strategy.
   With `logging_strategy: no`, a longer plan previously failed its own
