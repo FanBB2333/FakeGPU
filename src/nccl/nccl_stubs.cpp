@@ -1574,6 +1574,18 @@ ncclResult_t buffer_group_alltoall(
     return ncclSuccess;
 }
 
+// NCCL accepts zero-count ncclSend/ncclRecv like any other point-to-point
+// task (enqueue.cc, taskAppend, and the bytes == 0 branch of the plan).
+// They carry no data, so once the arguments pass the checks NCCL's ArgsCheck
+// makes, both sides of the pair complete without the coordinator.
+ncclResult_t accept_empty_point_to_point(ncclDataType_t datatype, ncclComm_t comm) {
+    if (static_cast<int>(datatype) < 0 || datatype >= ncclNumTypes) {
+        return fail_with(comm, ncclInvalidArgument, "invalid datatype");
+    }
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
 ncclResult_t buffer_group_send(
     const void* sendbuff,
     std::size_t count,
@@ -1581,7 +1593,7 @@ ncclResult_t buffer_group_send(
     int peer,
     ncclComm_t comm,
     cudaStream_t stream) {
-    if (!sendbuff) {
+    if (!sendbuff && count > 0) {
         return fail_with(comm, ncclInvalidArgument, "send buffer must not be null");
     }
     const ncclResult_t enqueue_result =
@@ -1593,7 +1605,7 @@ ncclResult_t buffer_group_send(
         return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
     }
     if (count == 0) {
-        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
+        return accept_empty_point_to_point(datatype, comm);
     }
 
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
@@ -1622,7 +1634,7 @@ ncclResult_t buffer_group_recv(
     int peer,
     ncclComm_t comm,
     cudaStream_t stream) {
-    if (!recvbuff) {
+    if (!recvbuff && count > 0) {
         return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
     }
     const ncclResult_t enqueue_result =
@@ -1634,7 +1646,7 @@ ncclResult_t buffer_group_recv(
         return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
     }
     if (count == 0) {
-        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
+        return accept_empty_point_to_point(datatype, comm);
     }
 
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
@@ -1998,11 +2010,18 @@ ncclResult_t submit_point_to_point(
     if (peer < 0 || peer >= comm->world_size) {
         return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
     }
+    if (count == 0) {
+        if (!validate_stream_handle(comm, stream)) {
+            return ncclInvalidArgument;
+        }
+        const ncclResult_t empty_result = accept_empty_point_to_point(datatype, comm);
+        if (empty_result != ncclSuccess) {
+            return empty_result;
+        }
+        return mark_simulated_stream_work_complete(comm, stream);
+    }
     if (peer == comm->rank) {
         return fail_with(comm, ncclInvalidArgument, "peer must not equal rank");
-    }
-    if (count == 0) {
-        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
     }
     if (!validate_stream_handle(comm, stream)) {
         return ncclInvalidArgument;

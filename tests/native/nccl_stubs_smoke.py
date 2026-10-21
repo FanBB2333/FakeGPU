@@ -183,6 +183,35 @@ def child_reduce_rank(rank: int) -> int:
     return 0
 
 
+def child_empty_p2p_rank(rank: int) -> int:
+    """Zero-count send/recv are valid NCCL operations, grouped or not."""
+
+    lib = load_nccl()
+    lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, UniqueId, ctypes.c_int]
+    comm = ctypes.c_void_p()
+    unique_id = UniqueId(internal=os.environ["NCCL_SMOKE_UNIQUE_ID"].encode())
+    expect_rc(lib.ncclCommInitRank(ctypes.byref(comm), REDUCE_WORLD, unique_id, rank), NCCL_SUCCESS, "ncclCommInitRank")
+    peer = 1 - rank
+    if rank == 0:
+        expect_rc(lib.ncclSend(None, ctypes.c_size_t(0), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "empty ncclSend")
+    else:
+        expect_rc(lib.ncclRecv(None, ctypes.c_size_t(0), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "empty ncclRecv")
+    lib.ncclGroupStart()
+    expect_rc(lib.ncclSend(None, ctypes.c_size_t(0), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "grouped empty ncclSend")
+    expect_rc(lib.ncclRecv(None, ctypes.c_size_t(0), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "grouped empty ncclRecv")
+    expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, "ncclGroupEnd of empty point-to-point")
+    # The communicator stays in step: a real transfer still pairs up.
+    buf = (ctypes.c_float * 2)(rank + 1.0, rank + 2.0)
+    if rank == 0:
+        expect_rc(lib.ncclSend(buf, ctypes.c_size_t(2), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "ncclSend")
+    else:
+        expect_rc(lib.ncclRecv(buf, ctypes.c_size_t(2), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "ncclRecv")
+        if list(buf) != [1.0, 2.0]:
+            raise AssertionError(f"ncclRecv produced {list(buf)}")
+    expect_rc(lib.ncclSend(None, ctypes.c_size_t(0), 99, peer, comm, None), NCCL_INVALID_ARGUMENT, "empty ncclSend with a bad datatype")
+    return 0
+
+
 def run_ranks(child: str, world: int, timeout_ms: int, extra_env: dict[str, str] | None = None) -> bool:
     """Run ``world`` rank processes against a fresh coordinator; True if all succeed."""
 
@@ -229,6 +258,11 @@ def check_reduce_over_socket_payloads() -> None:
         raise AssertionError("ncclReduce failed with socket payloads")
 
 
+def check_empty_point_to_point() -> None:
+    if not run_ranks("--empty-p2p-rank", REDUCE_WORLD, 3000):
+        raise AssertionError("zero-count ncclSend/ncclRecv were not accepted")
+
+
 def check_lifecycle_contracts() -> None:
     env = dict(os.environ, FAKEGPU_DIST_MODE="simulate")
     if subprocess.run([sys.executable, __file__, "--lifecycle"], env=env).returncode != 0:
@@ -244,11 +278,14 @@ def main() -> int:
         return child_split_rank(int(sys.argv[2]))
     if sys.argv[1:2] == ["--reduce-rank"]:
         return child_reduce_rank(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--empty-p2p-rank"]:
+        return child_empty_p2p_rank(int(sys.argv[2]))
     if not LIBNCCL.exists():
         print(f"missing NCCL library: {LIBNCCL}", file=sys.stderr)
         return 2
     check_partial_real_nccl()
     check_lifecycle_contracts()
+    check_empty_point_to_point()
     check_split_timeout()
     check_reduce_over_socket_payloads()
     print("nccl stubs smoke test passed")
