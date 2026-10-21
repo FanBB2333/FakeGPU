@@ -269,6 +269,35 @@ def test_c11_qwen2vl_last_token_logits_match_recorded_matrix_work(tmp_path: Path
     assert trailing["compute"]["decode_flops_total"] == full["compute"]["decode_flops_total"]
 
 
+def test_query_and_output_projection_flops_follow_head_dim_override(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    # Qwen3-0.6B decoder dimensions: 16 heads x head_dim 128 = 2048, which is
+    # twice hidden_size, so q_proj is 1024->2048 and o_proj is 2048->1024.
+    config = {
+        "hidden_size": 1024, "num_hidden_layers": 28,
+        "num_attention_heads": 16, "num_key_value_heads": 8, "head_dim": 128,
+        "intermediate_size": 3072, "vocab_size": 151936,
+        "torch_dtype": "bfloat16",
+    }
+    (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    report = estimate_decoder_inference(model_dir, prompt_tokens=1)
+    # transformers Qwen3ForCausalLM on the meta device has per-layer weights
+    # q 2048x1024, k 1024x1024, v 1024x1024, o 1024x2048 and gate/up/down
+    # 3x3072x1024; one token costs two FLOPs per weight, plus the LM head and
+    # QK/AV over one key token.
+    attention_projections = 2 * 28 * (2 * 2048 * 1024 + 2 * 1024 * 1024)
+    mlp = 2 * 28 * 3 * 3072 * 1024
+    lm_head = 2 * 1024 * 151936
+    attention_scores = 4 * 16 * 1 * 1 * 128 * 28
+    assert attention_projections == 352_321_536
+    assert report["compute"]["prefill_flops"] == (
+        attention_projections + mlp + lm_head + attention_scores
+    )
+
+
 @pytest.mark.parametrize("value", [-1, True, 1.5, "1", None])
 def test_logits_to_keep_rejects_invalid_values(tmp_path: Path, value: object) -> None:
     with pytest.raises(ValueError, match="logits_to_keep must be a non-negative integer"):

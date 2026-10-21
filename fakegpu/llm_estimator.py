@@ -1330,8 +1330,11 @@ def _forward_matmul_flops(
             * (qk_head_dim + dimensions["v_head_dim"])
         )
     else:
+        # q_proj and o_proj span heads * head_dim, which differs from
+        # hidden_size when the config overrides head_dim.
+        query_width = heads * dimensions["head_dim"]
         attention_projection_per_layer = (
-            4 * token_count * hidden * hidden
+            4 * token_count * hidden * query_width
             + 4 * token_count * hidden * kv_width
         )
         attention_per_layer = (
