@@ -532,21 +532,17 @@ nvmlReturn_t nvmlDeviceGetMarginTemperature(nvmlDevice_t device, nvmlMarginTempe
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
-// Newer temperature query variant used by some tools (e.g., nvidia-smi)
-// The real signature takes a versioned struct pointer; we return NOT_SUPPORTED
-// so callers fall back to the basic nvmlDeviceGetTemperature path.
+// Versioned temperature query (nvmlTemperature_v1_t, version nvmlTemperature_v1).
+// It reports the same reading as nvmlDeviceGetTemperature; nvitop prefers it
+// whenever the symbol exists.
 nvmlReturn_t nvmlDeviceGetTemperatureV(nvmlDevice_t device, void *tempInfo) {
-    if (nvml_bridge::enabled()) {
-        struct Temperature { unsigned int version, sensor; int temperature; };
-        auto* value = static_cast<Temperature*>(tempInfo);
-        if (!value || value->version != 0x100000C || value->sensor != 0) return NVML_ERROR_INVALID_ARGUMENT;
-        unsigned int temperature = 0;
-        const auto status = nvmlDeviceGetTemperature(device, value->sensor, &temperature);
-        if (status == NVML_SUCCESS) value->temperature = static_cast<int>(temperature);
-        return status;
-    }
-    FGPU_LOG("[FakeNVML] nvmlDeviceGetTemperatureV (unsupported path)\n");
-    return NVML_ERROR_NOT_SUPPORTED;
+    struct Temperature { unsigned int version, sensor; int temperature; };
+    auto* value = static_cast<Temperature*>(tempInfo);
+    if (!value || value->version != 0x100000C || value->sensor != 0) return NVML_ERROR_INVALID_ARGUMENT;
+    unsigned int temperature = 0;
+    const auto status = nvmlDeviceGetTemperature(device, value->sensor, &temperature);
+    if (status == NVML_SUCCESS) value->temperature = static_cast<int>(temperature);
+    return status;
 }
 
 nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, unsigned int type, unsigned int *clock) {

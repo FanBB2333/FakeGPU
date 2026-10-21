@@ -254,6 +254,25 @@ def test_nvlink_throughput_scope_uint_max_sums_all_links(tmp_path: Path) -> None
     assert json.loads(completed.stdout.strip().splitlines()[-1]) == [[0, 12 * 1024], [0, 6 * 1024], [0, 1024]]
 
 
+def test_versioned_temperature_matches_the_legacy_reading(tmp_path: Path) -> None:
+    # nvml.h: nvmlDeviceGetTemperatureV retrieves the same current temperature
+    # (nvmlTemperature_v1_t, version nvmlTemperature_v1). nvitop prefers it
+    # whenever the symbol exists.
+    result = _nvml(
+        tmp_path,
+        """
+        class Temperature(ctypes.Structure):
+            _fields_ = [("version", ctypes.c_uint), ("sensorType", ctypes.c_uint), ("temperature", ctypes.c_int)]
+        h = N.nvmlDeviceGetHandleByIndex(0)
+        value = Temperature(N.nvmlTemperature_v1, N.NVML_TEMPERATURE_GPU, -1)
+        rc = lib.nvmlDeviceGetTemperatureV(h, ctypes.byref(value))
+        result = [rc, value.temperature, N.nvmlDeviceGetTemperature(h, N.NVML_TEMPERATURE_GPU)]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    assert result[0] == 0 and result[1] == result[2]
+
+
 def test_bridge_power_fields_follow_power_queries(tmp_path: Path) -> None:
     # docs/en/fakegpu-smi.md: without reference telemetry the bridge reports
     # power draw as unavailable; the field-value path must agree.
