@@ -297,6 +297,57 @@ def test_fakecuda_memory_fraction_and_backend_apis() -> None:
     assert "128.00 MiB allowed; " in payload["oom"]
 
 
+def test_fakecuda_memory_api_rejects_out_of_range_devices() -> None:
+    # getDeviceStats()/resetPeakStats() assert a valid device, and
+    # mem_get_info() fails in cudaSetDevice, instead of reporting zeros.
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", profile="test-512m", device_count=2)
+
+        import torch
+
+        result = {"device1": torch.cuda.memory_allocated("cuda:1")}
+        for name in (
+            "memory_allocated", "max_memory_allocated", "memory_reserved",
+            "max_memory_reserved", "memory_stats", "reset_peak_memory_stats",
+            "reset_accumulated_memory_stats", "memory_stats_as_nested_dict",
+            "mem_get_info",
+        ):
+            try:
+                getattr(torch.cuda, name)(2)
+            except RuntimeError as exc:
+                result[name] = str(exc)
+        print(json.dumps(result))
+        """
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert payload.pop("device1") == 0
+    assert payload.pop("mem_get_info").startswith(
+        "CUDA error: invalid device ordinal"
+    )
+    assert len(payload) == 8
+    assert set(payload.values()) == {
+        "Invalid device argument 2: did you call init?"
+    }
+
+
 def test_allocator_memory_stats_follow_cuda_caching_allocator() -> None:
     # Expected values follow DeviceStats updates in CUDACachingAllocator.cpp
     # and the key layout of torch.cuda.memory_stats() (PyTorch v2.14.1).

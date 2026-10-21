@@ -1488,32 +1488,45 @@ def _install_profiled_device_queries(
 def _install_tracked_memory_api(torch_mod: Any) -> None:
     """Serve the ``torch.cuda`` memory API from ``_memory_tracker``."""
 
+    def _stats_device(device):
+        # CUDACachingAllocator::assertValidDevice() rejects devices the
+        # allocator has no stats for instead of reporting zeros.
+        index = _normalize_device_index(device)
+        if index < 0 or index >= _NUM_DEVICES:
+            raise RuntimeError(
+                f"Invalid device argument {index}: did you call init?"
+            )
+        return index
+
     def _tracked_memory_allocated(device=None):
-        return _memory_tracker.memory_allocated(_normalize_device_index(device))
+        return _memory_tracker.memory_allocated(_stats_device(device))
 
     def _tracked_max_memory_allocated(device=None):
-        return _memory_tracker.max_memory_allocated(_normalize_device_index(device))
+        return _memory_tracker.max_memory_allocated(_stats_device(device))
 
     def _tracked_memory_reserved(device=None):
-        return _memory_tracker.memory_reserved(_normalize_device_index(device))
+        return _memory_tracker.memory_reserved(_stats_device(device))
 
     def _tracked_max_memory_reserved(device=None):
-        return _memory_tracker.max_memory_reserved(_normalize_device_index(device))
+        return _memory_tracker.max_memory_reserved(_stats_device(device))
 
     def _tracked_mem_get_info(device=None):
-        return _memory_tracker.mem_get_info(_normalize_device_index(device))
+        # cudaMemGetInfo runs under a CUDAGuard for the requested device.
+        return _memory_tracker.mem_get_info(
+            _checked_ordinal(_normalize_device_index(device))
+        )
 
     def _tracked_empty_cache():
         _memory_tracker.empty_cache()
 
     def _tracked_reset_peak_memory_stats(device=None):
-        _memory_tracker.reset_peak(_normalize_device_index(device))
+        _memory_tracker.reset_peak(_stats_device(device))
 
     def _tracked_reset_accumulated_memory_stats(device=None):
-        _memory_tracker.reset_accumulated(_normalize_device_index(device))
+        _memory_tracker.reset_accumulated(_stats_device(device))
 
     def _tracked_memory_stats(device=None):
-        return _memory_tracker.memory_stats(_normalize_device_index(device))
+        return _memory_tracker.memory_stats(_stats_device(device))
 
     def _tracked_memory_snapshot(mempool_id=None, include_traces=True):
         # Only the default pool exists, so a private pool id has no segments.
@@ -1544,9 +1557,7 @@ def _install_tracked_memory_api(torch_mod: Any) -> None:
 
     # torch.cuda.memory_stats_as_nested_dict() reads this binding directly.
     def _tracked_cuda_memory_stats(device):
-        return _memory_tracker.memory_stats_as_nested_dict(
-            _normalize_device_index(device)
-        )
+        return _memory_tracker.memory_stats_as_nested_dict(_stats_device(device))
 
     torch_mod._C._cuda_memoryStats = _tracked_cuda_memory_stats
 
