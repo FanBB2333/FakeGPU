@@ -11,7 +11,7 @@ import pytest
 pytest.importorskip("textual")
 
 from rich.console import Console  # noqa: E402
-from textual.widgets import DataTable, Input, Select, Static  # noqa: E402
+from textual.widgets import Button, DataTable, Input, Select, Static  # noqa: E402
 
 from fakegpu.console.app import Confirm, ConsoleApp, ProfilePicker, machine_charts, plan_layout  # noqa: E402
 from fakegpu.console.widgets import Chart, selected_key  # noqa: E402
@@ -84,6 +84,9 @@ def test_console_shows_and_controls_the_machine(service, child):  # noqa: F811
             assert service.config.devices == "a100:2"
             app.query_one("#cfg-platform", Select).value = "generic"
             await pilot.pause()
+            # Button ignores clicks until its press animation from the first Apply ends.
+            while app.query_one("#cfg-apply", Button).has_class("-active"):
+                await pilot.pause(0.05)
             await pilot.click("#cfg-apply")
             await pilot.pause()
             assert (service.config.devices, service.config.platform) == ("a100:2,h100:1", "generic")
