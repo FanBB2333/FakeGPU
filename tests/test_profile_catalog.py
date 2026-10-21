@@ -59,6 +59,38 @@ def test_researched_variants_keep_product_specific_resources(
     assert profile.sm_count == sm_count
 
 
+# Device ID and name rows of the NVIDIA driver supported-chips list
+# (https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html);
+# torch.cuda.get_device_name and nvidia-smi report these names.
+@pytest.mark.parametrize(
+    ("profile_id", "device_id", "driver_name"),
+    [
+        ("a100", 0x20B2, "NVIDIA A100-SXM4-80GB"),
+        ("a100-pcie-80gb", 0x20B5, "NVIDIA A100 80GB PCIe"),
+        ("h100", 0x2330, "NVIDIA H100 80GB HBM3"),
+        ("h100-pcie-80gb", 0x2331, "NVIDIA H100 PCIe"),
+        ("h100-nvl-94gb", 0x2321, "NVIDIA H100 NVL"),
+        ("h200", 0x2335, "NVIDIA H200"),
+        ("h200-nvl", 0x233B, "NVIDIA H200 NVL"),
+        ("h20-96gb", 0x2329, "NVIDIA H20"),
+        ("h20-141gb", 0x232C, "NVIDIA H20-3e"),
+        ("h800-sxm5-80gb", 0x2324, "NVIDIA H800"),
+        ("h800-pcie-80gb", 0x2322, "NVIDIA H800 PCIe"),
+        ("h800-nvl-94gb", 0x233A, "NVIDIA H800 NVL"),
+        ("gh200-144gb", 0x2348, "NVIDIA GH200 144G HBM3e"),
+        ("l20-lc", 0x26BA, "NVIDIA L20"),
+        ("l40s", 0x26B9, "NVIDIA L40S"),
+        ("t4", 0x1EB8, "Tesla T4"),
+    ],
+)
+def test_device_names_follow_the_driver_supported_chips_list(
+    profile_id: str, device_id: int, driver_name: str
+) -> None:
+    profile = get_profile(profile_id)
+    assert profile.pci_device_id >> 16 == device_id
+    assert profile.torch_name == driver_name
+
+
 def test_reference_profile_can_report_unknown_specs_without_claiming_measurements() -> None:
     profile = replace(get_profile("gtx980"), sm_count=0, core_clock_mhz=0)
     validation = validate_catalog({profile.id: profile})

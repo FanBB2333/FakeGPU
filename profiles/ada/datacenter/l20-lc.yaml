@@ -4,7 +4,7 @@
 # Additional source: https://docs.nvidia.com/ai-enterprise/release-4/latest/infra-software/vgpu/features.html
 id: l20-lc
 name: Fake NVIDIA L20 Liquid Cooled
-torch_name: NVIDIA L20 Liquid Cooled
+torch_name: NVIDIA L20
 official_model: NVIDIA L20
 architecture: ada
 compute_major: 8

@@ -5,7 +5,7 @@
 # Additional source: https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/hopper-h20.html
 id: h20-96gb
 name: Fake NVIDIA H20 96GB
-torch_name: NVIDIA H20 96GB
+torch_name: NVIDIA H20
 official_model: NVIDIA H20
 architecture: hopper
 compute_major: 9

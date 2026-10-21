@@ -5,7 +5,7 @@
 # Additional source: https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/hopper-h100.html
 id: h100-nvl-94gb
 name: Fake NVIDIA H100 NVL 94GB (one GPU)
-torch_name: NVIDIA H100 NVL 94GB
+torch_name: NVIDIA H100 NVL
 official_model: NVIDIA H100
 architecture: hopper
 compute_major: 9

@@ -6,7 +6,7 @@
 # Additional source: https://docs.nvidia.com/ai-enterprise/release-8/latest/infra-software/vgpu/reference/hopper-h200.html
 id: h200-nvl
 name: Fake NVIDIA H200 NVL 141GB (one GPU)
-torch_name: NVIDIA H200 NVL 141GB
+torch_name: NVIDIA H200 NVL
 official_model: NVIDIA H200
 architecture: hopper
 compute_major: 9

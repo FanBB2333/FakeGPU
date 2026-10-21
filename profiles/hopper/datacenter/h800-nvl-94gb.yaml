@@ -5,7 +5,7 @@
 # Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 id: h800-nvl-94gb
 name: Fake NVIDIA H800 NVL 94GB
-torch_name: NVIDIA H800 NVL 94GB
+torch_name: NVIDIA H800 NVL
 official_model: NVIDIA H800
 architecture: hopper
 compute_major: 9
