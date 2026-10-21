@@ -216,6 +216,33 @@ def test_repository_analyzer_rejects_entrypoint_outside_root(
         analyze_repository(repository, entrypoints=[outside])
 
 
+def test_repository_analyzer_keeps_relative_imports_package_local(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "project"
+    _write_basic_repository(repository)
+    package = repository / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "flash_attn.py").write_text("def attention():\n    pass\n", encoding="utf-8")
+    (package / "triton.py").write_text("def jit(fn):\n    return fn\n", encoding="utf-8")
+    # ast.ImportFrom.level > 0 is a relative import of a package module.
+    (package / "model.py").write_text(
+        "from .flash_attn import attention\n"
+        "from .triton import jit as local_jit\n"
+        "local_jit(attention)\n",
+        encoding="utf-8",
+    )
+
+    report = analyze_repository(repository)
+
+    assert report["frameworks"] == ["pytorch", "transformers"]
+    assert "triton" not in report["python"]["imports"]
+    assert "flash_attn" not in report["python"]["imports"]
+    assert "triton.jit" not in report["python"]["call_markers"]
+    assert report["readiness"]["verdict"] == "preflight_candidate"
+
+
 def test_repository_without_entrypoint_is_incomplete(tmp_path: Path) -> None:
     repository = tmp_path / "library"
     repository.mkdir()

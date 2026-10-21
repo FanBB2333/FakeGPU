@@ -445,7 +445,9 @@ def _python_imports(tree: ast.AST) -> Counter[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 imports[alias.name.split(".", 1)[0]] += 1
-        elif isinstance(node, ast.ImportFrom) and node.module:
+        # A relative import (level > 0) names a module of this package, not
+        # an installed top-level package.
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
             imports[node.module.split(".", 1)[0]] += 1
     return imports
 
@@ -494,11 +496,14 @@ def _python_aliases(tree: ast.AST) -> dict[str, str]:
                 local = item.asname or item.name.split(".", 1)[0]
                 aliases[local] = item.name
         elif isinstance(node, ast.ImportFrom) and node.module:
+            # Keep the leading dots so package-local modules never resolve
+            # to a same-named installed package.
+            module = "." * (node.level or 0) + node.module
             for item in node.names:
                 if item.name == "*":
                     continue
                 local = item.asname or item.name
-                aliases[local] = f"{node.module}.{item.name}"
+                aliases[local] = f"{module}.{item.name}"
     # Resolve simple function aliases such as ``compile_fn = torch.compile``.
     for _ in range(2):
         for node in ast.walk(tree):
