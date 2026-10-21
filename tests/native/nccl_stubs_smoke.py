@@ -212,6 +212,26 @@ def child_empty_p2p_rank(rank: int) -> int:
     return 0
 
 
+def child_init_all(_rank: int) -> int:
+    """ncclCommInitAll validates its device list like init.cc does."""
+
+    lib = load_nccl()
+    lib.ncclCommInitAll.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+    lib.ncclCommCuDevice.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+    comms = (ctypes.c_void_p * 2)()
+    expect_rc(lib.ncclCommInitAll(comms, 2, (ctypes.c_int * 2)(0, 4096)), NCCL_INVALID_ARGUMENT, "ncclCommInitAll with a missing device")
+    expect_rc(lib.ncclCommInitAll(comms, 2, (ctypes.c_int * 2)(0, 0)), NCCL_INVALID_USAGE, "ncclCommInitAll with a duplicate device")
+    expect_rc(lib.ncclCommInitAll(comms, 2, (ctypes.c_int * 2)(1, 0)), NCCL_SUCCESS, "ncclCommInitAll")
+    device = ctypes.c_int(-1)
+    for index, expected in enumerate((1, 0)):
+        expect_rc(lib.ncclCommCuDevice(comms[index], ctypes.byref(device)), NCCL_SUCCESS, "ncclCommCuDevice")
+        if device.value != expected:
+            raise AssertionError(f"rank {index} reports device {device.value}, expected {expected}")
+    for comm in comms:
+        lib.ncclCommDestroy(comm)
+    return 0
+
+
 def run_ranks(child: str, world: int, timeout_ms: int, extra_env: dict[str, str] | None = None) -> bool:
     """Run ``world`` rank processes against a fresh coordinator; True if all succeed."""
 
@@ -263,6 +283,11 @@ def check_empty_point_to_point() -> None:
         raise AssertionError("zero-count ncclSend/ncclRecv were not accepted")
 
 
+def check_init_all_device_list() -> None:
+    if not run_ranks("--init-all", 1, 3000):
+        raise AssertionError("ncclCommInitAll did not validate its device list")
+
+
 def check_lifecycle_contracts() -> None:
     env = dict(os.environ, FAKEGPU_DIST_MODE="simulate")
     if subprocess.run([sys.executable, __file__, "--lifecycle"], env=env).returncode != 0:
@@ -280,12 +305,15 @@ def main() -> int:
         return child_reduce_rank(int(sys.argv[2]))
     if sys.argv[1:2] == ["--empty-p2p-rank"]:
         return child_empty_p2p_rank(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--init-all"]:
+        return child_init_all(int(sys.argv[2]))
     if not LIBNCCL.exists():
         print(f"missing NCCL library: {LIBNCCL}", file=sys.stderr)
         return 2
     check_partial_real_nccl()
     check_lifecycle_contracts()
     check_empty_point_to_point()
+    check_init_all_device_list()
     check_split_timeout()
     check_reduce_over_socket_payloads()
     print("nccl stubs smoke test passed")

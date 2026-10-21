@@ -2744,6 +2744,29 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist) {
         devices[static_cast<std::size_t>(index)] =
             devlist ? devlist[index] : index;
     }
+    if (devlist) {
+        // Same checks as NCCL's ncclCommInitAll (init.cc): every listed
+        // device must exist and appear only once.
+        fake_gpu::GlobalState::instance().initialize();
+        const int device_count = fake_gpu::GlobalState::instance().get_device_count();
+        std::vector<bool> seen(static_cast<std::size_t>(std::max(device_count, 0)), false);
+        for (int device : devices) {
+            if (device < 0 || device >= device_count) {
+                return fail_with(
+                    nullptr,
+                    ncclInvalidArgument,
+                    "invalid device " + std::to_string(device) +
+                        " (device count " + std::to_string(device_count) + ")");
+            }
+            if (seen[static_cast<std::size_t>(device)]) {
+                return fail_with(
+                    nullptr,
+                    ncclInvalidUsage,
+                    "duplicate device " + std::to_string(device) + " in device list");
+            }
+            seen[static_cast<std::size_t>(device)] = true;
+        }
+    }
 
     ncclUniqueId unique_id {};
     ncclResult_t result = ncclGetUniqueId(&unique_id);
