@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import os
 import weakref
@@ -47,6 +48,15 @@ _DIST_WORLD_SIZE = 1
 _DIST_RANK = 0
 _ORIG_DIST_INIT: Any = None
 _ORIG_DIST_DESTROY: Any = None
+# True while a real gloo process group joins the processes of a
+# multi-process launch; see _real_launch().
+_DIST_REAL = False
+_ORIG_DIST: dict[str, Any] = {}
+_REAL_COLLECTIVES = (
+    "barrier", "all_reduce", "broadcast", "all_gather", "all_gather_object", "reduce",
+    "gather", "scatter", "all_to_all", "all_to_all_single", "broadcast_object_list",
+    "get_rank", "get_world_size", "new_group",
+)
 _DEFAULT_STREAMS = {}
 _CURRENT_STREAMS = {}
 _NEXT_STREAM_ID = 1
@@ -261,9 +271,80 @@ class _FakeDistributedDataParallel(torch.nn.Module):
             None if output_device is None else _normalize_device_index(output_device)
         )
         self.process_group = process_group
+        self.broadcast_buffers = bool(kwargs.get("broadcast_buffers", True))
+        self.require_backward_grad_sync = True
+        if _DIST_REAL:
+            self._join_processes()
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
+        if _DIST_REAL and self.broadcast_buffers and torch.is_grad_enabled() and self.require_backward_grad_sync:
+            # Like DDP, every training forward starts from rank 0's buffers.
+            with torch.no_grad():
+                for buffer in self.module.buffers():
+                    _ORIG_DIST["broadcast"](unwrap_tensor(buffer).detach(), src=self._source, group=self.process_group)
         return self.module(*inputs, **kwargs)
+
+    @contextlib.contextmanager
+    def no_sync(self) -> Any:
+        previous = self.require_backward_grad_sync
+        self.require_backward_grad_sync = False
+        try:
+            yield
+        finally:
+            self.require_backward_grad_sync = previous
+
+    def _join_processes(self) -> None:
+        """Start every rank from rank 0's weights and average gradients, like DDP.
+
+        When backward ends, every rank averages the gradients of all its
+        trainable parameters in the same order, a missing gradient counting
+        as zeros, so ranks that took different branches still combine the
+        same parameter. A parameter that no rank used keeps no gradient.
+        """
+
+        group = self.process_group
+        self._source = 0 if group is None else torch.distributed.distributed_c10d.get_global_rank(group, 0)
+        with torch.no_grad():
+            for tensor in [*self.module.parameters(), *self.module.buffers()]:
+                _ORIG_DIST["broadcast"](unwrap_tensor(tensor).detach(), src=self._source, group=group)
+        world_size = _ORIG_DIST["get_world_size"](group)
+        parameters = [unwrap_tensor(parameter) for parameter in self.module.parameters() if parameter.requires_grad]
+        queued = False
+
+        def average() -> None:
+            nonlocal queued
+            queued = False
+            used = torch.tensor([parameter.grad is not None for parameter in parameters], dtype=torch.int32)
+            _ORIG_DIST["all_reduce"](used, op=_sum_op(), group=group)
+            dense: dict[torch.dtype, list[torch.Tensor]] = {}
+            with torch.no_grad():
+                for parameter, count in zip(parameters, used.tolist()):
+                    if not count:
+                        continue
+                    if parameter.grad is None:
+                        parameter.grad = torch.zeros_like(parameter)
+                    if parameter.grad.is_sparse:
+                        _ORIG_DIST["all_reduce"](parameter.grad, op=_sum_op(), group=group)
+                        parameter.grad.div_(world_size)
+                    else:
+                        dense.setdefault(parameter.grad.dtype, []).append(parameter.grad)
+                for grads in dense.values():
+                    flat = torch.cat([grad.reshape(-1) for grad in grads])
+                    _ORIG_DIST["all_reduce"](flat, op=_sum_op(), group=group)
+                    flat.div_(world_size)
+                    offset = 0
+                    for grad in grads:
+                        grad.copy_(flat[offset:offset + grad.numel()].view_as(grad))
+                        offset += grad.numel()
+
+        def queue_average(grad: torch.Tensor) -> None:
+            nonlocal queued
+            if self.require_backward_grad_sync and not queued:
+                queued = True
+                torch.autograd.Variable._execution_engine.queue_callback(average)
+
+        for parameter in parameters:
+            parameter.register_hook(queue_average)
 
 
 class _FakeAsyncWork:
@@ -389,7 +470,23 @@ def _dist_init_process_group(
     pg_options: Any = None,
     device_id: Any = None,
 ) -> None:
-    global _DIST_INITIALIZED, _DIST_BACKEND, _DIST_WORLD_SIZE, _DIST_RANK
+    global _DIST_INITIALIZED, _DIST_BACKEND, _DIST_WORLD_SIZE, _DIST_RANK, _DIST_REAL
+    launch = _real_launch(world_size, rank, init_method, store)
+    if launch is not None and _ORIG_DIST_INIT is not None:
+        size, index = launch
+        options: dict[str, Any] = {"backend": "gloo", "world_size": size, "rank": index}
+        for name, value in (("init_method", init_method), ("store", store), ("timeout", timeout)):
+            if value is not None:
+                options[name] = value
+        if group_name:
+            options["group_name"] = group_name
+        # A failed rendezvous must surface, as it would on real GPUs.
+        _ORIG_DIST_INIT(**options)
+        _DIST_INITIALIZED = _DIST_REAL = True
+        _DIST_BACKEND = "nccl" if backend is None else str(backend)
+        _DIST_WORLD_SIZE, _DIST_RANK = size, index
+        return None
+
     _DIST_INITIALIZED = True
     _DIST_BACKEND = "nccl" if backend is None else str(backend)
     _DIST_WORLD_SIZE = 1 if world_size in (-1, None) else int(world_size)
@@ -425,8 +522,52 @@ def _dist_init_process_group(
     return None
 
 
+def _real_launch(world_size: Any, rank: Any, init_method: Any, store: Any) -> tuple[int, int] | None:
+    """World size and rank when ``init_process_group`` joins real processes.
+
+    Collectives then run over gloo on the CPU tensors behind the simulated
+    GPUs, so every rank sees the values NCCL would produce. That needs the
+    other ranks to be starting too, which FakeGPU takes as given for workers
+    of torchrun or ``accelerate launch`` (``TORCHELASTIC_RUN_ID``), for
+    ``multiprocessing`` children such as ``mp.spawn`` workers, and for an
+    explicit ``init_method`` or ``store``. Any other process, e.g. one that
+    finds ``WORLD_SIZE`` and ``MASTER_ADDR`` in a cluster pod's environment,
+    keeps the in-process simulation instead of waiting for peers that never
+    come. ``FAKEGPU_DIST_COLLECTIVES=real`` or ``simulate`` overrides this.
+    """
+
+    choice = os.environ.get("FAKEGPU_DIST_COLLECTIVES", "").strip().lower()
+    if choice == "simulate":
+        return None
+    size = world_size if world_size not in (-1, None) else os.environ.get("WORLD_SIZE")
+    index = rank if rank not in (-1, None) else os.environ.get("RANK")
+    try:
+        size, index = int(size), int(index)
+    except (TypeError, ValueError):
+        return None
+    explicit = store is not None or (init_method is not None and str(init_method) != "env://")
+    rendezvous = explicit or ("MASTER_ADDR" in os.environ and "MASTER_PORT" in os.environ)
+    if size < 2 or not rendezvous:
+        return None
+    import multiprocessing
+
+    launched = (
+        choice == "real"
+        or explicit
+        or "TORCHELASTIC_RUN_ID" in os.environ
+        or multiprocessing.parent_process() is not None
+    )
+    return (size, index) if launched else None
+
+
 def _dist_destroy_process_group(group: Any = None) -> None:
-    global _DIST_INITIALIZED, _DIST_WORLD_SIZE, _DIST_RANK
+    global _DIST_INITIALIZED, _DIST_WORLD_SIZE, _DIST_RANK, _DIST_REAL
+    if _DIST_REAL:
+        _ORIG_DIST_DESTROY(group)
+        if group is None:
+            _DIST_INITIALIZED = _DIST_REAL = False
+            _DIST_WORLD_SIZE, _DIST_RANK = 1, 0
+        return None
     if _ORIG_DIST_DESTROY is not None:
         try:
             _ORIG_DIST_DESTROY(group)
@@ -443,18 +584,70 @@ def _dist_get_backend(group: Any = None) -> str | None:
 
 
 def _dist_get_world_size(group: Any = None) -> int:
+    if _DIST_REAL:
+        return _ORIG_DIST["get_world_size"](group)
     return _DIST_WORLD_SIZE if _DIST_INITIALIZED else 1
 
 
 def _dist_get_rank(group: Any = None) -> int:
+    if _DIST_REAL:
+        return _ORIG_DIST["get_rank"](group)
     return _DIST_RANK if _DIST_INITIALIZED else 0
 
 
+def _dist_new_group(*args: Any, **kwargs: Any) -> Any:
+    if _DIST_REAL:
+        # Subgroups use the default group's gloo backend; NCCL is not there.
+        kwargs.pop("backend", None)
+        kwargs.pop("pg_options", None)
+        if len(args) > 2:
+            args = args[:2]
+    return _ORIG_DIST["new_group"](*args, **kwargs)
+
+
+def _sum_op() -> Any:
+    return torch.distributed.ReduceOp.SUM
+
+
+def _is_avg(op: Any) -> bool:
+    return op is not None and op == torch.distributed.ReduceOp.AVG
+
+
+def _divide(raw: torch.Tensor, count: int) -> None:
+    """Finish an AVG in place; integer tensors round toward zero, as NCCL does."""
+
+    if raw.is_floating_point() or raw.is_complex():
+        raw.div_(count)
+    else:
+        raw.div_(count, rounding_mode="trunc")
+
+
+def _real_all_reduce(raw: torch.Tensor, op: Any, group: Any) -> None:
+    """All-reduce a CPU tensor in place; gloo lacks AVG on older PyTorch."""
+
+    if _is_avg(op):
+        if torch.distributed.distributed_c10d._rank_not_in_group(group):
+            return
+        _ORIG_DIST["all_reduce"](raw, op=_sum_op(), group=group)
+        _divide(raw, _ORIG_DIST["get_world_size"](group))
+        return
+    _ORIG_DIST["all_reduce"](raw, op=_sum_op() if op is None else op, group=group)
+
+
+def _done(async_op: bool) -> Any:
+    return _FakeAsyncWork() if async_op else None
+
+
 def _dist_barrier(group: Any = None, async_op: bool = False, device_ids: Any = None) -> Any:
+    if _DIST_REAL:
+        return _ORIG_DIST["barrier"](group=group, async_op=async_op)
     return _FakeAsyncWork() if async_op else None
 
 
 def _dist_all_reduce(tensor: torch.Tensor, op: Any = None, group: Any = None, async_op: bool = False) -> Any:
+    if _DIST_REAL:
+        _real_all_reduce(unwrap_tensor(tensor), op, group)
+        return _done(async_op)
     return _FakeAsyncWork() if async_op else None
 
 
@@ -465,6 +658,9 @@ def _dist_broadcast(
     async_op: bool = False,
     group_src: Any = None,
 ) -> Any:
+    if _DIST_REAL:
+        options = {"group_src": group_src} if group_src is not None else {"src": src}
+        return _ORIG_DIST["broadcast"](unwrap_tensor(tensor), group=group, async_op=async_op, **options)
     return _FakeAsyncWork() if async_op else None
 
 
@@ -474,6 +670,10 @@ def _dist_all_gather(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _DIST_REAL:
+        return _ORIG_DIST["all_gather"](
+            [unwrap_tensor(item) for item in tensor_list], unwrap_tensor(tensor), group=group, async_op=async_op
+        )
     source = unwrap_tensor(tensor)
     for target in tensor_list:
         unwrap_tensor(target).copy_(source)
@@ -500,6 +700,8 @@ def _copy_collective_tensor(destination: torch.Tensor, source: torch.Tensor) -> 
 
 
 def _dist_all_gather_object(object_list: list[Any], obj: Any, group: Any = None) -> None:
+    if _DIST_REAL:
+        return _ORIG_DIST["all_gather_object"](object_list, obj, group=group)
     for index in range(len(object_list)):
         object_list[index] = obj
     return None
@@ -511,18 +713,39 @@ def _dist_all_gather_into_tensor(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _DIST_REAL:
+        source = unwrap_tensor(input_tensor).contiguous()
+        parts = [torch.empty_like(source) for _ in range(_ORIG_DIST["get_world_size"](group))]
+        _ORIG_DIST["all_gather"](parts, source, group=group)
+        target = unwrap_tensor(output_tensor)
+        # Rank-major order covers both the concatenated and the stacked layout.
+        target.copy_(torch.cat([part.reshape(-1) for part in parts]).reshape(target.shape))
+        return _done(async_op)
     _copy_collective_tensor(output_tensor, input_tensor)
     return _FakeAsyncWork() if async_op else None
 
 
 def _dist_reduce(
     tensor: torch.Tensor,
-    dst: int,
+    dst: int | None = None,
     op: Any = None,
     group: Any = None,
     async_op: bool = False,
     group_dst: Any = None,
 ) -> Any:
+    if _DIST_REAL:
+        raw = unwrap_tensor(tensor)
+        if group_dst is not None:
+            c10d = torch.distributed.distributed_c10d
+            dst = group_dst if group is None else c10d.get_global_rank(group, group_dst)
+        if _is_avg(op):
+            if torch.distributed.distributed_c10d._rank_not_in_group(group):
+                return _done(async_op)
+            _ORIG_DIST["reduce"](raw, dst=dst, op=_sum_op(), group=group)
+            if torch.distributed.distributed_c10d.get_rank() == dst:
+                _divide(raw, _ORIG_DIST["get_world_size"](group))
+            return _done(async_op)
+        return _ORIG_DIST["reduce"](raw, dst=dst, op=_sum_op() if op is None else op, group=group, async_op=async_op)
     return _FakeAsyncWork() if async_op else None
 
 
@@ -534,6 +757,10 @@ def _dist_gather(
     async_op: bool = False,
     group_dst: Any = None,
 ) -> Any:
+    if _DIST_REAL:
+        options = {"group_dst": group_dst} if group_dst is not None else {"dst": dst}
+        targets = [unwrap_tensor(item) for item in gather_list] if gather_list else None
+        return _ORIG_DIST["gather"](unwrap_tensor(tensor), targets, group=group, async_op=async_op, **options)
     if gather_list:
         unwrap_tensor(gather_list[0]).copy_(unwrap_tensor(tensor))
     return _FakeAsyncWork() if async_op else None
@@ -547,6 +774,10 @@ def _dist_scatter(
     async_op: bool = False,
     group_src: Any = None,
 ) -> Any:
+    if _DIST_REAL:
+        options = {"group_src": group_src} if group_src is not None else {"src": src}
+        sources = [unwrap_tensor(item) for item in scatter_list] if scatter_list else None
+        return _ORIG_DIST["scatter"](unwrap_tensor(tensor), sources, group=group, async_op=async_op, **options)
     if scatter_list:
         unwrap_tensor(tensor).copy_(unwrap_tensor(scatter_list[0]))
     return _FakeAsyncWork() if async_op else None
@@ -559,6 +790,12 @@ def _dist_reduce_scatter(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _DIST_REAL:
+        stacked = torch.stack([unwrap_tensor(item).reshape(-1) for item in input_list])
+        _real_all_reduce(stacked, op, group)
+        target = unwrap_tensor(output)
+        target.copy_(stacked[_ORIG_DIST["get_rank"](group)].reshape(target.shape))
+        return _done(async_op)
     if input_list:
         _copy_collective_tensor(output, input_list[0])
     return _FakeAsyncWork() if async_op else None
@@ -571,6 +808,13 @@ def _dist_reduce_scatter_tensor(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _DIST_REAL:
+        reduced = unwrap_tensor(input).clone()
+        _real_all_reduce(reduced, op, group)
+        target = unwrap_tensor(output)
+        size = _ORIG_DIST["get_world_size"](group)
+        target.copy_(reduced.reshape(size, -1)[_ORIG_DIST["get_rank"](group)].reshape(target.shape))
+        return _done(async_op)
     _copy_collective_tensor(output, input)
     return _FakeAsyncWork() if async_op else None
 
@@ -581,6 +825,13 @@ def _dist_all_to_all(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _DIST_REAL:
+        return _ORIG_DIST["all_to_all"](
+            [unwrap_tensor(item) for item in output_tensor_list],
+            [unwrap_tensor(item) for item in input_tensor_list],
+            group=group,
+            async_op=async_op,
+        )
     for output, source in zip(output_tensor_list, input_tensor_list):
         unwrap_tensor(output).copy_(unwrap_tensor(source))
     return _FakeAsyncWork() if async_op else None
@@ -594,6 +845,15 @@ def _dist_all_to_all_single(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
+    if _DIST_REAL:
+        return _ORIG_DIST["all_to_all_single"](
+            unwrap_tensor(output),
+            unwrap_tensor(input),
+            output_split_sizes,
+            input_split_sizes,
+            group=group,
+            async_op=async_op,
+        )
     unwrap_tensor(output).copy_(unwrap_tensor(input))
     return _FakeAsyncWork() if async_op else None
 
@@ -605,6 +865,10 @@ def _dist_broadcast_object_list(
     device: Any = None,
     group_src: Any = None,
 ) -> None:
+    if _DIST_REAL:
+        options = {"group_src": group_src} if group_src is not None else {"src": src}
+        # The objects travel through gloo on the CPU, whatever device is named.
+        return _ORIG_DIST["broadcast_object_list"](object_list, group=group, **options)
     return None
 
 
@@ -1210,6 +1474,11 @@ def enable() -> None:
     global _ORIG_DIST_INIT, _ORIG_DIST_DESTROY
     _ORIG_DIST_INIT = torch.distributed.init_process_group
     _ORIG_DIST_DESTROY = torch.distributed.destroy_process_group
+    _ORIG_DIST.update(
+        (name, getattr(torch.distributed, name))
+        for name in _REAL_COLLECTIVES
+        if hasattr(torch.distributed, name)
+    )
     import torch.nn.parallel.data_parallel
 
     _ORIG_TENSOR_TO = torch.Tensor.to
@@ -1369,6 +1638,8 @@ def enable() -> None:
     torch.distributed.broadcast_object_list = _dist_broadcast_object_list
     torch.distributed._all_gather_base = _dist_all_gather_into_tensor
     torch.distributed._reduce_scatter_base = _dist_reduce_scatter_tensor
+    if "new_group" in _ORIG_DIST:
+        torch.distributed.new_group = _dist_new_group
     _install_legacy_cuda_types()
 
     for name in [
