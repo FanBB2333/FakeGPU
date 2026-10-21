@@ -1438,6 +1438,31 @@ def test_vllm_runtime_startup_requires_one_max_model_len_request(
         )
 
 
+def test_vllm_runtime_concurrency_counts_whole_blocks_per_request(
+    tmp_path: Path,
+) -> None:
+    # vLLM v0.32.0 vllm/v1/core/kv_cache_utils.py:1195-1227 divides
+    # num_blocks by cdiv(max_model_len, block_size): 60 / cdiv(81, 16).
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=1,
+        max_batch_size=1,
+        prompt_tokens=64,
+        generated_tokens=17,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=60 * 16 * 32,
+        vllm_non_kv_cache_memory_bytes=0,
+    )
+
+    runtime_cache = report["runtime"]["kv_cache"]
+    assert runtime_cache["max_model_len_blocks"] == 6
+    assert runtime_cache["max_model_len_concurrency"] == pytest.approx(10.0)
+
+
 def test_vllm_runtime_rejects_unsupported_or_misplaced_options(
     tmp_path: Path,
 ) -> None:

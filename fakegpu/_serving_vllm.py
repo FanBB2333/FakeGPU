@@ -125,9 +125,9 @@ def _build_vllm_runtime_report(
         initialization_required_bytes = (
             selected_non_kv_peak + allocatable_kv_cache_bytes
         )
-        max_model_len_concurrency = (
-            kv_cache_size_tokens / max_model_len_tokens
-        )
+        # vLLM divides the block count by the whole blocks one
+        # max_model_len request occupies.
+        max_model_len_concurrency = num_gpu_blocks / max_model_len_blocks
         headroom_bytes = (
             usable_kv_cache_bytes - logical_requested_kv_cache_bytes
         )
