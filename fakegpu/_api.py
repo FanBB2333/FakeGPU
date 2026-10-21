@@ -171,14 +171,9 @@ def init(
 
         handles: dict[str, ctypes.CDLL] = {}
         for lib in _preload_libs_for_mode(os.environ.get("FAKEGPU_MODE")):
-            path = resolved_dir / lib
+            path = _library_file(resolved_dir, lib)
             if not path.exists():
-                # Try common unversioned fallbacks (useful when packaging).
-                alt_path = resolved_dir / _fallback_name(lib)
-                if alt_path.exists():
-                    path = alt_path
-                else:
-                    raise FileNotFoundError(f"Missing required FakeGPU library: {path}")
+                raise FileNotFoundError(f"Missing required FakeGPU library: {path}")
             handles[lib] = ctypes.CDLL(str(path), mode=dlopen_mode)
 
         _handles.clear()
@@ -316,6 +311,21 @@ def _fallback_name(libname: str) -> str:
     return _UNVERSIONED_LIB_NAMES.get(libname, libname)
 
 
+def _library_file(directory: Path, libname: str) -> Path:
+    """Return the file that provides ``libname``, accepting its fallback name.
+
+    ``library_dir()`` accepts a directory that only has the fallback names, so
+    every consumer must pick the same file. The loaders never substitute one:
+    ld.so skips a missing ``LD_PRELOAD`` entry and dyld terminates the process.
+    """
+
+    path = directory / libname
+    if path.exists():
+        return path
+    fallback = directory / _fallback_name(libname)
+    return fallback if fallback.exists() else path
+
+
 def _preload_libs_for_mode(
     mode: str | None,
     *,
@@ -427,7 +437,7 @@ def _apply_env(env_map: dict[str, str], resolved_dir: Path) -> None:
             env_map.pop(_LIBRARY_PATH_VAR, None)
 
     preload_paths = [
-        str(resolved_dir / name)
+        str(_library_file(resolved_dir, name))
         for name in _preload_libs_for_mode(env_map.get("FAKEGPU_MODE"), environ=env_map)
     ]
     existing_preload = env_map.get(_PRELOAD_VAR, "")

@@ -118,6 +118,22 @@ def test_mode_switch_removes_unversioned_preloads(native_directory: Path) -> Non
         assert environment[_api._PRELOAD_VAR] == "/other/profiler.so"
 
 
+@pytest.mark.parametrize("mode", ["simulate", "hybrid"])
+def test_preload_names_the_files_of_a_fallback_only_directory(tmp_path: Path, mode: str) -> None:
+    # library_dir() accepts a directory holding only the fallback names. A
+    # preload entry naming a missing file is skipped by ld.so ("cannot be
+    # preloaded ... ignored") and makes dyld terminate the process.
+    for library in _api._PRELOAD_LIBS:
+        (tmp_path / _api._fallback_name(library)).touch()
+    assert _api.library_dir(lib_dir=tmp_path) == tmp_path.resolve()
+
+    environment = _api.env(lib_dir=tmp_path, base_env={}, mode=mode)
+
+    entries = environment[_api._PRELOAD_VAR].split(":")
+    assert entries
+    assert all(Path(entry).is_file() for entry in entries)
+
+
 def test_native_init_honors_physical_visibility(native_directory: Path, monkeypatch) -> None:
     monkeypatch.setattr(_api, "_initialized", False)
     monkeypatch.setattr(_api, "_loaded_dir", None)
