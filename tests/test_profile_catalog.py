@@ -97,6 +97,42 @@ def test_device_names_follow_the_driver_supported_chips_list(
     assert profile.torch_name == driver_name
 
 
+# Resident blocks, resident threads, shared memory per SM and per block (opt-in)
+# from the CUDA Programming Guide compute-capability tables: the current guide
+# (https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html)
+# for 7.5 and newer, the CUDA 12.4 guide for older devices.
+_CUDA_SM_LIMITS = {
+    (5, 0): (32, 2048, 64, 48),
+    (5, 2): (32, 2048, 96, 48),
+    (6, 0): (32, 2048, 64, 48),
+    (6, 1): (32, 2048, 96, 48),
+    (7, 0): (32, 2048, 96, 96),
+    (7, 5): (16, 1024, 64, 64),
+    (8, 0): (32, 2048, 164, 163),
+    (8, 6): (16, 1536, 100, 99),
+    (8, 7): (16, 1536, 164, 163),
+    (8, 9): (24, 1536, 100, 99),
+    (9, 0): (32, 2048, 228, 227),
+    (10, 0): (32, 2048, 228, 227),
+    (10, 3): (32, 2048, 228, 227),
+    (11, 0): (24, 1536, 228, 227),
+    (12, 0): (24, 1536, 100, 99),
+    (12, 1): (24, 1536, 100, 99),
+}
+
+
+def test_per_sm_limits_follow_the_cuda_programming_guide() -> None:
+    for profile in load_profiles().values():
+        blocks, threads, shared_kib, optin_kib = _CUDA_SM_LIMITS[profile.compute_capability]
+        assert (
+            profile.max_blocks_per_multiprocessor,
+            profile.max_threads_per_multiprocessor,
+            profile.shared_mem_per_sm,
+            profile.shared_mem_per_block_optin,
+            profile.regs_per_multiprocessor,
+        ) == (blocks, threads, shared_kib * 1024, optin_kib * 1024, 65536), profile.id
+
+
 def test_reference_profile_can_report_unknown_specs_without_claiming_measurements() -> None:
     profile = replace(get_profile("gtx980"), sm_count=0, core_clock_mhz=0)
     validation = validate_catalog({profile.id: profile})
