@@ -550,7 +550,9 @@ cublasStatus_t cpu_gemv(cublasOperation_t trans, int m, int n, T a, const T* A, 
                    static_cast<double>(x0[static_cast<ptrdiff_t>(input) * incx]);
         }
         T& destination = y0[static_cast<ptrdiff_t>(output) * incy];
-        destination = static_cast<T>(a * acc + b * destination);
+        // With beta == 0, y is not read, so a stale NaN does not propagate.
+        const double previous = b == 0.0 ? 0.0 : b * static_cast<double>(destination);
+        destination = static_cast<T>(a * acc + previous);
     }
     return CUBLAS_STATUS_SUCCESS;
 }
@@ -878,8 +880,12 @@ cublasStatus_t cublasGetAtomicsMode(cublasHandle_t handle, cublasAtomicsMode_t *
 // ============================================================================
 
 cublasStatus_t cublasIsamax_v2(cublasHandle_t handle, int n, const float *x, int incx, int *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     const cublasStatus_t status = cpu_iamax(n, x, incx, result, /*largest=*/true);
@@ -898,8 +904,12 @@ cublasStatus_t cublasIsamax_v2(cublasHandle_t handle, int n, const float *x, int
 }
 
 cublasStatus_t cublasIdamax_v2(cublasHandle_t handle, int n, const double *x, int incx, int *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_iamax(n, x, incx, result, /*largest=*/true);
@@ -913,8 +923,12 @@ cublasStatus_t cublasIdamax_v2(cublasHandle_t handle, int n, const double *x, in
 }
 
 cublasStatus_t cublasIsamin_v2(cublasHandle_t handle, int n, const float *x, int incx, int *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_iamax(n, x, incx, result, /*largest=*/false);
@@ -928,8 +942,12 @@ cublasStatus_t cublasIsamin_v2(cublasHandle_t handle, int n, const float *x, int
 }
 
 cublasStatus_t cublasIdamin_v2(cublasHandle_t handle, int n, const double *x, int incx, int *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_iamax(n, x, incx, result, /*largest=*/false);
@@ -943,8 +961,12 @@ cublasStatus_t cublasIdamin_v2(cublasHandle_t handle, int n, const double *x, in
 }
 
 cublasStatus_t cublasSasum_v2(cublasHandle_t handle, int n, const float *x, int incx, float *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_asum(n, x, incx, result);
@@ -958,8 +980,12 @@ cublasStatus_t cublasSasum_v2(cublasHandle_t handle, int n, const float *x, int 
 }
 
 cublasStatus_t cublasDasum_v2(cublasHandle_t handle, int n, const double *x, int incx, double *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_asum(n, x, incx, result);
@@ -973,7 +999,10 @@ cublasStatus_t cublasDasum_v2(cublasHandle_t handle, int n, const double *x, int
 }
 
 cublasStatus_t cublasSaxpy_v2(cublasHandle_t handle, int n, const float *alpha, const float *x, int incx, float *y, int incy) {
-    if (n <= 0 || !alpha || !x || !y) {
+    if (n <= 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    if (!alpha || !x || !y) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
@@ -994,7 +1023,10 @@ cublasStatus_t cublasSaxpy_v2(cublasHandle_t handle, int n, const float *alpha, 
 }
 
 cublasStatus_t cublasDaxpy_v2(cublasHandle_t handle, int n, const double *alpha, const double *x, int incx, double *y, int incy) {
-    if (n <= 0 || !alpha || !x || !y) {
+    if (n <= 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    if (!alpha || !x || !y) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
@@ -1009,7 +1041,10 @@ cublasStatus_t cublasDaxpy_v2(cublasHandle_t handle, int n, const double *alpha,
 }
 
 cublasStatus_t cublasScopy_v2(cublasHandle_t handle, int n, const float *x, int incx, float *y, int incy) {
-    if (n <= 0 || !x || !y) {
+    if (n <= 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    if (!x || !y) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
@@ -1024,7 +1059,10 @@ cublasStatus_t cublasScopy_v2(cublasHandle_t handle, int n, const float *x, int 
 }
 
 cublasStatus_t cublasDcopy_v2(cublasHandle_t handle, int n, const double *x, int incx, double *y, int incy) {
-    if (n <= 0 || !x || !y) {
+    if (n <= 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    if (!x || !y) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
@@ -1039,8 +1077,12 @@ cublasStatus_t cublasDcopy_v2(cublasHandle_t handle, int n, const double *x, int
 }
 
 cublasStatus_t cublasSdot_v2(cublasHandle_t handle, int n, const float *x, int incx, const float *y, int incy, float *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_dot(n, x, incx, y, incy, result);
@@ -1054,8 +1096,12 @@ cublasStatus_t cublasSdot_v2(cublasHandle_t handle, int n, const float *x, int i
 }
 
 cublasStatus_t cublasDdot_v2(cublasHandle_t handle, int n, const double *x, int incx, const double *y, int incy, double *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_dot(n, x, incx, y, incy, result);
@@ -1069,8 +1115,12 @@ cublasStatus_t cublasDdot_v2(cublasHandle_t handle, int n, const double *x, int 
 }
 
 cublasStatus_t cublasSnrm2_v2(cublasHandle_t handle, int n, const float *x, int incx, float *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_nrm2(n, x, incx, result);
@@ -1084,8 +1134,12 @@ cublasStatus_t cublasSnrm2_v2(cublasHandle_t handle, int n, const float *x, int 
 }
 
 cublasStatus_t cublasDnrm2_v2(cublasHandle_t handle, int n, const double *x, int incx, double *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_nrm2(n, x, incx, result);
@@ -1099,7 +1153,10 @@ cublasStatus_t cublasDnrm2_v2(cublasHandle_t handle, int n, const double *x, int
 }
 
 cublasStatus_t cublasSscal_v2(cublasHandle_t handle, int n, const float *alpha, float *x, int incx) {
-    if (n <= 0 || !alpha || !x) {
+    if (n <= 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    if (!alpha || !x) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
@@ -1114,7 +1171,10 @@ cublasStatus_t cublasSscal_v2(cublasHandle_t handle, int n, const float *alpha, 
 }
 
 cublasStatus_t cublasDscal_v2(cublasHandle_t handle, int n, const double *alpha, double *x, int incx) {
-    if (n <= 0 || !alpha || !x) {
+    if (n <= 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    if (!alpha || !x) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION

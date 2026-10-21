@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <random>
 #include <vector>
 
@@ -645,7 +646,7 @@ int main() {
             }
         }
 
-        // nrm2: sqrt(sum x[i]^2) (incx=-1)
+        // nrm2: sqrt(sum x[i]^2)
         {
             float expected = 0.0f;
             for (int i = 0; i < n; ++i) {
@@ -653,21 +654,21 @@ int main() {
             }
             expected = std::sqrt(expected);
             float got = 0.0f;
-            check_cublas(cublasSnrm2_v2(handle, n, dX, -1, &got), "cublasSnrm2_v2");
+            check_cublas(cublasSnrm2_v2(handle, n, dX, 1, &got), "cublasSnrm2_v2");
             if (!allclose_scalar(got, expected, 1e-5f, 1e-5f, "cublasSnrm2_v2")) {
                 std::fprintf(stderr, "Test6 failed: cublasSnrm2_v2 mismatch\n");
                 return 1;
             }
         }
 
-        // asum: sum abs(x[i]) (incx=-1)
+        // asum: sum abs(x[i])
         {
             float expected = 0.0f;
             for (int i = 0; i < n; ++i) {
                 expected += std::fabs(hx[static_cast<size_t>(i)]);
             }
             float got = 0.0f;
-            check_cublas(cublasSasum_v2(handle, n, dX, -1, &got), "cublasSasum_v2");
+            check_cublas(cublasSasum_v2(handle, n, dX, 1, &got), "cublasSasum_v2");
             if (!allclose_scalar(got, expected, 1e-5f, 1e-5f, "cublasSasum_v2")) {
                 std::fprintf(stderr, "Test6 failed: cublasSasum_v2 mismatch\n");
                 return 1;
@@ -687,6 +688,57 @@ int main() {
                 std::fprintf(stderr, "Test6 failed: cublasIsamax_v2 mismatch: got=%d expected=%d\n", got, expected);
                 return 1;
             }
+        }
+
+        // The cuBLAS reference sets the result of amax/amin/asum/nrm2 to 0
+        // when n <= 0 or incx <= 0, and the dot result to 0 when n <= 0.
+        // axpy, copy and scal list no INVALID_VALUE, so n == 0 is a no-op.
+        {
+            const int bad_incs[] = {0, -1};
+            for (int inc : bad_incs) {
+                int index = -7;
+                float value = -7.0f;
+                check_cublas(cublasIsamax_v2(handle, n, dX, inc, &index), "cublasIsamax_v2 inc<=0");
+                if (index != 0) {
+                    std::fprintf(stderr, "Test6 failed: cublasIsamax_v2 incx=%d gave %d\n", inc, index);
+                    return 1;
+                }
+                index = -7;
+                check_cublas(cublasIsamin_v2(handle, n, dX, inc, &index), "cublasIsamin_v2 inc<=0");
+                if (index != 0) {
+                    std::fprintf(stderr, "Test6 failed: cublasIsamin_v2 incx=%d gave %d\n", inc, index);
+                    return 1;
+                }
+                check_cublas(cublasSasum_v2(handle, n, dX, inc, &value), "cublasSasum_v2 inc<=0");
+                if (value != 0.0f) {
+                    std::fprintf(stderr, "Test6 failed: cublasSasum_v2 incx=%d gave %f\n", inc, value);
+                    return 1;
+                }
+                value = -7.0f;
+                check_cublas(cublasSnrm2_v2(handle, n, dX, inc, &value), "cublasSnrm2_v2 inc<=0");
+                if (value != 0.0f) {
+                    std::fprintf(stderr, "Test6 failed: cublasSnrm2_v2 incx=%d gave %f\n", inc, value);
+                    return 1;
+                }
+            }
+            int index = -7;
+            float value = -7.0f;
+            check_cublas(cublasIsamax_v2(handle, 0, dX, 1, &index), "cublasIsamax_v2 n=0");
+            check_cublas(cublasSasum_v2(handle, 0, dX, 1, &value), "cublasSasum_v2 n=0");
+            if (index != 0 || value != 0.0f) {
+                std::fprintf(stderr, "Test6 failed: n=0 reductions gave index=%d asum=%f\n", index, value);
+                return 1;
+            }
+            value = -7.0f;
+            check_cublas(cublasSdot_v2(handle, 0, dX, 1, dY, 1, &value), "cublasSdot_v2 n=0");
+            if (value != 0.0f) {
+                std::fprintf(stderr, "Test6 failed: cublasSdot_v2 n=0 gave %f\n", value);
+                return 1;
+            }
+            const float one = 1.0f;
+            check_cublas(cublasSaxpy_v2(handle, 0, &one, dX, 1, dY, 1), "cublasSaxpy_v2 n=0");
+            check_cublas(cublasScopy_v2(handle, 0, dX, 1, dY, 1), "cublasScopy_v2 n=0");
+            check_cublas(cublasSscal_v2(handle, 0, &one, dX, 1), "cublasSscal_v2 n=0");
         }
 
         check_cublas(cublasDestroy_v2(handle), "cublasDestroy_v2");
@@ -742,6 +794,33 @@ int main() {
         if (!allclose(got_y, expected_y, 1e-5f, 1e-5f)) {
             std::fprintf(stderr, "Test7 failed: cublasSgemv_v2 mismatch\n");
             return 1;
+        }
+
+        // With beta == 0, y does not have to be a valid input, so a NaN in
+        // y must not reach the result.
+        {
+            const float zero = 0.0f;
+            std::vector<float> nan_y(hy.size(), std::numeric_limits<float>::quiet_NaN());
+            check_cuda(cudaMemcpy(dY, nan_y.data(), nan_y.size() * sizeof(float), cudaMemcpyHostToDevice), "H2D NaN Y");
+            check_cublas(
+                cublasSgemv_v2(handle, CUBLAS_OP_N, m, n, &alpha, dA, lda, dX, 1, &zero, dY, 1),
+                "cublasSgemv_v2 beta=0"
+            );
+            std::vector<float> expected_zero_beta(hy.size());
+            for (int row = 0; row < m; ++row) {
+                double acc = 0.0;
+                for (int col = 0; col < n; ++col) {
+                    acc += static_cast<double>(hA[idx_col_major(row, col, lda)]) *
+                           static_cast<double>(hx[static_cast<size_t>(col)]);
+                }
+                expected_zero_beta[static_cast<size_t>(row)] = static_cast<float>(alpha * acc);
+            }
+            check_cuda(cudaMemcpy(got_y.data(), dY, got_y.size() * sizeof(float), cudaMemcpyDeviceToHost), "D2H beta=0 Y");
+            if (!allclose(got_y, expected_zero_beta, 1e-5f, 1e-5f)) {
+                std::fprintf(stderr, "Test7 failed: cublasSgemv_v2 beta=0 read y\n");
+                return 1;
+            }
+            check_cuda(cudaMemcpy(dY, expected_y.data(), expected_y.size() * sizeof(float), cudaMemcpyHostToDevice), "H2D restore Y");
         }
 
         const float scale = -2.0f;
