@@ -139,6 +139,37 @@ def test_power_limits_stay_within_constraints_and_unknown_power_is_not_zero_watt
     ]
 
 
+def test_clock_queries_answer_the_requested_clock_domain(tmp_path: Path) -> None:
+    # nvml.h: applications/boost/P-state clocks take an nvmlClockType_t, and the
+    # supported-clock lists return INSUFFICIENT_SIZE for a too-small count, which
+    # pynvml's first (count 0) call relies on; an unsupported memory clock is NOT_FOUND.
+    result = _nvml(
+        tmp_path,
+        """
+        h = N.nvmlDeviceGetHandleByIndex(0)
+        mem, graphics = N.NVML_CLOCK_MEM, N.NVML_CLOCK_GRAPHICS
+        memory_clock = N.nvmlDeviceGetMaxClockInfo(h, mem)
+        try:
+            N.nvmlDeviceGetSupportedGraphicsClocks(h, memory_clock + 1)
+            unsupported = None
+        except N.NVMLError as exc:
+            unsupported = exc.value
+        result = [
+            memory_clock, N.nvmlDeviceGetMaxClockInfo(h, graphics),
+            N.nvmlDeviceGetApplicationsClock(h, mem), N.nvmlDeviceGetDefaultApplicationsClock(h, mem),
+            N.nvmlDeviceGetMaxCustomerBoostClock(h, mem), N.nvmlDeviceGetMinMaxClockOfPState(h, mem, 0)[1],
+            N.nvmlDeviceGetApplicationsClock(h, graphics),
+            N.nvmlDeviceGetSupportedMemoryClocks(h), N.nvmlDeviceGetSupportedGraphicsClocks(h, memory_clock),
+            unsupported,
+        ]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    memory, graphics = result[0], result[1]
+    assert memory != graphics
+    assert result[2:] == [memory, memory, memory, memory, graphics, [memory], [graphics], 6]
+
+
 def test_bridge_power_fields_follow_power_queries(tmp_path: Path) -> None:
     # docs/en/fakegpu-smi.md: without reference telemetry the bridge reports
     # power draw as unavailable; the field-value path must agree.

@@ -888,18 +888,14 @@ nvmlReturn_t nvmlDeviceGetMPSComputeRunningProcesses_v3(nvmlDevice_t device, uns
 // Clock-related functions
 nvmlReturn_t nvmlDeviceGetMaxCustomerBoostClock(nvmlDevice_t device, unsigned int clockType, unsigned int *clockMHz) {
     if (!device || !clockMHz) return NVML_ERROR_INVALID_ARGUMENT;
-    Device* dev = (Device*)device;
-    *clockMHz = dev->profile.core_clock_mhz;
+    *clockMHz = profile_clock_mhz((Device*)device, clockType);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetMinMaxClockOfPState(nvmlDevice_t device, unsigned int clockType, unsigned int pState, unsigned int *minClockMHz, unsigned int *maxClockMHz) {
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     if (minClockMHz) *minClockMHz = 210;
-    if (maxClockMHz) {
-        Device* dev = (Device*)device;
-        *maxClockMHz = dev->profile.core_clock_mhz;
-    }
+    if (maxClockMHz) *maxClockMHz = profile_clock_mhz((Device*)device, clockType);
     return NVML_SUCCESS;
 }
 
@@ -1499,24 +1495,27 @@ nvmlReturn_t nvmlDeviceGetPowerSource(nvmlDevice_t device, unsigned int *powerSo
 }
 
 // Supported/enabled clocks
+// One supported clock, returned with NVML's size-query protocol: a count below
+// one (pynvml's first call passes 0 and NULL) yields INSUFFICIENT_SIZE and 1.
+static nvmlReturn_t single_supported_clock(unsigned int clock, unsigned int *count, unsigned int *clocksMHz) {
+    const unsigned int capacity = *count;
+    *count = 1;
+    if (capacity < 1) return NVML_ERROR_INSUFFICIENT_SIZE;
+    if (!clocksMHz) return NVML_ERROR_INVALID_ARGUMENT;
+    clocksMHz[0] = clock;
+    return NVML_SUCCESS;
+}
+
 nvmlReturn_t nvmlDeviceGetSupportedGraphicsClocks(nvmlDevice_t device, unsigned int memoryClockMHz, unsigned int *count, unsigned int *clocksMHz) {
     if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
-    if (clocksMHz && *count > 0) {
-        Device* dev = (Device*)device;
-        clocksMHz[0] = dev->profile.core_clock_mhz;
-    }
-    *count = 1;
-    return NVML_SUCCESS;
+    Device* dev = (Device*)device;
+    if (memoryClockMHz != profile_clock_mhz(dev, 2)) return NVML_ERROR_NOT_FOUND;
+    return single_supported_clock(profile_clock_mhz(dev, 0), count, clocksMHz);
 }
 
 nvmlReturn_t nvmlDeviceGetSupportedMemoryClocks(nvmlDevice_t device, unsigned int *count, unsigned int *clocksMHz) {
     if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
-    if (clocksMHz && *count > 0) {
-        Device* dev = (Device*)device;
-        clocksMHz[0] = dev->profile.memory_clock_mhz;
-    }
-    *count = 1;
-    return NVML_SUCCESS;
+    return single_supported_clock(profile_clock_mhz((Device*)device, 2), count, clocksMHz);
 }
 
 // Lock clocks (no-op)
