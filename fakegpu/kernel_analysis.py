@@ -10,10 +10,10 @@ from typing import Any
 from ._cli import (
     add_json_path_argument,
     command_prog,
+    emit_json_report,
     usage_error,
 )
 from .profile_catalog import get_profile
-from .structured_io import emit_json
 
 
 SCHEMA_VERSION = "fakegpu.kernel_static_analysis.v1"
@@ -329,9 +329,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             threads_per_block=args.threads_per_block,
         )
         if args.json_path:
-            output = emit_json(args.json_path, report)
-            if output is not None:
-                print(f"Kernel analysis: {output}")
+            emit_json_report(args.json_path, report, "Kernel analysis")
         else:
             _print_report(report)
         return 0

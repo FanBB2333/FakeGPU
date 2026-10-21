@@ -15,10 +15,11 @@ from ._cli import (
     add_json_path_argument,
     add_strict_argument,
     command_prog,
+    emit_json_report,
     usage_error,
 )
 from .kernel_analysis import analyze_kernel_file
-from .structured_io import StructuredDataError, emit_json, load_mapping
+from .structured_io import StructuredDataError, load_mapping
 
 
 SCHEMA_VERSION = "fakegpu.repository_analysis.v1"
@@ -337,9 +338,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         usage_error(parser, exc)
 
     if args.json_path:
-        output = emit_json(args.json_path, report)
-        if output is not None:
-            print(f"Repository analysis: {output}")
+        emit_json_report(args.json_path, report, "Repository analysis")
     else:
         _print_repository_analysis(report)
 

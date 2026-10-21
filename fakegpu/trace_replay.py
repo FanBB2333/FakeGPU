@@ -10,6 +10,7 @@ from typing import Any
 from ._cli import (
     add_json_path_argument,
     command_prog,
+    emit_json_report,
     usage_error,
 )
 from .operator_profiles import (
@@ -17,7 +18,7 @@ from .operator_profiles import (
     load_operator_profiles,
     match_operator_profile,
 )
-from .structured_io import emit_json, load_mapping
+from .structured_io import load_mapping
 from .topology import Topology, simulate_point_to_point
 
 
@@ -177,9 +178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             operator_profiles=profiles,
         )
         if args.json_path:
-            output = emit_json(args.json_path, report)
-            if output is not None:
-                print(f"Trace replay: {output}")
+            emit_json_report(args.json_path, report, "Trace replay")
         else:
             _print_report(report)
         return 0

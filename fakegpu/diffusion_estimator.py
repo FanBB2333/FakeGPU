@@ -12,6 +12,7 @@ from ._cli import (
     add_json_path_argument,
     bounded_argument,
     command_prog,
+    emit_json_report,
     usage_error,
 )
 from ._diffusion_activation import (
@@ -36,7 +37,6 @@ from ._diffusion_types import (
     _positive_integer,
 )
 from .profile_catalog import get_profile
-from .structured_io import emit_json
 
 
 SCHEMA_VERSION = "fakegpu.diffusion_generation_estimate.v1"
@@ -688,9 +688,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             target_profile=args.target_profile,
         )
         if args.json_path:
-            output = emit_json(args.json_path, report)
-            if output is not None:
-                print(f"Diffusion estimate: {output}")
+            emit_json_report(args.json_path, report, "Diffusion estimate")
         else:
             _print_report(report)
         return 0

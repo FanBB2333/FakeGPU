@@ -13,9 +13,10 @@ from typing import Any
 from ._cli import (
     add_json_path_argument,
     command_prog,
+    emit_json_report,
     usage_error,
 )
-from .structured_io import emit_json, load_mapping
+from .structured_io import load_mapping
 
 
 SCHEMA_VERSION = "fakegpu.topology_simulation.v1"
@@ -487,9 +488,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 algorithm=args.algorithm,
             )
         if args.json_path:
-            output = emit_json(args.json_path, report)
-            if output is not None:
-                print(f"Topology simulation: {output}")
+            emit_json_report(args.json_path, report, "Topology simulation")
         else:
             _print_report(report)
         return 0

@@ -13,6 +13,7 @@ from typing import Any
 from ._cli import (
     add_json_path_argument,
     command_prog,
+    emit_json_report,
     usage_error,
 )
 from ._serving_kv import (
@@ -47,7 +48,6 @@ from .llm_estimator import (
     estimate_decoder_inference,
 )
 from .profile_catalog import get_profile
-from .structured_io import emit_json
 
 
 __all__ = [
@@ -1451,9 +1451,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         usage_error(parser, exc)
 
     if args.json_path:
-        output = emit_json(args.json_path, report)
-        if output is not None:
-            print(f"Serving plan: {output}")
+        emit_json_report(args.json_path, report, "Serving plan")
 
     scheduler = report["scheduler"]
     timeline = report["memory_timeline"]

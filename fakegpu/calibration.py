@@ -34,9 +34,10 @@ from ._cli import (
     add_json_path_argument,
     add_strict_argument,
     command_prog,
+    emit_json_report,
     usage_error,
 )
-from .structured_io import emit_json, load_mapping, write_json
+from .structured_io import load_mapping, write_json
 
 
 COMPARISON_SCHEMA_VERSION = "fakegpu.calibration_comparison.v1"
@@ -1101,9 +1102,7 @@ def _emit(
     printer: Callable[[Mapping[str, Any]], None],
 ) -> None:
     if args.json_path:
-        output = emit_json(args.json_path, report)
-        if output is not None:
-            print(f"{label}: {output}")
+        emit_json_report(args.json_path, report, label)
     else:
         printer(report)
 

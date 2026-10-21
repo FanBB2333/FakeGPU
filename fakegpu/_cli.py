@@ -33,6 +33,8 @@ from argparse import ArgumentParser, ArgumentTypeError, _ActionsContainer
 from dataclasses import dataclass
 from typing import Any, Callable, NoReturn, Sequence
 
+from .structured_io import emit_json
+
 
 # ``ArgumentParser`` and the groups created by ``add_argument_group`` and
 # ``add_mutually_exclusive_group`` share ``add_argument`` through this base
@@ -198,3 +200,11 @@ def bounded_argument(
         return value
 
     return convert
+
+
+def emit_json_report(target: str, payload: Any, label: str) -> None:
+    """Emit a ``--json`` report and name the file it was written to, if any."""
+
+    output = emit_json(target, payload)
+    if output is not None:
+        print(f"{label}: {output}")

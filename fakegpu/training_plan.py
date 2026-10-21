@@ -8,9 +8,10 @@ from typing import Any
 from ._cli import (
     add_json_path_argument,
     command_prog,
+    emit_json_report,
     usage_error,
 )
-from .structured_io import emit_json, load_mapping
+from .structured_io import load_mapping
 
 
 SCHEMA_VERSION = "fakegpu.training_plan.v1"
@@ -466,9 +467,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             parameter_shapes=shapes,
         )
         if args.json_path:
-            output = emit_json(args.json_path, report)
-            if output is not None:
-                print(f"Training plan: {output}")
+            emit_json_report(args.json_path, report, "Training plan")
         else:
             _print_report(report)
         return 0

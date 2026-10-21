@@ -6,11 +6,11 @@ from typing import Sequence
 from ._cli import (
     add_json_path_argument,
     command_prog,
+    emit_json_report,
     usage_error,
 )
 from .llm_estimator import VISION_ESTIMATE_WARNING, estimate_decoder_inference
 from .performance_model import COMPUTE_PRECISIONS
-from .structured_io import emit_json
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -128,9 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         usage_error(parser, exc)
 
     if args.json_path:
-        output = emit_json(args.json_path, report)
-        if output is not None:
-            print(f"LLM estimate: {output}")
+        emit_json_report(args.json_path, report, "LLM estimate")
 
     memory = report["memory"]
     compute = report["compute"]
