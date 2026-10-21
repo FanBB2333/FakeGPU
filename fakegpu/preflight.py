@@ -142,7 +142,9 @@ def run_preflight(ns: argparse.Namespace, command: Sequence[str]) -> int:
     try:
         child_env = _build_child_env(ns, paths)
         child_command = _prepare_child_command(ns.runtime, command, warnings)
-        _warn_if_macos_injection_may_be_blocked(child_command[0])
+        if ns.runtime != "fakecuda":
+            # FakeCUDA injects no libraries, so SIP purging DYLD_* cannot affect it.
+            _warn_if_macos_injection_may_be_blocked(child_command[0])
         completed = subprocess.run(
             child_command,
             cwd=os.getcwd(),

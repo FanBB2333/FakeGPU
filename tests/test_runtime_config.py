@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import warnings
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import Mock
@@ -116,6 +117,89 @@ def test_mode_switch_removes_unversioned_preloads(native_directory: Path) -> Non
             mode="passthrough",
         )
         assert environment[_api._PRELOAD_VAR] == "/other/profiler.so"
+
+
+@pytest.mark.parametrize("mode", ["simulate", "hybrid"])
+def test_preload_names_the_files_of_a_fallback_only_directory(tmp_path: Path, mode: str) -> None:
+    # library_dir() accepts a directory holding only the fallback names. A
+    # preload entry naming a missing file is skipped by ld.so ("cannot be
+    # preloaded ... ignored") and makes dyld terminate the process.
+    for library in _api._PRELOAD_LIBS:
+        (tmp_path / _api._fallback_name(library)).touch()
+    assert _api.library_dir(lib_dir=tmp_path) == tmp_path.resolve()
+
+    environment = _api.env(lib_dir=tmp_path, base_env={}, mode=mode)
+
+    entries = environment[_api._PRELOAD_VAR].split(":")
+    assert entries
+    assert all(Path(entry).is_file() for entry in entries)
+
+
+@pytest.fixture
+def macos_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_api, "_is_macos", lambda: True)
+    monkeypatch.setattr(_api, "_macos_injection_warning_emitted", False)
+
+
+# Apple's System Integrity Protection Guide lists /System, /bin, /sbin and
+# /usr (except /usr/local) as system-only; SIP purges DYLD_* variables when it
+# launches an executable from there.
+@pytest.mark.parametrize(
+    ("command", "protected"),
+    [
+        ("/bin/sh", True),
+        ("/bin/bash", True),
+        ("/sbin/ping", True),
+        ("/usr/sbin/sysctl", True),
+        ("/usr/bin/env", True),
+        ("/System/Library/Frameworks/Python.framework/python3", True),
+        ("/usr/local/bin/python3", False),
+        ("/opt/homebrew/bin/python3", False),
+    ],
+)
+def test_macos_warning_covers_sip_protected_locations(
+    macos_warning: None, monkeypatch: pytest.MonkeyPatch, command: str, protected: bool,
+) -> None:
+    monkeypatch.setattr(_api, "_resolve_executable_path", lambda executable: os.fspath(executable))
+    monkeypatch.setattr(_api, "_script_interpreter", lambda path: "")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _api._warn_if_macos_injection_may_be_blocked(command)
+    assert bool(caught) == protected
+
+
+@pytest.mark.parametrize(
+    ("interpreter", "protected"),
+    [("/usr/bin/env python3", True), ("/bin/sh", True), ("{tmp}/python3", False)],
+)
+def test_macos_warning_follows_the_script_interpreter(
+    macos_warning: None, tmp_path: Path, interpreter: str, protected: bool,
+) -> None:
+    script = tmp_path / "train.sh"
+    script.write_text(f"#!{interpreter.format(tmp=tmp_path)}\necho ok\n", encoding="utf-8")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _api._warn_if_macos_injection_may_be_blocked(script)
+    assert bool(caught) == protected
+    if protected:
+        assert "interpreter" in str(caught[0].message)
+
+
+def test_launcher_exit_status_follows_env_for_commands_it_cannot_run(
+    native_directory: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    # POSIX env(1): 127 when the utility is not found, 126 when it is found
+    # but cannot be invoked.
+    from fakegpu.__main__ import main
+
+    monkeypatch.setattr(_api, "_macos_injection_warning_emitted", True)
+    assert main(["fakegpu-no-such-command-xyz"]) == 127
+    assert "fakegpu-no-such-command-xyz" in capsys.readouterr().err
+
+    script = tmp_path / "not-executable.sh"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    script.chmod(0o644)
+    assert main([str(script)]) == 126
 
 
 def test_native_init_honors_physical_visibility(native_directory: Path, monkeypatch) -> None:
