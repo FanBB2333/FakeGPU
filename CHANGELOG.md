@@ -54,6 +54,23 @@
   Accelerate sees every process. A process that only finds `WORLD_SIZE` and
   `MASTER_ADDR` in its environment keeps the in-process simulation.
   `FAKEGPU_DIST_COLLECTIVES=real` or `simulate` overrides the choice.
+- The FakeCUDA caching allocator keeps small (up to 1 MiB) and large
+  requests in separate pools and splits large blocks only when more than
+  1 MiB would remain, as PyTorch does. Reserved memory no longer comes out
+  lower than on a GPU when both pools are in use.
+- FakeCUDA `torch.cuda.memory_allocated()` and `max_memory_allocated()`
+  report allocator block sizes like PyTorch instead of requested tensor
+  bytes. `memory_stats()` has PyTorch's full key set, including the
+  `small_pool`/`large_pool` breakdown and counters, and
+  `reset_accumulated_memory_stats()` zeroes the accumulated totals.
+- Simulated CUDA out-of-memory errors use PyTorch's wording and size units.
+- FakeCUDA supports `torch.cuda.set_per_process_memory_fraction()`,
+  `get_per_process_memory_fraction()` and `get_allocator_backend()`; the
+  fraction caps reserved memory as on a GPU.
+- FakeCUDA `torch.cuda.memory_snapshot()` accepts PyTorch's arguments and
+  returns its segment and block layout.
+- The FakeCUDA memory API raises PyTorch's errors for a device index beyond
+  the device count instead of reporting zero memory.
 - The console no longer fails with `NoMatches` when its periodic refresh
   fires while the app is shutting down.
 - FakeCUDA autocast now defaults to float16 like CUDA instead of the CPU

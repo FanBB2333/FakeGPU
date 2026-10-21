@@ -50,7 +50,9 @@ def test_saved_tensor_unpack_detaches_stale_finalizer() -> None:
     del holder
     gc.collect()
 
-    assert tracker.memory_allocated(0) == 1_000
+    # memory_allocated() counts the 512-byte-rounded block (round_size()).
+    assert tracker.memory_allocated(0) == 1_024
+    assert tracker.memory_stats(0)["requested_bytes.all.current"] == 1_000
 
 
 def test_small_allocations_share_and_release_cached_segment() -> None:
@@ -58,12 +60,12 @@ def test_small_allocations_share_and_release_cached_segment() -> None:
 
     assert tracker.allocate(101, 1_000, 0)
     assert tracker.allocate(102, 1_000, 0)
-    assert tracker.memory_allocated(0) == 2_000
+    assert tracker.memory_allocated(0) == 2_048
     assert tracker.memory_reserved(0) == 2 * MIB
     assert tracker.max_memory_reserved(0) == 2 * MIB
 
     tracker.release(101)
-    assert tracker.memory_allocated(0) == 1_000
+    assert tracker.memory_allocated(0) == 1_024
     assert tracker.memory_reserved(0) == 2 * MIB
     tracker.empty_cache()
     assert tracker.memory_reserved(0) == 2 * MIB
@@ -99,6 +101,73 @@ def test_allocator_best_fit_splits_and_coalesces_blocks() -> None:
     assert snapshot[0]["blocks"][0]["size"] == 2 * MIB
 
 
+def test_allocator_keeps_small_and_large_pools_apart() -> None:
+    # CUDACachingAllocator get_pool()/get_free_block() (PyTorch v2.14.1):
+    # requests up to 1 MiB only reuse small-pool blocks and larger requests
+    # only reuse large-pool blocks, so each pool reserves its own segment.
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 5 * MIB, 0)
+    tracker.allocate(2, 4, 0)
+    assert tracker.memory_reserved(0) == 22 * MIB
+    assert sorted(
+        (segment["segment_type"], segment["total_size"])
+        for segment in tracker.allocator_snapshot()
+    ) == [("large", 20 * MIB), ("small", 2 * MIB)]
+
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 512, 0)
+    tracker.release(1)
+    tracker.allocate(2, 3 * MIB // 2, 0)
+    assert tracker.memory_reserved(0) == 22 * MIB
+
+
+def test_allocator_keeps_large_pool_remainders_up_to_1mib_in_the_block() -> None:
+    # should_split(): a large-pool block is split only when more than
+    # kSmallSize (1 MiB) would remain; otherwise the whole block is used.
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 19 * MIB + MIB // 2, 0)
+    snapshot = tracker.allocator_snapshot()
+    assert [block["size"] for block in snapshot[0]["blocks"]] == [20 * MIB]
+    assert tracker.memory_stats(0)["active_bytes.all.current"] == 20 * MIB
+    assert tracker.memory_stats(0)["inactive_split_bytes.all.current"] == 0
+
+    tracker.release(1)
+    tracker.allocate(2, 19 * MIB, 0)
+    blocks = tracker.allocator_snapshot()[0]["blocks"]
+    assert [block["size"] for block in blocks] == [20 * MIB]
+    tracker.release(2)
+    tracker.allocate(3, 18 * MIB, 0)
+    blocks = tracker.allocator_snapshot()[0]["blocks"]
+    assert [block["size"] for block in blocks] == [18 * MIB, 2 * MIB]
+
+
+def test_allocator_snapshot_uses_torch_memory_snapshot_layout() -> None:
+    # Segment and block keys from THCPModule_memorySnapshot (PyTorch
+    # v2.14.1); block addresses run on from the segment address.
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 1_000, 0)
+    tracker.allocate(2, 3 * MIB, 0)
+    segments = tracker.allocator_snapshot()
+    assert len(segments) == 2
+    for segment in segments:
+        assert {
+            "device", "address", "total_size", "allocated_size", "active_size",
+            "requested_size", "stream", "segment_type", "segment_pool_id",
+            "is_expandable", "frames", "blocks",
+        } <= set(segment)
+        assert segment["segment_pool_id"] == (0, 0)
+        assert segment["is_expandable"] is False
+        address = segment["address"]
+        for block in segment["blocks"]:
+            assert set(block) == {
+                "address", "size", "requested_size", "state", "frames",
+            }
+            assert block["address"] == address
+            address += block["size"]
+    first, second = sorted(segments, key=lambda item: item["address"])
+    assert first["address"] + first["total_size"] <= second["address"]
+
+
 def test_allocator_releases_cached_segments_before_retry() -> None:
     tracker = _DeviceMemoryTracker([20 * MIB], caching_allocator=True)
     tracker.allocate(1, 1_000, 0)
@@ -123,8 +192,239 @@ def test_allocator_oom_reports_reserved_state_and_counter() -> None:
 
     stats = tracker.memory_stats(0)
     assert stats["num_ooms"] == 1
+    # malloc() always retries once after release_cached_blocks(), which
+    # synchronizes first, even when no cached segment could be freed.
+    assert stats["num_alloc_retries"] == 1
+    assert stats["num_sync_all_streams"] == 1
     assert stats["reserved_bytes.all.current"] == 2 * MIB
     assert stats["allocated_bytes.all.current"] == 2 * MIB
+
+
+def test_allocator_oom_message_matches_cuda_caching_allocator() -> None:
+    # Message layout and sizes from CUDACachingAllocator::malloc() and
+    # c10::CachingAllocator::format_size() (PyTorch v2.14.1).
+    torch = pytest.importorskip("torch")
+    from fakegpu._allocator import _format_size
+
+    assert [
+        _format_size(size)
+        for size in (512, 1024, 1025, MIB, MIB + 1, 1024**3, 2 * 1024**3)
+    ] == [
+        "512 bytes",
+        "1024 bytes",
+        "1.00 KiB",
+        "1024.00 KiB",
+        "1.00 MiB",
+        "1024.00 MiB",
+        "2.00 GiB",
+    ]
+
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 60 * MIB - 100, 0)
+    with pytest.raises(torch.OutOfMemoryError) as excinfo:
+        tracker.allocate(2, 5 * MIB, 0)
+    assert str(excinfo.value).startswith(
+        "CUDA out of memory. Tried to allocate 20.00 MiB. GPU 0 has a total "
+        "capacity of 64.00 MiB of which 4.00 MiB is free. Of the allocated "
+        "memory 60.00 MiB is allocated by PyTorch, and 0 bytes is reserved by "
+        "PyTorch but unallocated. If reserved but unallocated memory is large "
+        "try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid "
+        "fragmentation."
+    )
+
+
+def test_allocator_memory_fraction_caps_reserved_memory() -> None:
+    # DeviceCachingAllocator::setMemoryFraction()/alloc_block(): a fraction
+    # below 1 caps the bytes obtained from cudaMalloc at round(f * total).
+    torch = pytest.importorskip("torch")
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.set_memory_fraction(0.5, 0)
+    assert tracker.get_memory_fraction(0) == 0.5
+    tracker.allocate(1, 30 * MIB, 0)
+    with pytest.raises(torch.OutOfMemoryError, match=r"is free\. 32\.00 MiB allowed; "):
+        tracker.allocate(2, 5 * MIB, 0)
+
+    tracker.set_memory_fraction(1.0, 0)
+    assert tracker.get_memory_fraction(0) == 1.0
+    tracker.allocate(3, 5 * MIB, 0)
+    assert tracker.memory_reserved(0) == 50 * MIB
+    with pytest.raises(RuntimeError, match="Allocator not initialized for device 1"):
+        tracker.set_memory_fraction(0.5, 1)
+
+
+def test_fakecuda_memory_fraction_and_backend_apis() -> None:
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", profile="test-512m", device_count=1)
+
+        import torch
+
+        result = {"backend": torch.cuda.get_allocator_backend()}
+        torch.cuda.set_per_process_memory_fraction(0.25)
+        result["fraction"] = torch.cuda.get_per_process_memory_fraction()
+        try:
+            torch.cuda.set_per_process_memory_fraction(1)
+        except TypeError:
+            result["int_fraction"] = "TypeError"
+        try:
+            torch.empty(160 * 1024**2, dtype=torch.uint8, device="cuda")
+        except torch.OutOfMemoryError as exc:
+            result["oom"] = str(exc)
+        print(json.dumps(result))
+        """
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert payload["backend"] == "native"
+    assert payload["fraction"] == 0.25
+    assert payload["int_fraction"] == "TypeError"
+    assert "128.00 MiB allowed; " in payload["oom"]
+
+
+def test_fakecuda_memory_api_rejects_out_of_range_devices() -> None:
+    # getDeviceStats()/resetPeakStats() assert a valid device, and
+    # mem_get_info() fails in cudaSetDevice, instead of reporting zeros.
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", profile="test-512m", device_count=2)
+
+        import torch
+
+        result = {"device1": torch.cuda.memory_allocated("cuda:1")}
+        for name in (
+            "memory_allocated", "max_memory_allocated", "memory_reserved",
+            "max_memory_reserved", "memory_stats", "reset_peak_memory_stats",
+            "reset_accumulated_memory_stats", "memory_stats_as_nested_dict",
+            "mem_get_info",
+        ):
+            try:
+                getattr(torch.cuda, name)(2)
+            except RuntimeError as exc:
+                result[name] = str(exc)
+        print(json.dumps(result))
+        """
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert payload.pop("device1") == 0
+    assert payload.pop("mem_get_info").startswith(
+        "CUDA error: invalid device ordinal"
+    )
+    assert len(payload) == 8
+    assert set(payload.values()) == {
+        "Invalid device argument 2: did you call init?"
+    }
+
+
+def test_allocator_memory_stats_follow_cuda_caching_allocator() -> None:
+    # Expected values follow DeviceStats updates in CUDACachingAllocator.cpp
+    # and the key layout of torch.cuda.memory_stats() (PyTorch v2.14.1).
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 4, 0)
+    tracker.allocate(2, 19 * MIB + MIB // 2, 0)
+
+    stats = tracker.memory_stats(0)
+    arrays = (
+        "active", "active_bytes", "allocated_bytes", "allocation",
+        "inactive_split", "inactive_split_bytes", "requested_bytes",
+        "reserved_bytes", "segment",
+    )
+    expected_keys = {
+        f"{name}.{pool}.{metric}"
+        for name in arrays
+        for pool in ("all", "large_pool", "small_pool")
+        for metric in ("allocated", "current", "freed", "peak")
+    } | {
+        f"{name}.{metric}"
+        for name in ("oversize_allocations", "oversize_segments")
+        for metric in ("allocated", "current", "freed", "peak")
+    } | {
+        "max_split_size", "num_alloc_retries", "num_device_alloc",
+        "num_device_free", "num_oom_rejections", "num_ooms",
+        "num_sync_all_streams",
+    }
+    assert set(stats) == expected_keys
+    assert list(stats) == sorted(stats)
+    assert stats["max_split_size"] == -1
+
+    # Allocated and active bytes count whole blocks; requested bytes do not.
+    assert tracker.memory_allocated(0) == 512 + 20 * MIB
+    assert stats["allocated_bytes.small_pool.current"] == 512
+    assert stats["allocated_bytes.large_pool.current"] == 20 * MIB
+    assert stats["active_bytes.all.current"] == 512 + 20 * MIB
+    assert stats["requested_bytes.all.current"] == 4 + 19 * MIB + MIB // 2
+    assert stats["allocation.all.current"] == 2
+    assert stats["active.all.current"] == 2
+    assert stats["segment.small_pool.current"] == 1
+    assert stats["reserved_bytes.large_pool.current"] == 20 * MIB
+    assert stats["inactive_split.small_pool.current"] == 1
+    assert stats["inactive_split_bytes.small_pool.current"] == 2 * MIB - 512
+    assert stats["inactive_split_bytes.large_pool.current"] == 0
+    assert stats["num_device_alloc"] == 2
+
+    tracker.release(1)
+    tracker.empty_cache()
+    stats = tracker.memory_stats(0)
+    assert stats["inactive_split.small_pool.current"] == 0
+    assert stats["inactive_split_bytes.small_pool.freed"] == 2 * MIB - 512
+    assert stats["allocated_bytes.all.freed"] == 512
+    assert stats["reserved_bytes.all.freed"] == 2 * MIB
+    assert stats["segment.all.current"] == 1
+    assert stats["num_device_free"] == 1
+    assert stats["num_sync_all_streams"] == 1
+
+    # reset_accumulated() zeroes the allocated/freed totals and counters,
+    # even for memory that is still allocated.
+    tracker.reset_accumulated(0)
+    stats = tracker.memory_stats(0)
+    assert stats["allocated_bytes.all.allocated"] == 0
+    assert stats["allocated_bytes.all.freed"] == 0
+    assert stats["reserved_bytes.all.allocated"] == 0
+    assert stats["num_device_alloc"] == 0
+    assert stats["num_sync_all_streams"] == 0
+    assert stats["allocated_bytes.all.current"] == 20 * MIB
+    assert stats["allocated_bytes.all.peak"] == 512 + 20 * MIB
+
+    tracker.reset_peak(0)
+    assert tracker.max_memory_allocated(0) == 20 * MIB
+    assert tracker.memory_stats_as_nested_dict(0)["allocated_bytes"]["all"] == {
+        "current": 20 * MIB,
+        "peak": 20 * MIB,
+        "allocated": 0,
+        "freed": 0,
+    }
 
 
 def test_allocator_category_totals_follow_allocate_reclassify_and_release() -> None:
@@ -177,7 +477,11 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
             "reserved": torch.cuda.memory_reserved(),
             "max_reserved": torch.cuda.max_memory_reserved(),
             "stats": torch.cuda.memory_stats(),
-            "snapshot": torch.cuda.memory_snapshot(),
+            "nested_allocated": torch.cuda.memory_stats_as_nested_dict()[
+                "allocated_bytes"
+            ]["all"]["current"],
+            "snapshot": torch.cuda.memory_snapshot(include_traces=False),
+            "default_pool_segments": len(torch.cuda.memory_snapshot(None)),
         }
         del tensor
         gc.collect()
@@ -212,8 +516,11 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
     assert live["reserved"] >= 2 * MIB
     assert live["max_reserved"] >= live["reserved"]
     assert live["stats"]["reserved_bytes.all.current"] == live["reserved"]
-    assert live["stats"]["requested_bytes.all.current"] == live["allocated"]
+    assert live["stats"]["allocated_bytes.all.current"] == live["allocated"]
+    assert live["nested_allocated"] == live["allocated"]
+    assert live["stats"]["requested_bytes.all.current"] <= live["allocated"]
     assert live["snapshot"]
+    assert live["default_pool_segments"] == len(live["snapshot"])
     assert payload["released"]["reserved_before_empty"] >= 2 * MIB
     assert (
         payload["released"]["reserved_after_empty"]
