@@ -574,6 +574,24 @@ cublasStatus_t cpu_ger(int m, int n, T a, const T* x, int incx, const T* y, int 
     return CUBLAS_STATUS_SUCCESS;
 }
 
+// The CUBLAS_STATUS_INVALID_VALUE conditions the cuBLAS reference lists for
+// gemm, gemmBatched, gemmStridedBatched and their Ex variants.
+cublasStatus_t check_gemm_arguments(cublasOperation_t transa, cublasOperation_t transb,
+                                    int m, int n, int k, int lda, int ldb, int ldc) {
+    const auto valid_op = [](cublasOperation_t op) {
+        return op == CUBLAS_OP_N || op == CUBLAS_OP_T || op == CUBLAS_OP_C;
+    };
+    if (m < 0 || n < 0 || k < 0 || !valid_op(transa) || !valid_op(transb)) {
+        return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (lda < std::max(1, transa == CUBLAS_OP_N ? m : k) ||
+        ldb < std::max(1, transb == CUBLAS_OP_N ? k : n) ||
+        ldc < std::max(1, m)) {
+        return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    return CUBLAS_STATUS_SUCCESS;
+}
+
 // Checks the leading dimensions and, against FakeGPU's tracked allocations,
 // the extent of every operand a column-major GEMM touches.
 cublasStatus_t check_gemm_extents(
@@ -609,9 +627,8 @@ template<> constexpr int cuda_data_type<double>() { return 1; }  // CUDA_R_64F
 template<class T>
 cublasStatus_t cpu_gemm(const char* name, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k,
                         T alpha, const T* A, int lda, const T* B, int ldb, T beta, T* C, int ldc) {
-    if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     if (m == 0 || n == 0) {
         return CUBLAS_STATUS_SUCCESS;
     }
@@ -633,6 +650,8 @@ cublasStatus_t cpu_gemm_strided_batched(
     const char* name, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, T alpha,
     const T* A, int lda, long long strideA, const T* B, int ldb, long long strideB,
     T beta, T* C, int ldc, long long strideC, int batchCount) {
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     if (batchCount < 0 || strideA < 0 || strideB < 0 || strideC < 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
@@ -655,6 +674,8 @@ cublasStatus_t cpu_gemm_batched(
     const char* name, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, T alpha,
     const T* const Aarray[], int lda, const T* const Barray[], int ldb,
     T beta, T* const Carray[], int ldc, int batchCount) {
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     const double a = static_cast<double>(alpha);
     const double b = static_cast<double>(beta);
     constexpr int dtype = cuda_data_type<T>();
@@ -1313,9 +1334,8 @@ cublasStatus_t cublasHgemm(cublasHandle_t handle, cublasOperation_t transa, cubl
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     const double a = half_to_float(*alpha);
     const double b = half_to_float(*beta);
     cublasStatus_t status = gemm_col_major("cublasHgemm", transa, transb, m, n, k, a, A, 2, lda, B, 2, ldb, b, C, 2, ldc);
@@ -1390,6 +1410,8 @@ cublasStatus_t cublasHgemmStridedBatched(cublasHandle_t handle, cublasOperation_
     }
 
 #if FAKEGPU_CPU_SIMULATION
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     if (batchCount < 0 || strideA < 0 || strideB < 0 || strideC < 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
@@ -1509,9 +1531,8 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
         record_gemm_typed(C, m, n, k, 1, Atype);
         return CUBLAS_STATUS_SUCCESS;
     }
-    if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     if (m == 0 || n == 0) {
         return CUBLAS_STATUS_SUCCESS;
     }
@@ -1562,6 +1583,8 @@ cublasStatus_t cublasGemmStridedBatchedEx(cublasHandle_t handle, cublasOperation
         record_gemm_typed(C, m, n, k, batchCount, Atype);
         return CUBLAS_STATUS_SUCCESS;
     }
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     if (batchCount < 0 || strideA < 0 || strideB < 0 || strideC < 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
@@ -1613,6 +1636,8 @@ cublasStatus_t cublasGemmBatchedEx(cublasHandle_t handle, cublasOperation_t tran
         record_gemm_typed(first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount), m, n, k, batchCount, Atype);
         return CUBLAS_STATUS_SUCCESS;
     }
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     const int scale_type = gemm_scale_type(computeType);
     if (scale_type < 0) {
         if (fake_gpu::record_unsupported_api("cublasGemmBatchedEx", "unsupported_compute_type")) {
@@ -2272,9 +2297,8 @@ cublasStatus_t cublasSgemmEx(cublasHandle_t handle, cublasOperation_t transa, cu
         record_gemm_typed(C, m, n, k, 1, Atype);
         return CUBLAS_STATUS_SUCCESS;
     }
-    if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     if (m == 0 || n == 0) {
         return CUBLAS_STATUS_SUCCESS;
     }

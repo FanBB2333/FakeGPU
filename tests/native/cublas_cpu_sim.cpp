@@ -1001,6 +1001,72 @@ int main() {
         std::printf("Test10 OK: cublasLtMatmulAlgoGetHeuristic layout\n");
     }
 
+    // -------------------------
+    // Test 11: batched GEMM argument checks
+    // -------------------------
+    {
+        // The cuBLAS reference returns CUBLAS_STATUS_INVALID_VALUE for
+        // m, n or k < 0, lda < max(1, m) (op N) or max(1, k) (op T/C),
+        // ldb < max(1, k) (op N) or max(1, n) (op T/C), and ldc < max(1, m).
+        const int m = 4;
+        const int n = 3;
+        const int k = 2;
+        const int batchCount = 2;
+        float* dBuf = nullptr;
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dBuf), 256 * sizeof(float)), "cudaMalloc batched");
+        cublasHandle_t handle = nullptr;
+        check_cublas(cublasCreate_v2(&handle), "cublasCreate_v2");
+        const float one = 1.0f;
+        const float zero = 0.0f;
+        const long long stride = 32;
+
+        struct Case {
+            cublasOperation_t transa;
+            cublasOperation_t transb;
+            int m, n, k, lda, ldb, ldc;
+            const char* what;
+        };
+        const Case cases[] = {
+            {CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, m - 1, k, m, "lda < m with op N"},
+            {CUBLAS_OP_T, CUBLAS_OP_N, m, n, k, k - 1, k, m, "lda < k with op T"},
+            {CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, m, k - 1, m, "ldb < k with op N"},
+            {CUBLAS_OP_N, CUBLAS_OP_T, m, n, k, m, n - 1, m, "ldb < n with op T"},
+            {CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, m, k, m - 1, "ldc < m"},
+            {CUBLAS_OP_N, CUBLAS_OP_N, m, n, -1, m, k, m, "k < 0"},
+            {static_cast<cublasOperation_t>(7), CUBLAS_OP_N, m, n, k, m, k, m, "invalid transa"},
+        };
+        float* const Aarray[batchCount] = {dBuf, dBuf + stride};
+        float* const Barray[batchCount] = {dBuf + 2 * stride, dBuf + 3 * stride};
+        float* const Carray[batchCount] = {dBuf + 4 * stride, dBuf + 5 * stride};
+        for (const Case& c : cases) {
+            const cublasStatus_t strided = cublasSgemmStridedBatched(
+                handle, c.transa, c.transb, c.m, c.n, c.k, &one, dBuf, c.lda, stride,
+                dBuf + 2 * stride, c.ldb, stride, &zero, dBuf + 4 * stride, c.ldc, stride, batchCount);
+            const cublasStatus_t batched = cublasSgemmBatched(
+                handle, c.transa, c.transb, c.m, c.n, c.k, &one, Aarray, c.lda, Barray, c.ldb,
+                &zero, Carray, c.ldc, batchCount);
+            const cublasStatus_t strided_ex = cublasGemmStridedBatchedEx(
+                handle, c.transa, c.transb, c.m, c.n, c.k, &one, dBuf, 0, c.lda, stride,
+                dBuf + 2 * stride, 0, c.ldb, stride, &zero, dBuf + 4 * stride, 0, c.ldc, stride,
+                batchCount, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+            if (strided != CUBLAS_STATUS_INVALID_VALUE || batched != CUBLAS_STATUS_INVALID_VALUE ||
+                strided_ex != CUBLAS_STATUS_INVALID_VALUE) {
+                std::fprintf(stderr, "Test11 failed (%s): strided=%d batched=%d stridedEx=%d\n", c.what,
+                             static_cast<int>(strided), static_cast<int>(batched), static_cast<int>(strided_ex));
+                return 1;
+            }
+        }
+        // op T only needs lda >= k, even when k < m.
+        check_cublas(cublasSgemmStridedBatched(handle, CUBLAS_OP_T, CUBLAS_OP_N, m, n, k, &one, dBuf, k, stride,
+                                               dBuf + 2 * stride, k, stride, &zero, dBuf + 4 * stride, m, stride,
+                                               batchCount),
+                     "cublasSgemmStridedBatched op T lda=k");
+
+        check_cublas(cublasDestroy_v2(handle), "cublasDestroy_v2");
+        check_cuda(cudaFree(dBuf), "cudaFree batched");
+        std::printf("Test11 OK: batched GEMM argument checks\n");
+    }
+
     std::printf("All FakeGPU CPU simulation tests passed.\n");
     return 0;
 }
