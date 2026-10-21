@@ -7,7 +7,7 @@
 # Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 id: h100
 name: Fake NVIDIA H100-SXM-80GB
-torch_name: NVIDIA H100-SXM-80GB
+torch_name: NVIDIA H100 80GB HBM3
 official_model: NVIDIA H100
 architecture: hopper
 compute_major: 9

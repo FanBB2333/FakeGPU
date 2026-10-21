@@ -4,7 +4,7 @@
 # Additional source: https://docs.nvidia.com/ai-enterprise/release-4/latest/infra-software/vgpu/features.html
 id: h800-pcie-80gb
 name: Fake NVIDIA H800 PCIe 80GB
-torch_name: NVIDIA H800 PCIe 80GB
+torch_name: NVIDIA H800 PCIe
 official_model: NVIDIA H800
 architecture: hopper
 compute_major: 9

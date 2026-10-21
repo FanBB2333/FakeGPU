@@ -1,4 +1,5 @@
 # Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
+# Additional source: https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf
 id: rtx-a5000
 name: Fake NVIDIA RTX A5000
 torch_name: NVIDIA RTX A5000
@@ -33,6 +34,8 @@ ecc: supported
 form_factor: pcie
 pcie_generation: 4
 pcie_lanes: 16
+nvlink_generation: 3
+nvlink_links: 4
 nvlink_bandwidth_gbps: 112.5
 fp64_tflops: 0.4339
 fp32_tflops: 27.8

@@ -6,7 +6,7 @@
 # Additional source: https://developer.nvidia.com/blog/nvidia-grace-hopper-superchip-architecture-in-depth/
 id: gh200-144gb
 name: Fake NVIDIA GH200 144GB (GPU HBM only)
-torch_name: NVIDIA GH200 144GB
+torch_name: NVIDIA GH200 144G HBM3e
 official_model: NVIDIA GH200
 architecture: hopper
 compute_major: 9

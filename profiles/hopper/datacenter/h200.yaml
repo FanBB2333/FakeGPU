@@ -7,7 +7,7 @@
 # Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/705n6ur546g0uk43w0117r17n8042d73.pdf
 id: h200
 name: Fake NVIDIA H200-SXM-141GB
-torch_name: NVIDIA H200-SXM-141GB
+torch_name: NVIDIA H200
 official_model: NVIDIA H200
 architecture: hopper
 compute_major: 9
