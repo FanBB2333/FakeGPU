@@ -897,6 +897,61 @@ def test_moe_layer_count_skips_first_k_dense_layers(
     assert report["model"]["dense_layer_count"] == 4 - moe_layer_count
 
 
+@pytest.mark.parametrize(
+    ("layer_selection", "moe_layer_count"),
+    [
+        ({"moe_layers": list(range(1, 48, 2))}, 24),
+        ({"interleave_moe_layer_step": 2}, 24),
+        ({"interleave_moe_layer_step": 1}, 48),
+    ],
+)
+def test_llama4_moe_layers_dense_width_and_shared_expert(
+    tmp_path: Path,
+    layer_selection: dict[str, object],
+    moe_layer_count: int,
+) -> None:
+    model_dir = tmp_path / "llama4"
+    _write_model(model_dir)
+    # Llama-4-Maverick text_config. transformers' Llama4TextDecoderLayer makes
+    # layer i sparse iff i is in config.moe_layers (default
+    # range(step - 1, layers, step)); dense layers use intermediate_size_mlp and
+    # every Llama4TextMoe adds one intermediate_size shared expert.
+    text_config = {
+        "model_type": "llama4_text",
+        "hidden_size": 5120, "num_hidden_layers": 48,
+        "num_attention_heads": 40, "num_key_value_heads": 8, "head_dim": 128,
+        "intermediate_size": 8192, "intermediate_size_mlp": 16384,
+        "num_local_experts": 128, "num_experts_per_tok": 1,
+        "vocab_size": 202048, "torch_dtype": "bfloat16",
+        **layer_selection,
+    }
+    config = {"model_type": "llama4", "text_config": text_config}
+    (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    report = estimate_decoder_inference(model_dir, prompt_tokens=1)
+    model = report["model"]
+
+    dense_layer_count = 48 - moe_layer_count
+    assert model["moe_layer_count"] == moe_layer_count
+    assert model["dense_layer_count"] == dense_layer_count
+    assert model["intermediate_size"] == 16384
+    assert model["moe_intermediate_size"] == 8192
+    assert model["shared_expert_intermediate_size"] == 8192
+    # Two FLOPs per weight of the meta-device module tree for one token:
+    # q/o 5120x5120, k/v 1024x5120, gate/up/down per dense layer, one routed
+    # and one shared expert plus the 5120x128 router per sparse layer.
+    attention = 2 * 48 * (2 * 5120 * 5120 + 2 * 5120 * 1024)
+    dense = 2 * dense_layer_count * 3 * 5120 * 16384
+    sparse = 2 * moe_layer_count * (2 * 3 * 5120 * 8192 + 5120 * 128)
+    lm_head = 2 * 5120 * 202048
+    scores = 4 * 40 * 128 * 48
+    if moe_layer_count == 24:
+        assert dense + sparse == 24_190_648_320
+    assert report["compute"]["prefill_flops"] == (
+        attention + dense + sparse + lm_head + scores
+    )
+
+
 def test_moe_layer_count_rejects_invalid_first_k_dense_replace(
     tmp_path: Path,
 ) -> None:

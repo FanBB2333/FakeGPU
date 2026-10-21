@@ -1114,6 +1114,14 @@ def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:
             "num_attention_heads"
         )
 
+    # Llama 4 dense layers use intermediate_size_mlp, while its experts and
+    # always-present shared expert use intermediate_size.
+    llama4_text = config.get("model_type") == "llama4_text"
+    dense_intermediate_size = (
+        _first_positive_integer(config, ("intermediate_size_mlp",))
+        if llama4_text
+        else 0
+    ) or int(required["intermediate_size"])
     expert_count = _first_positive_integer(
         config,
         ("num_experts", "num_local_experts", "n_routed_experts"),
@@ -1144,7 +1152,7 @@ def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:
             shared_experts = _first_positive_integer(
                 config,
                 ("n_shared_experts", "num_shared_experts"),
-            ) or 0
+            ) or int(llama4_text)
             shared_expert_intermediate_size = (
                 shared_experts * moe_intermediate_size
             )
@@ -1174,7 +1182,7 @@ def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:
         "qk_nope_head_dim": qk_nope_head_dim,
         "qk_rope_head_dim": qk_rope_head_dim,
         "v_head_dim": v_head_dim,
-        "intermediate_size": int(required["intermediate_size"]),
+        "intermediate_size": dense_intermediate_size,
         "vocab_size": int(required["vocab_size"]),
         "model_kind": (
             "mixture_of_experts" if expert_count else "dense_decoder"
@@ -1212,6 +1220,25 @@ def _moe_layer_count(
     *,
     layer_count: int,
 ) -> int:
+    # Llama 4 lists its sparse layers explicitly; transformers derives the
+    # list from interleave_moe_layer_step when it is absent.
+    moe_layers = config.get("moe_layers")
+    if isinstance(moe_layers, list):
+        return len(
+            {
+                value
+                for value in moe_layers
+                if isinstance(value, int)
+                and not isinstance(value, bool)
+                and 0 <= value < layer_count
+            }
+        )
+    interleave_step = _first_positive_integer(
+        config,
+        ("interleave_moe_layer_step",),
+    )
+    if interleave_step:
+        return len(range(interleave_step - 1, layer_count, interleave_step))
     mlp_only_layers = config.get("mlp_only_layers")
     dense_layers = (
         {
