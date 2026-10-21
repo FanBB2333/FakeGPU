@@ -1,6 +1,7 @@
 # Additional source: https://download.nvidia.com/XFree86/Linux-x86_64/595.99.02/README/supportedchips.html
 # Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/products/workstations/nvidia-rtx-a6000-datasheet.pdf
 # Additional source: https://www.nvidia.com/en-us/products/workstations/rtx-a6000/
+# Additional source: https://www.nvidia.com/content/PDF/nvidia-ampere-ga-102-gpu-architecture-whitepaper-v2.pdf
 id: rtx-a6000
 name: Fake NVIDIA RTX A6000
 torch_name: NVIDIA RTX A6000
@@ -36,6 +37,7 @@ form_factor: pcie
 pcie_generation: 4
 pcie_lanes: 16
 nvlink_generation: 3
+nvlink_links: 4
 nvlink_bandwidth_gbps: 112.5
 fp64_tflops: 0.6048
 fp32_tflops: 38.7

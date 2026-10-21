@@ -750,9 +750,9 @@ python3 scripts/render_gpu_catalog.py --check
 | rtx-a4500 | _0.3696_ | 23.7 | _47.31_ | _94.62_ | _94.62_ | _0_ | _0_ | _189.2_ | GDDR6 640 GB/s | pcie | PCIe 4.0 x16, NVLink 3 112.5 GB/s | — |
 | rtx-a4500-mobile | — | 18.5 | — | — | — | — | — | — | GDDR6 512 GB/s | laptop | PCIe 4.0 | — |
 | rtx-a500-mobile | — | 7 | — | — | — | — | — | — | GDDR6 112 GB/s | laptop | PCIe 4.0 | — |
-| rtx-a5000 | _0.4339_ | 27.8 | _55.54_ | _111.1_ | _111.1_ | _0_ | _0_ | _222.2_ | GDDR6 768 GB/s | pcie | PCIe 4.0 x16 | — |
+| rtx-a5000 | _0.4339_ | 27.8 | _55.54_ | _111.1_ | _111.1_ | _0_ | _0_ | _222.2_ | GDDR6 768 GB/s | pcie | PCIe 4.0 x16, NVLink 3 112.5 GB/s | — |
 | rtx-a5000-mobile | — | 21.7 | — | — | — | — | — | — | GDDR6 448 GB/s | laptop | PCIe 4.0 | — |
-| rtx-a5500 | _0.5664_ | 34.1 | _72.5_ | _145_ | _145_ | _0_ | _0_ | _290_ | GDDR6 768 GB/s | pcie | PCIe 4.0 x16 | — |
+| rtx-a5500 | _0.5664_ | 34.1 | _72.5_ | _145_ | _145_ | _0_ | _0_ | _290_ | GDDR6 768 GB/s | pcie | PCIe 4.0 x16, NVLink 3 112.5 GB/s | — |
 | rtx-a5500-mobile | — | 24.7 | — | — | — | — | — | — | GDDR6 512 GB/s | laptop | PCIe 4.0 | — |
 | rtx-a6000 | _0.6048_ | 38.7 | 77.4 | 154.8 | 154.8 | _0_ | _0_ | 309.7 | GDDR6 768 GB/s | pcie | PCIe 4.0 x16, NVLink 3 112.5 GB/s | — |
 

@@ -134,6 +134,10 @@ def test_peer_access_follows_links_sockets_and_documented_policy():
     assert not resolve("rtx4090:2").topology.can_access_peer(0, 1)
     bridged = resolve("rtx3090:2", nvlink_bridges="0-1").topology
     assert bridged.relation(0, 1) == "NV4" and bridged.peer_bandwidth_gbps(0, 1) == 56.25
+    # GA102 boards: four x4 NVLink 3 links at 14.0625 GB/s per direction (GA102 whitepaper).
+    for workstation in ("rtx-a4500", "rtx-a5000", "rtx-a5500", "rtx-a6000"):
+        pair = resolve(f"{workstation}:2", nvlink_bridges="0-1").topology
+        assert pair.relation(0, 1) == "NV4" and pair.peer_bandwidth_gbps(0, 1) == 56.25
     assert not resolve("gb300-dgx-station,rtx-pro-6000-blackwell").topology.can_access_peer(0, 1)
     nvl = resolve("h200-nvl:4", nvlink_bridges="0-1-2-3").topology
     assert nvl.relation(0, 3) == "NV6" and len(nvl.ports(0)) == 18
