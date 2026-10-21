@@ -1027,11 +1027,61 @@ def test_training_plan_normalizes_deepspeed_zero3_offload() -> None:
     assert report["sharding"]["parameters_sharded"] is True
     assert report["rank_local_storage"]["parameter_bytes"] == 1_000
     assert report["rank_local_storage"]["optimizer_state_bytes"] == 0
-    assert report["cpu_offload"]["optimizer_and_master_parameter_bytes"] == 4_000
+    # 2,000 BF16 parameters over 4 ranks: FP32 master (4 B) plus FP32 Adam
+    # moments (8 B) per parameter, as in DeepSpeed's ZeRO memory estimator.
+    assert report["cpu_offload"]["optimizer_and_master_parameter_bytes"] == 6_000
     assert report["communication"]["gradient_accumulation_steps"] == 8
     assert report["communication"]["reduce_bucket_bytes"] == 400
     assert report["communication"]["allgather_bucket_bytes"] == 600
     assert len(report["memory_timeline"]["phases"]) == 4
+
+
+@pytest.mark.parametrize(
+    ("optimizer", "state_bytes_per_parameter"),
+    [("adamw", 8), ("sgd_momentum", 4), ("sgd", 0)],
+)
+def test_training_plan_keeps_mixed_precision_optimizer_state_in_fp32(
+    optimizer: str,
+    state_bytes_per_parameter: int,
+) -> None:
+    # DeepSpeed builds the ZeRO optimizer over FP32 master partitions; its
+    # estimate_zero2_model_states_mem_needs counts 4 B FP32 parameters plus 8 B
+    # FP32 momentum and variance per parameter, partitioned across ranks.
+    normalized = normalize_training_config(
+        {
+            "world_size": 8,
+            "bf16": {"enabled": True},
+            "zero_optimization": {"stage": 2},
+        }
+    )
+    parameters = 1_000_000_000
+    report = estimate_training_plan(
+        normalized,
+        parameter_bytes=2 * parameters,
+        activation_bytes=0,
+        optimizer=optimizer,
+        parameter_element_bytes=2,
+    )
+
+    storage = report["rank_local_storage"]
+    assert storage["optimizer_state_bytes"] == (
+        state_bytes_per_parameter * parameters // 8
+    )
+    assert storage["master_parameter_bytes"] == (
+        4 * parameters // 8 if optimizer != "sgd" else 0
+    )
+
+    pure_bf16 = estimate_training_plan(
+        {"world_size": 1, "mixed_precision": "no"},
+        parameter_bytes=2 * parameters,
+        activation_bytes=0,
+        optimizer=optimizer,
+        parameter_element_bytes=2,
+    )
+    # Without a master copy torch.optim keeps moments in the parameter dtype.
+    assert pure_bf16["rank_local_storage"]["optimizer_state_bytes"] == (
+        state_bytes_per_parameter // 4 * 2 * parameters
+    )
 
 
 def test_training_plan_handles_accelerate_fsdp_and_auto_deepspeed_values() -> None:

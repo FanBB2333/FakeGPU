@@ -156,24 +156,26 @@ def estimate_training_plan(
         if shard_gradients
         else gradient_bytes
     )
-    if optimizer in {"adam", "adamw"}:
-        optimizer_state_bytes = parameter_bytes * 2
-    elif optimizer == "sgd_momentum":
-        optimizer_state_bytes = parameter_bytes
-    else:
-        optimizer_state_bytes = 0
-    rank_optimizer_state_bytes = (
-        partition_bytes(optimizer_state_bytes)
-        if shard_optimizer
-        else optimizer_state_bytes
-    )
-
     mixed_precision = str(normalized.get("mixed_precision") or "no")
     master_parameter_bytes = (
         math.ceil(parameter_bytes * 4 / parameter_element_bytes)
         if mixed_precision in {"fp16", "bf16", "fp8"}
         and optimizer in {"adam", "adamw", "sgd_momentum"}
         else 0
+    )
+    # The optimizer steps the FP32 master copy when one exists, so its
+    # moments are FP32 as well (DeepSpeed ZeRO, FSDP mixed precision, AMP).
+    optimizer_state_basis_bytes = master_parameter_bytes or parameter_bytes
+    if optimizer in {"adam", "adamw"}:
+        optimizer_state_bytes = optimizer_state_basis_bytes * 2
+    elif optimizer == "sgd_momentum":
+        optimizer_state_bytes = optimizer_state_basis_bytes
+    else:
+        optimizer_state_bytes = 0
+    rank_optimizer_state_bytes = (
+        partition_bytes(optimizer_state_bytes)
+        if shard_optimizer
+        else optimizer_state_bytes
     )
     rank_master_parameter_bytes = (
         partition_bytes(master_parameter_bytes)
