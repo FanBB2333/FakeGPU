@@ -413,3 +413,28 @@ assert observed == expected, observed
 print("autocast state passed")
 """
     )
+
+
+def test_fork_rng_keeps_torch_signature() -> None:
+    # torch/random.py: fork_rng(devices=None, enabled=True, _caller="fork_rng",
+    # _devices_kw="devices", device_type=None); torch.jit.verify passes _caller.
+    _run(
+        """
+import inspect
+
+import torch
+
+def parameters(function):
+    return [(p.name, p.default, p.kind) for p in inspect.signature(function).parameters.values()]
+
+
+real = parameters(torch.random.fork_rng)
+fakegpu.init(runtime="fakecuda", devices="a100")
+assert parameters(torch.random.fork_rng) == real, parameters(torch.random.fork_rng)
+state = torch.random.get_rng_state()
+with torch.random.fork_rng([0], _caller="torch.jit.verify"):
+    torch.rand(4)
+assert torch.equal(state, torch.random.get_rng_state())
+print("fork_rng passed")
+"""
+    )

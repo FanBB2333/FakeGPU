@@ -1157,7 +1157,15 @@ def _patch_transformers_utils() -> None:
 
 def _build_fake_fork_rng(torch_mod: Any):
     @contextmanager
-    def _fake_fork_rng(devices=None, enabled: bool = True, device_type: str = "cuda"):
+    def _fake_fork_rng(
+        devices=None,
+        enabled: bool = True,
+        _caller: str = "fork_rng",
+        _devices_kw: str = "devices",
+        device_type: str | None = None,
+    ):
+        # Signature of torch.random.fork_rng; fake CUDA RNG state is the CPU
+        # generator's, so forking the CPU state covers every device.
         if not enabled:
             yield
             return
