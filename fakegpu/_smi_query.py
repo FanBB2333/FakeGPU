@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ._smi_state import NATIVE_ACTIVITY_COUNTERS
@@ -21,15 +21,19 @@ QUERY_SCHEMA_VERSION = "fakegpu.smi_query.v1"
 
 @dataclass(frozen=True, slots=True)
 class QueryField:
-    path: str
+    # None: an nvidia-smi field FakeGPU does not model; it reads as missing.
+    path: str | None
     unit: str | None = None
     divisor: float = 1.0
     precision: int = 0
+    # The field nvidia-smi names in the CSV header when this one is an alias.
+    header: str | None = None
 
 
 GPU_QUERY_FIELDS: dict[str, QueryField] = {
     "timestamp": QueryField("timestamp"),
     "host": QueryField("host"),
+    "hostname": QueryField("host"),
     "index": QueryField("index"),
     "name": QueryField("name"),
     "uuid": QueryField("uuid"),
@@ -50,6 +54,7 @@ GPU_QUERY_FIELDS: dict[str, QueryField] = {
     "slot.type": QueryField("topology.slot.type"),
     "numa.node": QueryField("topology.slot.numa_node"),
     "pcie.link.gen.current": QueryField("topology.pcie.generation"),
+    "pcie.link.gen.gpucurrent": QueryField("topology.pcie.generation"),
     "pcie.link.gen.max": QueryField("topology.pcie.max_generation"),
     "pcie.link.gen.gpumax": QueryField(
         "topology.pcie.gpu_max_generation"
@@ -196,8 +201,11 @@ GPU_QUERY_FIELDS: dict[str, QueryField] = {
         precision=1,
     ),
     "sm_count": QueryField("profile.sm_count"),
-    "clocks.sm": QueryField("profile.core_clock_mhz", unit="MHz"),
-    "clocks.mem": QueryField(
+    "clocks.current.sm": QueryField(
+        "profile.core_clock_mhz",
+        unit="MHz",
+    ),
+    "clocks.current.memory": QueryField(
         "profile.memory_clock_mhz",
         unit="MHz",
     ),
@@ -247,6 +255,7 @@ PROCESS_QUERY_FIELDS: dict[str, QueryField] = {
     "host": QueryField("host"),
     "gpu_index": QueryField("gpu_index"),
     "gpu_name": QueryField("gpu_name"),
+    "gpu_bus_id": QueryField("pci_bus_id"),
     "gpu_uuid": QueryField("gpu_uuid"),
     "pci.bus_id": QueryField("pci_bus_id"),
     "profile.id": QueryField("profile_id"),
@@ -417,6 +426,189 @@ RUNTIME_QUERY_FIELDS: dict[str, QueryField] = {
 }
 
 
+# The rest of nvidia-smi 590.48.01's --help-query-gpu fields, by CSV header
+# unit. FakeGPU does not model them; nvidia-smi accepts every one and prints
+# [N/A] where a GPU reports no value, so they read as missing rather than
+# failing scripts that ask for them.
+_NVIDIA_GPU_FIELDS: dict[str | None, tuple[str, ...]] = {
+    None: (
+        "driver_version", "vgpu_driver_capability.heterogenous_multivGPU",
+        "count", "serial", "pci.domain", "pci.bus", "pci.device",
+        "pci.baseClass", "pci.subClass", "pci.device_id", "pci.sub_device_id",
+        "vgpu_device_capability.fractional_multiVgpu",
+        "vgpu_device_capability.heterogeneous_timeSlice_profile",
+        "vgpu_device_capability.heterogeneous_timeSlice_sizes",
+        "vgpu_device_capability.homogeneous_placements",
+        "vgpu_device_capability.mig_timeSlicing",
+        "vgpu_device_capability.mig_timeSlicing_mode",
+        "pcie.link.gen.hostmax", "display_mode", "display_attached",
+        "display_active", "persistence_mode", "addressing_mode",
+        "accounting.mode", "accounting.buffer_size", "driver_model.current",
+        "driver_model.pending", "vbios_version", "inforom.img", "inforom.oem",
+        "inforom.ecc", "inforom.pwr", "inforom.checksum_validation",
+        "gpu_recovery_action", "gom.current", "gom.pending", "pstate",
+        "clocks_event_reasons.supported", "clocks_event_reasons.active",
+        "clocks_event_reasons.gpu_idle",
+        "clocks_event_reasons.applications_clocks_setting",
+        "clocks_event_reasons.sw_power_cap", "clocks_event_reasons.hw_slowdown",
+        "clocks_event_reasons.hw_thermal_slowdown",
+        "clocks_event_reasons.hw_power_brake_slowdown",
+        "clocks_event_reasons.sw_thermal_slowdown",
+        "clocks_event_reasons.sync_boost", "compute_mode",
+        "encoder.stats.sessionCount", "encoder.stats.averageFps",
+        "encoder.stats.averageLatency", "dramEncryption.mode.current",
+        "dramEncryption.mode.pending", "ecc.mode.current", "ecc.mode.pending",
+        *(
+            f"ecc.errors.{kind}.{scope}.{location}"
+            for kind in ("corrected", "uncorrected")
+            for scope in ("volatile", "aggregate")
+            for location in (
+                "device_memory", "dram", "register_file", "l1_cache",
+                "l2_cache", "texture_memory", "cbu", "sram", "total",
+            )
+        ),
+        "ecc.errors.uncorrected.volatile.sram.parity",
+        "ecc.errors.uncorrected.volatile.sram.secded",
+        "ecc.errors.uncorrected.aggregate.sram.parity",
+        "ecc.errors.uncorrected.aggregate.sram.secded",
+        "ecc.errors.uncorrected.aggregate.sram.thresholdExceeded",
+        "ecc.errors.uncorrected.aggregate.sram.l2",
+        "ecc.errors.uncorrected.aggregate.sram.sm",
+        "ecc.errors.uncorrected.aggregate.sram.mcu",
+        "ecc.errors.uncorrected.aggregate.sram.pcie",
+        "ecc.errors.uncorrected.aggregate.sram.other",
+        "retired_pages.single_bit_ecc.count", "retired_pages.double_bit.count",
+        "retired_pages.pending", "remapped_rows.correctable",
+        "remapped_rows.uncorrectable", "remapped_rows.pending",
+        "remapped_rows.failure", "remapped_rows.histogram.max",
+        "remapped_rows.histogram.high", "remapped_rows.histogram.partial",
+        "remapped_rows.histogram.low", "remapped_rows.histogram.none",
+        "temperature.gpu", "temperature.gpu.tlimit", "temperature.memory",
+        "power.management",
+        "power_smoothing.delayed_power_smoothing_supported",
+        "power_smoothing.curr_profile.primary_floor_act_window_multiplier",
+        "power_smoothing.curr_profile.primary_floor_tar_window_multiplier",
+        "power_smoothing.admin_override.primary_floor_act_window_multiplier",
+        "power_smoothing.admin_override.primary_floor_tar_window_multiplier",
+        "mig.mode.current", "mig.mode.pending", "gsp.mode.current",
+        "gsp.mode.default", "c2c.mode", "fabric.state", "fabric.status",
+        "fabric.cliqueId", "fabric.clusterUuid", "fabric.health.summary",
+        "fabric.health.bandwidth", "fabric.health.route_recovery_in_progress",
+        "fabric.health.route_unhealthy",
+        "fabric.health.access_timeout_recovery",
+        "fabric.health.incorrect_configuration",
+        "platform.chassis_serial_number", "platform.slot_number",
+        "platform.tray_index", "platform.host_id", "platform.peer_type",
+        "platform.module_id", "platform.gpu_fabric_guid",
+    ),
+    "%": (
+        "fan.speed", "utilization.gpu", "utilization.memory",
+        "utilization.encoder", "utilization.decoder", "utilization.jpeg",
+        "utilization.ofa", "edpp_multiplier",
+    ),
+    "us": (
+        "clocks_event_reasons_counters.sw_power_cap",
+        "clocks_event_reasons_counters.sync_boost",
+        "clocks_event_reasons_counters.sw_thermal_slowdown",
+        "clocks_event_reasons_counters.hw_thermal_slowdown",
+        "clocks_event_reasons_counters.hw_power_brake_slowdown",
+    ),
+    "MiB": (
+        "protected_memory.total", "protected_memory.used",
+        "protected_memory.free",
+    ),
+    "W": (
+        "power.draw", "power.draw.average", "power.draw.instant",
+        "power.limit", "enforced.power.limit", "power.min_limit",
+        "module.power.draw.average", "module.power.draw.instant",
+        "module.power.limit", "module.enforced.power.limit",
+        "module.power.default_limit", "module.power.min_limit",
+        "module.power.max_limit", "power_smoothing.primary_power_floor",
+        "power_smoothing.secondary_power_floor",
+        "power_smoothing.min_primary_floor_activation_offset",
+        "power_smoothing.min_primary_floor_activation_point",
+        "power_smoothing.curr_profile.secondary_power_floor",
+        "power_smoothing.curr_profile.primary_floor_act_offset",
+        "power_smoothing.admin_override.secondary_power_floor",
+        "power_smoothing.admin_override.primary_floor_act_offset",
+    ),
+    "ms": ("power_smoothing.window_multiplier",),
+    "MHz": (
+        "clocks.current.graphics", "clocks.current.video",
+        "clocks.applications.graphics", "clocks.applications.memory",
+        "clocks.default_applications.graphics",
+        "clocks.default_applications.memory", "clocks.max.graphics",
+        "clocks.max.sm", "clocks.max.memory",
+    ),
+}
+
+# Alternative names from the same --help-query-gpu text. nvidia-smi heads the
+# column with the first name, e.g. --query-gpu=clocks.sm prints
+# "clocks.current.sm [MHz]".
+_NVIDIA_GPU_ALIASES = {
+    "gpu_name": "name",
+    "gpu_serial": "serial",
+    "gpu_uuid": "uuid",
+    "gpu_bus_id": "pci.bus_id",
+    "inforom.image": "inforom.img",
+    "inforom.power": "inforom.pwr",
+    "gpu_operation_mode.current": "gom.current",
+    "gpu_operation_mode.pending": "gom.pending",
+    **{
+        f"clocks_throttle_reasons.{reason}": f"clocks_event_reasons.{reason}"
+        for reason in (
+            "supported", "active", "gpu_idle", "applications_clocks_setting",
+            "sw_power_cap", "hw_slowdown", "hw_thermal_slowdown",
+            "hw_power_brake_slowdown", "sw_thermal_slowdown", "sync_boost",
+        )
+    },
+    "retired_pages.sbe": "retired_pages.single_bit_ecc.count",
+    "retired_pages.dbe": "retired_pages.double_bit.count",
+    "remapped_rows.sbe": "remapped_rows.correctable",
+    "remapped_rows.dbe": "remapped_rows.uncorrectable",
+    "gpu.power.draw.average": "power.draw.average",
+    "gpu.power.draw.instant": "power.draw.instant",
+    "gpu.power.requested_limit": "power.limit",
+    "gpu.power.current_limit": "enforced.power.limit",
+    "gpu.power.default_limit": "power.default_limit",
+    "gpu.power.min_limit": "power.min_limit",
+    "gpu.power.max_limit": "power.max_limit",
+    "module.power.requested_limit": "module.power.limit",
+    "module.power.current_limit": "module.enforced.power.limit",
+    "clocks.gr": "clocks.current.graphics",
+    "clocks.sm": "clocks.current.sm",
+    "clocks.mem": "clocks.current.memory",
+    "clocks.video": "clocks.current.video",
+    "clocks.applications.gr": "clocks.applications.graphics",
+    "clocks.applications.mem": "clocks.applications.memory",
+    "clocks.default_applications.gr": "clocks.default_applications.graphics",
+    "clocks.default_applications.mem": "clocks.default_applications.memory",
+    "clocks.max.gr": "clocks.max.graphics",
+    "clocks.max.mem": "clocks.max.memory",
+}
+
+
+def _add_nvidia_fields(
+    fields: dict[str, QueryField],
+    unmodeled: Mapping[str | None, tuple[str, ...]],
+    aliases: Mapping[str, str],
+) -> None:
+    for unit, names in unmodeled.items():
+        for name in names:
+            fields.setdefault(name, QueryField(None, unit=unit))
+    for alias, name in aliases.items():
+        fields.setdefault(alias, replace(fields[name], header=name))
+
+
+_add_nvidia_fields(GPU_QUERY_FIELDS, _NVIDIA_GPU_FIELDS, _NVIDIA_GPU_ALIASES)
+# nvidia-smi 590.48.01 --help-query-compute-apps.
+_add_nvidia_fields(
+    PROCESS_QUERY_FIELDS,
+    {None: ("gpu_serial",)},
+    {"name": "process_name", "used_memory": "used_gpu_memory"},
+)
+
+
 def _nested_value(record: Mapping[str, Any], path: str) -> Any:
     current: Any = record
     for part in path.split("."):
@@ -430,6 +622,8 @@ def _query_value(
     record: Mapping[str, Any],
     spec: QueryField,
 ) -> Any:
+    if spec.path is None:
+        return None
     value = _nested_value(record, spec.path)
     if value is None:
         return None
@@ -455,6 +649,7 @@ def _query_value(
 
 
 def _query_csv_header(field: str, spec: QueryField) -> str:
+    field = spec.header or field
     if spec.unit:
         return f"{field} [{spec.unit}]"
     return field
@@ -467,7 +662,8 @@ def _query_csv_value(
     nounits: bool,
 ) -> str:
     if value is None:
-        return "N/A"
+        # nvidia-smi's CSV marker for a value the GPU does not report.
+        return "[N/A]"
     text = str(value)
     if unit and not nounits:
         text += f" {unit}"

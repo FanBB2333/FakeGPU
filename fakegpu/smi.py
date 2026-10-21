@@ -905,6 +905,10 @@ def _render_query_help(
     lines = [f"Supported {query_kind} query fields:"]
     for name, spec in fields.items():
         suffix = f" [{spec.unit}]" if spec.unit else ""
+        if spec.header:
+            suffix += f" (alias of {spec.header})"
+        if spec.path is None:
+            suffix += " (not modeled; always [N/A])"
         lines.append(f"  {name}{suffix}")
     return "\n".join(lines)
 

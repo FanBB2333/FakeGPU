@@ -217,6 +217,12 @@
   `-1` used to wrap to the maximum.
 - Hybrid mode on hosts with more than 16 real GPUs maps virtual devices onto
   the first 16 instead of indexing past the 16-entry real-GPU tables.
+- `fakegpu nvidia-smi --query-gpu` and `--query-compute-apps` accept every
+  field and alias nvidia-smi 590 lists, such as `utilization.gpu`,
+  `temperature.gpu`, `gpu_name`, `gpu_bus_id` and `used_memory`, instead of
+  failing the whole query. Fields FakeGPU does not model print nvidia-smi's
+  `[N/A]` (missing values printed `N/A` before), and an alias is headed by
+  nvidia-smi's name, so `clocks.sm` reads `clocks.current.sm [MHz]`.
 
 ## v1.6.0 - 2026-10-17
 

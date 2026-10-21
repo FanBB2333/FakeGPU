@@ -65,6 +65,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   資料。FakeGPU 寫入 state schema v2，仍可讀取 v1。
 - `--query-runtime` 以 CSV 或 JSON 輸出相同的執行期資訊。`--help-query-runtime`
   列出全部欄位。
+- `--query-gpu` 與 `--query-compute-apps` 也接受 nvidia-smi 590 `--help-query-*`
+  列出的全部欄位與別名，欄名與 nvidia-smi 一致。FakeGPU 未建模的欄位（如
+  `utilization.gpu`、`temperature.gpu`）輸出 `[N/A]`。
 - 原生攔截也會發布 allocation 生命週期、傳輸量、kernel launch、GEMM 呼叫與 FLOP、
   相容性事件及 unsupported API 次數。`FAKEGPU_SMI_DETAIL_LIMIT` 與
   `FAKEGPU_SMI_MAX_STATE_BYTES` 分別限制保留的明細與狀態檔大小。

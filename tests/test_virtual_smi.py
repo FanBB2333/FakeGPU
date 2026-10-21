@@ -1417,3 +1417,63 @@ def test_virtual_smi_count_requires_loop(capsys) -> None:
         main(["--query-gpu", "unknown.field"])
     assert exc_info.value.code == 2
     assert "unsupported query field" in capsys.readouterr().err
+
+
+def _csv_cells(line: str) -> list[str]:
+    return [cell.strip() for cell in line.split(",")]
+
+
+def test_virtual_smi_accepts_every_nvidia_smi_query_field_and_alias(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    # Field names, aliases and headers from nvidia-smi 590.48.01
+    # --help-query-gpu / --help-query-compute-apps. Fields FakeGPU does not
+    # model print nvidia-smi's [N/A] instead of failing the whole query.
+    path = tmp_path / "state.json"
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+
+    # Lightning's get_nvidia_gpu_stats query.
+    assert main([
+        "--state", str(path),
+        "--query-gpu=utilization.gpu,memory.used,memory.free,"
+        "utilization.memory,fan.speed,temperature.gpu,temperature.memory",
+        "--format=csv,nounits,noheader",
+        "--id=0",
+    ]) == 0
+    assert _csv_cells(capsys.readouterr().out.strip()) == [
+        "[N/A]", "3072", "5120", "[N/A]", "[N/A]", "[N/A]", "[N/A]",
+    ]
+
+    # Aliases are headed by the first name nvidia-smi lists.
+    assert main([
+        "--state", str(path),
+        "--query-gpu=gpu_name,gpu_bus_id,gpu_uuid,clocks.sm,clocks.mem,"
+        "gpu.power.max_limit,vbios_version,power.draw",
+        "--format=csv",
+    ]) == 0
+    header, row = capsys.readouterr().out.splitlines()
+    assert _csv_cells(header) == [
+        "name", "pci.bus_id", "uuid", "clocks.current.sm [MHz]",
+        "clocks.current.memory [MHz]", "power.max_limit [W]",
+        "vbios_version", "power.draw [W]",
+    ]
+    cells = _csv_cells(row)
+    assert cells[:2] == ["Fake NVIDIA Test GPU", "00000000:01:00.0"]
+    assert cells[-2:] == ["[N/A]", "[N/A]"]
+
+    assert main([
+        "--state", str(path),
+        "--query-compute-apps=pid,name,used_memory,gpu_bus_id,gpu_serial",
+        "--format=csv",
+    ]) == 0
+    header, row = capsys.readouterr().out.splitlines()
+    assert _csv_cells(header) == [
+        "pid", "process_name", "used_gpu_memory [MiB]", "gpu_bus_id",
+        "gpu_serial",
+    ]
+    assert _csv_cells(row)[2:] == ["3072 MiB", "00000000:01:00.0", "[N/A]"]
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--state", str(path), "--query-gpu", "utilization.gpuu"])
+    assert exc_info.value.code == 2

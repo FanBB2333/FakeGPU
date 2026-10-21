@@ -69,6 +69,10 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   still read v1.
 - `--query-runtime` exposes the same runtime details as CSV or JSON.
   `--help-query-runtime` lists every field.
+- `--query-gpu` and `--query-compute-apps` also accept every field and alias
+  of nvidia-smi 590's `--help-query-*` lists, headed by nvidia-smi's column
+  names. Fields FakeGPU does not model, such as `utilization.gpu` or
+  `temperature.gpu`, print `[N/A]`.
 - Native interception also publishes allocation lifetime, transfer volume,
   kernel launches, GEMM calls and FLOPs, compatibility events, and unsupported
   API counts. `FAKEGPU_SMI_DETAIL_LIMIT` and `FAKEGPU_SMI_MAX_STATE_BYTES` limit
