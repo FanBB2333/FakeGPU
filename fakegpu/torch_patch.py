@@ -804,7 +804,10 @@ class PatchResult:
 # ---------------------------------------------------------------------------
 def _checked_ordinal(index: int) -> int:
     if index < 0 or index >= _NUM_DEVICES:
-        raise RuntimeError(
+        import torch
+
+        # C10_CUDA_CHECK raises c10::AcceleratorError, a RuntimeError subclass.
+        raise getattr(torch, "AcceleratorError", RuntimeError)(
             f"CUDA error: invalid device ordinal "
             f"(requested cuda:{index}, available: {_NUM_DEVICES})"
         )
@@ -826,6 +829,73 @@ def _normalize_device_index(device: Any) -> int:
     if isinstance(device, torch.device):
         return device.index if device.index is not None else _get_current()
     return _get_current()
+
+
+def _cuda_device_index(device: Any, *, optional: bool = False) -> int:
+    """``torch.cuda._utils._get_device_index`` for fake devices.
+
+    Integers pass through unchanged (negative ones included), non-CUDA
+    devices raise ``ValueError``, and a device without an index resolves to
+    the current device only when ``optional``.
+    """
+    import torch
+
+    if isinstance(device, int):
+        return device
+    if isinstance(device, str):
+        device = torch.device(device)
+    if isinstance(device, torch.device):
+        if device.type != "cuda":
+            raise ValueError(f"Expected a cuda device, but got: {device}")
+        if device.index is not None:
+            return int(device.index)
+    if isinstance(device, _CudaDevice):
+        return device.idx
+    if optional:
+        return int(_upstream_mod._CURRENT_DEVICE)
+    raise ValueError(
+        "Expected a torch.device with a specified index or an integer, "
+        f"but got:{device}"
+    )
+
+
+def _exchange_device(device: int) -> int:
+    """``torch.cuda._exchange_device``: select ``device``, return the previous one."""
+    if device < 0:
+        return -1
+    previous = int(_upstream_mod._CURRENT_DEVICE)
+    _upstream_mod._CURRENT_DEVICE = _checked_ordinal(int(device))
+    return previous
+
+
+class _CudaDevice:
+    """``torch.cuda.device``: a no-op for ``None`` or a negative index."""
+
+    def __init__(self, device: Any):
+        self.idx = _cuda_device_index(device, optional=True)
+        self.prev_idx = -1
+
+    def __enter__(self):
+        self.prev_idx = _exchange_device(self.idx)
+
+    def __exit__(self, type: Any, value: Any, traceback: Any):
+        self.idx = _exchange_device(self.prev_idx)
+        return False
+
+
+class _CudaDeviceOf(_CudaDevice):
+    """``torch.cuda.device_of``: a no-op for objects not on a CUDA device."""
+
+    def __init__(self, obj: Any):
+        idx = obj.get_device() if obj.is_cuda else -1
+        super().__init__(idx)
+
+
+def _set_device(device: Any) -> None:
+    """``torch.cuda.set_device``: a no-op for a negative index."""
+    index = _cuda_device_index(device)
+    if index >= 0:
+        _upstream_mod._CURRENT_DEVICE = _checked_ordinal(index)
 
 
 def _patched_tensor_pin_memory(self: Any, device: Any = None) -> Any:
@@ -931,7 +1001,16 @@ class _FakeDeviceProperties:
         self.regs_per_block = prof["regs_per_block"]
         self.regs_per_multiprocessor = prof["regs_per_multiprocessor"]
         self.warp_size = 32
-        self.gcnArchName = ""
+        # Fields of torch._C._CudaDeviceProperties; the clocks are in kHz.
+        self.shared_memory_per_block = prof["shared_mem_per_block"]
+        self.shared_memory_per_block_optin = prof["shared_mem_per_block_optin"]
+        self.shared_memory_per_multiprocessor = prof["shared_mem_per_sm"]
+        self.L2_cache_size = prof["l2_cache_bytes"]
+        self.memory_bus_width = prof["memory_bus_width_bits"]
+        self.clock_rate = prof["core_clock_mhz"] * 1000
+        self.memory_clock_rate = prof["memory_clock_mhz"] * 1000
+        # CUDA builds of PyTorch bind gcnArchName to the device name.
+        self.gcnArchName = self.name
 
     def __repr__(self) -> str:
         return (
@@ -944,8 +1023,23 @@ class _FakeDeviceProperties:
 # ---------------------------------------------------------------------------
 # torch.cuda module‑level stubs
 # ---------------------------------------------------------------------------
-def _stub_is_bf16_supported(device: Any = None) -> bool:
-    return _COMPUTE_MAJOR >= 8
+def _current_compute_major() -> int:
+    index = int(_upstream_mod._CURRENT_DEVICE) if _upstream_mod is not None else 0
+    if 0 <= index < len(_DEVICE_PROFILES):
+        return int(_DEVICE_PROFILES[index]["compute_major"])
+    return int(_COMPUTE_MAJOR)
+
+
+def _stub_is_bf16_supported(including_emulation: bool = True) -> bool:
+    """``torch.cuda.is_bf16_supported`` for the current fake device.
+
+    PyTorch reports native support from compute capability 8.0. Below that,
+    with emulation included (the default), it returns whether a bfloat16
+    tensor can be created on the device, which CUDA devices allow.
+    """
+    return _current_compute_major() >= 8 or bool(including_emulation)
+
+
 def _cpu_rng_state():
     import torch
 
@@ -1051,10 +1145,13 @@ def _patch_transformers_utils() -> None:
     if not getattr(_tu, "is_torch_cuda_available", lambda: False)():
         _tu.is_torch_cuda_available = lambda: True
 
-    _tu.is_torch_bf16_gpu_available = lambda: _COMPUTE_MAJOR >= 8
-    # Transformers caches this probe. Replacing it avoids retaining a false
-    # result from imports that happened before FakeGPU enabled CUDA semantics.
-    _tu.is_torch_tf32_available = lambda: _COMPUTE_MAJOR >= 8
+    # Transformers caches these probes in some releases. Replacing them avoids
+    # retaining a false result from imports that happened before FakeGPU
+    # enabled CUDA semantics. Current releases answer bf16 with
+    # torch.cuda.is_bf16_supported() and TF32 with the current device's
+    # compute capability.
+    _tu.is_torch_bf16_gpu_available = lambda: _stub_is_bf16_supported()
+    _tu.is_torch_tf32_available = lambda: _current_compute_major() >= 8
 
     # Also patch the top-level re-exports if they exist
     try:
@@ -1069,7 +1166,15 @@ def _patch_transformers_utils() -> None:
 
 def _build_fake_fork_rng(torch_mod: Any):
     @contextmanager
-    def _fake_fork_rng(devices=None, enabled: bool = True, device_type: str = "cuda"):
+    def _fake_fork_rng(
+        devices=None,
+        enabled: bool = True,
+        _caller: str = "fork_rng",
+        _devices_kw: str = "devices",
+        device_type: str | None = None,
+    ):
+        # Signature of torch.random.fork_rng; fake CUDA RNG state is the CPU
+        # generator's, so forking the CPU state covers every device.
         if not enabled:
             yield
             return
@@ -1113,7 +1218,7 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
 
         def __init__(
             self,
-            device_type: str = "cuda",
+            device_type: str,
             dtype: Any = None,
             enabled: bool = True,
             cache_enabled: bool | None = None,
@@ -1125,6 +1230,17 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
             # CPU autocast defaults to bfloat16; keep the CUDA default.
             if device_type == "cuda" and dtype is None:
                 dtype = torch_mod.get_autocast_dtype("cuda")
+            # The check torch.amp.autocast runs for an enabled CUDA autocast.
+            if (
+                device_type == "cuda"
+                and enabled
+                and dtype == torch_mod.bfloat16
+                and not torch_mod.cuda.is_bf16_supported()
+            ):
+                raise RuntimeError(
+                    "Current CUDA Device does not support bfloat16. "
+                    "Please switch dtype to float16."
+                )
             super().__init__(
                 actual_device,
                 dtype=dtype,
@@ -1134,22 +1250,24 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
 
         def __enter__(self):
             if self._fakegpu_requested_device_type == "cuda":
-                if self.fast_dtype == torch_mod.bfloat16 and _COMPUTE_MAJOR < 8:
-                    raise RuntimeError(
-                        f"Current CUDA Device does not support bfloat16. "
-                        f"Please switch dtype to float16 "
-                        f"(compute capability {_COMPUTE_MAJOR}.{_COMPUTE_MINOR}, "
-                        f"need >= 8.0 for bf16)."
-                    )
-                # Track the CUDA dtype as CUDA autocast does, so a nested
-                # autocast("cuda") without a dtype inherits this one.
-                self._fakegpu_prev_cuda_dtype = torch_mod.get_autocast_dtype("cuda")
+                # Track the CUDA state as CUDA autocast does, so a nested
+                # autocast("cuda") without a dtype inherits this one and
+                # torch.is_autocast_enabled("cuda") answers for the block.
+                # Fake CUDA tensors compute on the CPU, so the CUDA flag
+                # changes no kernel.
+                self._fakegpu_prev_cuda_state = (
+                    torch_mod.is_autocast_enabled("cuda"),
+                    torch_mod.get_autocast_dtype("cuda"),
+                )
+                torch_mod.set_autocast_enabled("cuda", self._enabled)
                 torch_mod.set_autocast_dtype("cuda", self.fast_dtype)
             return super().__enter__()
 
         def __exit__(self, exc_type, exc_val, exc_tb):
             if self._fakegpu_requested_device_type == "cuda":
-                torch_mod.set_autocast_dtype("cuda", self._fakegpu_prev_cuda_dtype)
+                enabled, dtype = self._fakegpu_prev_cuda_state
+                torch_mod.set_autocast_enabled("cuda", enabled)
+                torch_mod.set_autocast_dtype("cuda", dtype)
             return super().__exit__(exc_type, exc_val, exc_tb)
 
     class _PatchedCudaAmpAutocast(_PatchedAutocast):
@@ -1165,8 +1283,13 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
                 "cuda", dtype=dtype, enabled=enabled, cache_enabled=cache_enabled
             )
 
+    # ``torch.autocast`` is a separate binding of the same class; Accelerate
+    # and most training code use it.
+    torch_mod.autocast = _PatchedAutocast
     torch_mod.amp.autocast = _PatchedAutocast
     torch_mod.cuda.amp.autocast = _PatchedCudaAmpAutocast
+    # custom_fwd/custom_bwd enter the module-level name.
+    torch_mod.amp.autocast_mode.autocast = _PatchedAutocast
 
 
 def _activate_upstream(num_devices: int, device_name: str) -> Any:
@@ -1214,6 +1337,238 @@ def _new_link_traffic() -> Any:
     return LinkTraffic(lambda: topology_from_environment(profile_ids, os.environ))
 
 
+def _install_to_overloads(upstream: Any, torch_mod: Any) -> None:
+    """Accept every ``Tensor.to`` and ``Module.to`` overload on fake devices.
+
+    The upstream conversions only look for a target device: ``to(device,
+    dtype)`` left the dtype positional after the device was moved into a
+    keyword (a TypeError), ``to(other)`` dropped ``other.dtype``, and
+    ``Module.to`` dropped the dtype whenever the target was CUDA.
+    """
+
+    tensor_to = upstream._tensor_to
+
+    @functools.wraps(tensor_to)
+    def _tensor_to_any_overload(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if args and not isinstance(args[0], torch_mod.dtype):
+            first, rest = args[0], args[1:]
+            if isinstance(first, torch_mod.Tensor):
+                # to(other, non_blocking=False, copy=False)
+                parsed = {"device": first.device, "dtype": first.dtype}
+                parsed.update(zip(("non_blocking", "copy"), rest))
+            else:
+                # to(device=None, dtype=None, non_blocking=False, copy=False)
+                parsed = {"device": first}
+                parsed.update(zip(("dtype", "non_blocking", "copy"), rest))
+            kwargs = {**parsed, **kwargs}
+            args = ()
+        return tensor_to(self, *args, **kwargs)
+
+    upstream._tensor_to = _tensor_to_any_overload
+
+    module_to = upstream._module_to
+
+    @functools.wraps(module_to)
+    def _module_to_any_overload(self: Any, *args: Any, **kwargs: Any) -> Any:
+        first = args[0] if args else None
+        if isinstance(first, torch_mod.Tensor):
+            # to(tensor, non_blocking=False)
+            target, dtype = first.device, first.dtype
+        elif isinstance(first, torch_mod.dtype):
+            # to(dtype, non_blocking=False)
+            target, dtype = None, first
+        else:
+            # to(device=None, dtype=None, non_blocking=False)
+            target = first if args else kwargs.get("device")
+            dtype = args[1] if len(args) > 1 else kwargs.get("dtype")
+        memory_format = kwargs.get("memory_format")
+        if upstream._normalize_cuda_device(target, allow_none=True) is None:
+            return module_to(self, *args, **kwargs)
+        # nn.Module.to converts floating-point tensors to ``dtype`` and moves
+        # them in one step; convert first so no copy in the old dtype lands
+        # on the device.
+        conversion = {}
+        if dtype is not None:
+            conversion["dtype"] = dtype
+        if memory_format is not None:
+            conversion["memory_format"] = memory_format
+        if conversion:
+            module_to(self, **conversion)
+        return module_to(self, target)
+
+    upstream._module_to = _module_to_any_overload
+
+
+def _install_module_moves_in_place(upstream: Any, torch_mod: Any) -> None:
+    """Keep each ``Parameter`` object when a module moves to a fake device.
+
+    ``nn.Module._apply`` moves a parameter by assigning ``param.data``, so an
+    optimizer built before ``model.cuda()`` (as Accelerate's ``prepare``
+    expects) keeps updating the model, and a module already on the target
+    device is left as is. The upstream conversion created new parameters.
+    """
+    from torch.utils import swap_tensors
+
+    fake_cls = upstream.FakeCudaTensor
+
+    def _module_cuda_impl(module: Any, device: Any = None, _memo: Any = None) -> Any:
+        target = upstream._normalize_module_device(device)
+        index = target.index or 0
+        if _memo is None:
+            _memo = {"parameters": {}, "buffers": {}}
+
+        for child in module.children():
+            _module_cuda_impl(child, target, _memo)
+
+        for name, param in list(module._parameters.items()):
+            if param is None:
+                continue
+            moved = _memo["parameters"].get(id(param))
+            if moved is None:
+                if isinstance(param, fake_cls) and param.device_index == index:
+                    moved = param
+                else:
+                    converted = param.detach().clone().requires_grad_(param.requires_grad)
+                    moved = torch_mod.nn.Parameter(
+                        upstream.wrap_tensor(converted, device_index=index),
+                        requires_grad=param.requires_grad,
+                    )
+                    moved.raw_data = converted
+                    moved.device_index = index
+                    if param.grad is not None:
+                        moved.grad = upstream.wrap_tensor(
+                            param.grad.detach(), device_index=index
+                        )
+                    try:
+                        # ``param`` becomes the moved parameter in place.
+                        swap_tensors(param, moved)
+                        moved = param
+                    except RuntimeError:
+                        pass  # e.g. weak references: fall back to a new object
+                    upstream.register_parameter(moved)
+                _memo["parameters"][id(param)] = moved
+            module._parameters[name] = moved
+
+        for name, buf in list(module._buffers.items()):
+            if buf is None:
+                continue
+            converted = _memo["buffers"].get(id(buf))
+            if converted is None:
+                if isinstance(buf, fake_cls) and buf.device_index == index:
+                    converted = buf
+                else:
+                    converted = upstream.wrap_tensor(buf.detach().clone(), device_index=index)
+                    converted.raw_data = buf.detach().clone()
+                    converted.device_index = index
+                _memo["buffers"][id(buf)] = converted
+            module._buffers[name] = converted
+
+        return module
+
+    upstream._module_cuda_impl = _module_cuda_impl
+
+
+def _install_stream_event_semantics(upstream: Any, torch_mod: Any) -> None:
+    """Give fake streams and events the attributes and checks torch has.
+
+    Timing is not modeled, so ``elapsed_time`` stays 0 ms, but it raises the
+    ``ValueError`` CUDA events raise when timing is off or a side was never
+    recorded (c10/cuda/CUDAEvent.h).
+    """
+
+    class _Stream(upstream._FakeStream):
+        device_type = 1  # c10::DeviceType::CUDA
+
+        def __init__(
+            self,
+            device: Any = None,
+            priority: int = 0,
+            stream_id: int | None = None,
+            **kwargs: Any,
+        ) -> None:
+            super().__init__(device, priority, stream_id, **kwargs)
+            self.priority = int(priority)
+            self._fakegpu_context: list[tuple[Any, int]] = []
+
+        @property
+        def device(self) -> Any:
+            return torch_mod.device("cuda", self.device_index)
+
+        def record_event(self, event: Any = None) -> Any:
+            if event is None:
+                event = _Event()
+            event.record(self)
+            return event
+
+        def __enter__(self) -> "_Stream":
+            # torch.Stream.__enter__ makes the stream current on its device
+            # and selects that device until __exit__.
+            previous_device = int(upstream._CURRENT_DEVICE)
+            previous_stream = upstream._current_stream(self.device_index)
+            self._fakegpu_context.append((previous_stream, previous_device))
+            _set_stream(self)
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            previous_stream, previous_device = self._fakegpu_context.pop()
+            _set_stream(previous_stream)
+            upstream._CURRENT_DEVICE = previous_device
+            return None
+
+    def _set_stream(stream: Any) -> None:
+        # torch.cuda.set_stream also selects the stream's device
+        # (THCPModule_setStream_wrap); None is a no-op.
+        if stream is None:
+            return
+        upstream._CURRENT_DEVICE = _checked_ordinal(int(stream.device_index))
+        upstream._set_stream(stream)
+
+    def _stream(stream: Any) -> Any:
+        # The real StreamContext: a no-op for None, restores both devices'
+        # streams on exit.
+        return torch_mod.cuda.StreamContext(stream)
+
+    class _Event(upstream._FakeEvent):
+        def __init__(
+            self,
+            enable_timing: bool = False,
+            blocking: bool = False,
+            interprocess: bool = False,
+            external: bool = False,
+        ) -> None:
+            super().__init__(enable_timing, blocking, interprocess)
+            self._fakegpu_timing = bool(enable_timing)
+            self._fakegpu_device: Any = None
+
+        @property
+        def device(self) -> Any:
+            # None until the event is first recorded.
+            return self._fakegpu_device
+
+        def record(self, stream: Any = None) -> None:
+            if stream is None:
+                stream = torch_mod.cuda.current_stream()
+            self._fakegpu_device = torch_mod.device("cuda", stream.device_index)
+
+        def elapsed_time(self, end_event: Any) -> float:
+            if not (self._fakegpu_timing and getattr(end_event, "_fakegpu_timing", False)):
+                raise ValueError(
+                    "Both events must be created with argument 'enable_timing=True'."
+                )
+            if self._fakegpu_device is None or end_event._fakegpu_device is None:
+                raise ValueError(
+                    "Both events must be recorded before calculating elapsed time."
+                )
+            return 0.0
+
+    upstream._FakeStream = _Stream
+    upstream._FakeEvent = _Event
+    torch_mod.cuda.Stream = _Stream
+    torch_mod.cuda.Event = _Event
+    torch_mod.cuda.set_stream = _set_stream
+    torch_mod.cuda.stream = _stream
+
+
 def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
     """Record host-device and peer copies in ``_link_traffic``.
 
@@ -1232,16 +1587,27 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
             return None
         return False
 
-    def record(source: Any, target: Any, tensor: Any) -> None:
-        traffic = _link_traffic
-        if traffic is None or source is False or target is False or source == target:
-            return
+    def tensor_bytes(tensor: Any) -> int | None:
         raw = upstream.unwrap_tensor(tensor)
         try:
-            nbytes = int(raw.numel()) * int(raw.element_size())
+            return int(raw.numel()) * int(raw.element_size())
         except Exception:
+            return None
+
+    def record_bytes(source: Any, target: Any, nbytes: int | None) -> None:
+        traffic = _link_traffic
+        if (
+            traffic is None
+            or nbytes is None
+            or source is False
+            or target is False
+            or source == target
+        ):
             return
         traffic.record(source, target, nbytes)
+
+    def record(source: Any, target: Any, tensor: Any) -> None:
+        record_bytes(source, target, tensor_bytes(tensor))
 
     def module_tensors(module: Any) -> list[Any]:
         seen: set[int] = set()
@@ -1253,10 +1619,11 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
         return found
 
     def record_module(module: Any, convert: Any) -> Any:
-        before = module_tensors(module)
+        # Moves keep the Parameter objects, so read the sources first.
+        before = [(endpoint(t), tensor_bytes(t)) for t in module_tensors(module)]
         result = convert()
-        for old, new in zip(before, module_tensors(module)):
-            record(endpoint(old), endpoint(new), old)
+        for (source, nbytes), new in zip(before, module_tensors(module)):
+            record_bytes(source, endpoint(new), nbytes)
         return result
 
     tensor_to = upstream._tensor_to
@@ -1362,13 +1729,21 @@ def _install_device_index_validation(upstream: Any, torch_mod: Any) -> Any:
 
     upstream._normalize_device_index = _checked_normalize_device_index
 
-    # Also override set_device to use our bounds-checked normalize
-    def _validated_set_device(device):
-        idx = _checked_normalize_device_index(device)
-        upstream._CURRENT_DEVICE = idx
+    # Device selection follows torch.cuda: set_device, device and device_of
+    # ignore negative indices, and _exchange_device switches the device.
+    torch_mod.cuda.set_device = _set_device
+    upstream.set_device = _set_device
+    torch_mod.cuda.device = _CudaDevice
+    torch_mod.cuda.device_of = _CudaDeviceOf
+    torch_mod.cuda._exchange_device = _exchange_device
+    torch_mod.cuda._maybe_exchange_device = _exchange_device
 
-    torch_mod.cuda.set_device = _validated_set_device
-    upstream.set_device = _validated_set_device
+    def _synchronize(device: Any = None) -> None:
+        # torch.cuda.synchronize enters torch.cuda.device(device) first.
+        with _CudaDevice(device):
+            return None
+
+    torch_mod.cuda.synchronize = _synchronize
 
     # Override _normalize_cuda_device to validate bounds for factory functions.
     # The upstream version doesn't check _NUM_DEVICES, so torch.randn(device="cuda:99")
@@ -1446,31 +1821,22 @@ def _install_dynamo_friendly_tree_map(upstream: Any, torch_mod: Any) -> None:
     upstream._tree_map = _dynamo_friendly_tree_map
 
 
-def _install_profiled_device_queries(
-    upstream: Any, torch_mod: Any, checked_normalize_device_index: Any
-) -> None:
+def _install_profiled_device_queries(upstream: Any, torch_mod: Any) -> None:
     """Answer device name/capability/properties and peer access per profile."""
 
+    # As in torch.cuda, name and capability come from the properties, and an
+    # index outside the devices fails with AssertionError("Invalid device id").
     def _profiled_get_device_name(device=None):
-        idx = _normalize_device_index(device)
-        if idx < len(_DEVICE_PROFILES):
-            return _DEVICE_PROFILES[idx]["name"]
-        return _DEVICE_NAME
+        return _profiled_get_device_properties(device).name
 
     def _profiled_get_device_capability(device=None):
-        idx = _normalize_device_index(device)
-        if idx < len(_DEVICE_PROFILES):
-            prof = _DEVICE_PROFILES[idx]
-            return (prof["compute_major"], prof["compute_minor"])
-        return (_COMPUTE_MAJOR, _COMPUTE_MINOR)
+        properties = _profiled_get_device_properties(device)
+        return properties.major, properties.minor
 
     def _profiled_get_device_properties(device=None):
-        idx = _normalize_device_index(device)
+        idx = _cuda_device_index(device, optional=True)
         if idx < 0 or idx >= _NUM_DEVICES:
-            raise RuntimeError(
-                f"CUDA error: invalid device ordinal "
-                f"(requested {idx}, available: {_NUM_DEVICES})"
-            )
+            raise AssertionError("Invalid device id")
         return _FakeDeviceProperties(idx)
 
     torch_mod.cuda.get_device_name = _profiled_get_device_name
@@ -1480,8 +1846,12 @@ def _install_profiled_device_queries(
     # Peer access follows the modeled NVLink/PCIe topology (see
     # fakegpu.link_topology); without a platform every pair has access.
     def _topology_can_device_access_peer(device, peer_device):
-        source = checked_normalize_device_index(device)
-        target = checked_normalize_device_index(peer_device)
+        source = _cuda_device_index(device, optional=True)
+        target = _cuda_device_index(peer_device)
+        if source < 0 or source >= _NUM_DEVICES:
+            raise AssertionError("Invalid device id")
+        if target < 0 or target >= _NUM_DEVICES:
+            raise AssertionError("Invalid peer device id")
         from .platforms import topology_from_environment
 
         topology = topology_from_environment(
@@ -1661,9 +2031,9 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     # initialize a physical CUDA context when is_available() reports true.
     torch_mod.cuda._fakegpu_simulated = True
 
-    checked_normalize_device_index = _install_device_index_validation(
-        upstream, torch_mod
-    )
+    _install_device_index_validation(upstream, torch_mod)
+    _install_stream_event_semantics(upstream, torch_mod)
+    _install_module_moves_in_place(upstream, torch_mod)
 
     if _MEMORY_TRACKING:
         per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]
@@ -1678,6 +2048,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     # (fakegpu.link_traffic); recorded only, nothing waits.  Installed before
     # the category hooks so they wrap the recording Module.to/cuda.
     _link_traffic = _new_link_traffic()
+    _install_to_overloads(upstream, torch_mod)
     _install_transfer_recording(upstream, torch_mod)
     _install_upstream_memory_category_hooks(upstream, torch_mod)
     _patch_upstream_all_gather_object(upstream, torch_mod)
@@ -1691,7 +2062,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     torch_mod.Tensor.pin_memory = _patched_tensor_pin_memory  # type: ignore[assignment]
     _install_compile_compat_shim(torch_mod)
 
-    _install_profiled_device_queries(upstream, torch_mod, checked_normalize_device_index)
+    _install_profiled_device_queries(upstream, torch_mod)
 
     # Compute-capability-aware bf16 check (upstream always returns True)
     torch_mod.cuda.is_bf16_supported = _stub_is_bf16_supported

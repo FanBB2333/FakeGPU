@@ -24,7 +24,14 @@ def _patch_accelerate_utils() -> None:
 
     _aui.is_cuda_available = lambda: True
     if hasattr(_aui, "is_bf16_available"):
-        _aui.is_bf16_available = lambda: True
+        # Accelerate answers bf16 on CUDA with torch.cuda.is_bf16_supported()
+        # and calls this as is_bf16_available(True).
+        def _is_bf16_available(ignore_tpu: bool = False) -> bool:
+            import torch
+
+            return bool(torch.cuda.is_bf16_supported())
+
+        _aui.is_bf16_available = _is_bf16_available
 
     # Re-export to top-level accelerate.utils if the names are there
     try:

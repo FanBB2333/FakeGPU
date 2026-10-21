@@ -75,6 +75,17 @@ def _profile_entry(profile_id: str) -> dict[str, Any]:
         "regs_per_multiprocessor": (
             profile.regs_per_multiprocessor if profile else 65536
         ),
+        # Catalog values; 0 where the catalog has none, as the native runtime
+        # reports them.
+        "shared_mem_per_block": profile.shared_mem_per_block if profile else 49152,
+        "shared_mem_per_block_optin": (
+            profile.shared_mem_per_block_optin if profile else 166912
+        ),
+        "shared_mem_per_sm": profile.shared_mem_per_sm if profile else 167936,
+        "l2_cache_bytes": profile.l2_cache_bytes if profile else 41943040,
+        "memory_bus_width_bits": profile.memory_bus_width_bits if profile else 5120,
+        "core_clock_mhz": profile.core_clock_mhz if profile else 1410,
+        "memory_clock_mhz": profile.memory_clock_mhz if profile else 1593,
     }
 
 
@@ -84,7 +95,9 @@ def _resolve_per_device_profiles(num_devices: int) -> list[dict[str, Any]]:
     Returns a list of dicts, one per device, each with keys:
       'profile_id', 'name', 'total_memory', 'compute_major', 'compute_minor',
       'sm_count', 'max_threads_per_multiprocessor', 'regs_per_block',
-      'regs_per_multiprocessor'
+      'regs_per_multiprocessor', 'shared_mem_per_block',
+      'shared_mem_per_block_optin', 'shared_mem_per_sm', 'l2_cache_bytes',
+      'memory_bus_width_bits', 'core_clock_mhz', 'memory_clock_mhz'
     """
     profiles_env = os.environ.get("FAKEGPU_PROFILES", "")
     target_count = int(num_devices)

@@ -174,18 +174,12 @@ assert matmul_dtype(torch.amp.autocast("cuda")) == torch.float16
 assert matmul_dtype(torch.cuda.amp.autocast()) == torch.float16
 assert matmul_dtype(torch.cuda.amp.autocast(True)) == torch.float16
 assert matmul_dtype(torch.amp.autocast("cuda", torch.float16)) == torch.float16
-if {profile!r} == "v100":
-    try:
-        matmul_dtype(torch.amp.autocast("cuda", dtype=torch.bfloat16))
-    except RuntimeError as exc:
-        assert "does not support bfloat16" in str(exc), exc
-    else:
-        raise AssertionError("bf16 autocast should fail on compute capability 7.0")
-else:
-    assert matmul_dtype(torch.amp.autocast("cuda", torch.bfloat16)) == torch.bfloat16
-    with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-        assert matmul_dtype(torch.amp.autocast("cuda")) == torch.bfloat16
-    assert torch.get_autocast_dtype("cuda") == torch.float16
+# torch.cuda.is_bf16_supported() counts emulation by default, so CUDA
+# autocast accepts bfloat16 below compute capability 8.0 as well.
+assert matmul_dtype(torch.amp.autocast("cuda", torch.bfloat16)) == torch.bfloat16
+with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+    assert matmul_dtype(torch.amp.autocast("cuda")) == torch.bfloat16
+assert torch.get_autocast_dtype("cuda") == torch.float16
 print("autocast defaults passed")
 """
         _assert_ok(_run(code), f"autocast defaults ({profile})")
