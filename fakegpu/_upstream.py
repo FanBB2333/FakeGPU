@@ -714,13 +714,17 @@ def _requested_backend(group: Any) -> str:
     return _GROUP_BACKENDS.get(group, _DIST_BACKEND)
 
 
+def _nccl_handles(tensor: Any, group: Any) -> bool:
+    """Whether NCCL would run a collective on ``tensor``: a CUDA tensor in a group whose backend is NCCL."""
+
+    backend = _requested_backend(group).lower().replace(" ", "")
+    return isinstance(tensor, FakeCudaTensor) and (backend == "nccl" or "cuda:nccl" in backend.split(","))
+
+
 def _check_reduce_op(tensor: Any, op: Any, group: Any) -> None:
     """Reject the reductions ProcessGroupNCCL rejects for a CUDA tensor (getNcclReduceOp)."""
 
-    backend = _requested_backend(group).lower().replace(" ", "")
-    if op is None or not isinstance(tensor, FakeCudaTensor):
-        return
-    if backend != "nccl" and "cuda:nccl" not in backend.split(","):
+    if op is None or not _nccl_handles(tensor, group):
         return
     reduce_op = torch.distributed.ReduceOp
     for name in ("BAND", "BOR", "BXOR"):
@@ -906,6 +910,12 @@ def _dist_all_gather_into_tensor(
 ) -> Any:
     if _not_in_group(group, "all_gather_into_tensor"):
         return None
+    if _nccl_handles(output_tensor, group):
+        # ProcessGroupNCCL::all_gather_single checks these.
+        if input_tensor.dtype != output_tensor.dtype:
+            raise TypeError("output tensor must have the same type as input tensor")
+        if input_tensor.numel() * _dist_get_world_size(group) != output_tensor.numel():
+            raise ValueError("output tensor size must be equal to world_size times input tensor size")
     if _DIST_REAL:
         source = unwrap_tensor(input_tensor).contiguous()
         parts = [torch.empty_like(source) for _ in range(_ORIG_DIST["get_world_size"](group))]
@@ -1011,6 +1021,12 @@ def _dist_reduce_scatter_tensor(
 ) -> Any:
     if _not_in_group(group, "reduce_scatter_tensor"):
         return None
+    if _nccl_handles(output, group):
+        # ProcessGroupNCCL::reduce_scatter_single checks these.
+        if input.dtype != output.dtype:
+            raise TypeError("input tensor must be the same type as the output tensor.")
+        if input.numel() != output.numel() * _dist_get_world_size(group):
+            raise ValueError("input tensor must be the same size as output size times world size")
     _check_reduce_op(output, op, group)
     if _DIST_REAL:
         reduced = unwrap_tensor(input).clone()

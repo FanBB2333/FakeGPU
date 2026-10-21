@@ -329,6 +329,39 @@ def test_nccl_rejects_the_reductions_it_lacks(tmp_path: Path) -> None:
     assert results["gloo_group/BAND"] == ["gloo", None]
 
 
+def test_nccl_checks_the_sizes_of_tensor_collectives(tmp_path: Path) -> None:
+    # torch v2.14.1 ProcessGroupNCCL.cpp all_gather_single / reduce_scatter_single.
+    results = _simulate(tmp_path, """
+        tensor_parallel = dist.new_group([4, 5, 6, 7])
+        def gather(output, source, group=None):
+            return lambda: [dist.all_gather_into_tensor(output, source, group=group), list(output.shape)]
+        def scatter(output, source, group=None):
+            return lambda: [dist.reduce_scatter_tensor(output, source, group=group), list(output.shape)]
+        ones = torch.ones(4, device="cuda")
+        probe("gather/concatenated", gather(torch.empty(32, device="cuda"), ones))
+        probe("gather/stacked", gather(torch.empty(8, 4, device="cuda"), ones))
+        probe("gather/group", gather(torch.empty(16, device="cuda"), ones, tensor_parallel))
+        probe("gather/world_buffer_for_group", gather(torch.empty(32, device="cuda"), ones, tensor_parallel))
+        probe("gather/dtype", gather(torch.empty(32, dtype=torch.float16, device="cuda"), ones))
+        probe("scatter/even", scatter(torch.empty(2, device="cuda"), torch.ones(16, device="cuda")))
+        probe("scatter/group", scatter(torch.empty(2, device="cuda"), torch.ones(8, device="cuda"), tensor_parallel))
+        probe("scatter/short", scatter(torch.empty(2, device="cuda"), torch.ones(8, device="cuda")))
+        probe("scatter/dtype", scatter(torch.empty(2, dtype=torch.bfloat16, device="cuda"),
+                                       torch.ones(16, device="cuda")))
+    """)
+    assert results["gather/concatenated"] == [None, [32]]
+    assert results["gather/stacked"] == [None, [8, 4]]
+    assert results["gather/group"] == [None, [16]]
+    size_error = ["ValueError", "output tensor size must be equal to world_size times input tensor size"]
+    assert results["gather/world_buffer_for_group"] == size_error
+    assert results["gather/dtype"] == ["TypeError", "output tensor must have the same type as input tensor"]
+    assert results["scatter/even"] == [None, [2]]
+    assert results["scatter/group"] == [None, [2]]
+    assert results["scatter/short"] == [
+        "ValueError", "input tensor must be the same size as output size times world size"]
+    assert results["scatter/dtype"] == ["TypeError", "input tensor must be the same type as the output tensor."]
+
+
 def test_ddp_validates_its_arguments_like_torch(tmp_path: Path) -> None:
     # Expected values: real DDP over gloo with the same arguments.
     results = _simulate(tmp_path, """
