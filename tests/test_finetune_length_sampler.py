@@ -11,7 +11,7 @@ from fakegpu._finetune_sampler import (
     validate_sampler_plan,
     validate_length_grouping_evaluation,
 )
-from fakegpu._finetune_workflow_store import _digest
+from fakegpu.structured_io import canonical_sha256 as _digest
 from fakegpu.finetune_estimator import FinetuneEstimateError
 from fakegpu.finetune_runner import run_finetuning
 from fakegpu.finetune_workflow import _native_command

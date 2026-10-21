@@ -10,7 +10,6 @@ for a pipeline that is not on disk.
 
 from __future__ import annotations
 
-import copy
 import json
 import math
 import re
@@ -20,12 +19,11 @@ from typing import Any
 
 from ._diffusion_types import (
     DiffusionEstimateError,
+    _integer_list,
     _mapping,
     _nonnegative_integer,
-    _nonnegative_integer_list,
     _nonnegative_number,
     _positive_integer,
-    _positive_integer_list,
 )
 from .llm_estimator import _DTYPE_BYTES as _SAFETENSORS_DTYPE_BYTES
 from .llm_estimator import _read_safetensors_header
@@ -172,20 +170,10 @@ def _select_component_checkpoint(
     selected_family = candidates[0]
     metadata = families[selected_family]
     return (
-        sorted(metadata["files"]),
+        metadata["files"],
         selected_family,
         metadata["variant"],
     )
-
-
-def _pipeline_defaults(pipeline_class: str) -> dict[str, Any]:
-    if pipeline_class in _PIPELINE_DEFAULTS:
-        return copy.deepcopy(_PIPELINE_DEFAULTS[pipeline_class])
-    return {
-        "steps": 50,
-        "guidance_scale": 7.5,
-        "text_tokens": 77,
-    }
 
 
 def _sample_dimensions(value: Any) -> tuple[int | None, int | None]:
@@ -205,23 +193,28 @@ def _sample_dimensions(value: Any) -> tuple[int | None, int | None]:
     return None, None
 
 
-def _layers_per_block(config: Mapping[str, Any]) -> int:
-    value = config.get("layers_per_block", 1)
+def _positive_config_value(value: Any) -> int | None:
     if isinstance(value, list):
         values = [
-            int(item)
+            item
             for item in value
             if isinstance(item, int)
             and not isinstance(item, bool)
             and item > 0
         ]
-        if values:
-            return max(values)
+        return max(values) if values else None
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
-    raise DiffusionEstimateError(
-        "layers_per_block must contain positive integers"
-    )
+    return None
+
+
+def _layers_per_block(config: Mapping[str, Any]) -> int:
+    value = _positive_config_value(config.get("layers_per_block", 1))
+    if value is None:
+        raise DiffusionEstimateError(
+            "layers_per_block must contain positive integers"
+        )
+    return value
 
 
 def _per_level_counts(
@@ -286,22 +279,8 @@ def _optional_positive_config(
     keys: Sequence[str],
 ) -> int | None:
     for key in keys:
-        value = config.get(key)
-        if isinstance(value, list):
-            values = [
-                int(item)
-                for item in value
-                if isinstance(item, int)
-                and not isinstance(item, bool)
-                and item > 0
-            ]
-            if values:
-                return max(values)
-        elif (
-            isinstance(value, int)
-            and not isinstance(value, bool)
-            and value > 0
-        ):
+        value = _positive_config_value(config.get(key))
+        if value is not None:
             return value
     return None
 
@@ -328,15 +307,11 @@ def _component_role_stats(
     checkpoint_bytes = 0
     dtype_bytes: dict[str, int] = {}
     for name in names:
-        checkpoint = _mapping(components[name]["checkpoint"])
-        parameter_count += int(checkpoint["parameter_count"])
-        checkpoint_bytes += int(checkpoint["checkpoint_bytes"])
-        for dtype, byte_count in _mapping(
-            checkpoint["dtype_bytes"]
-        ).items():
-            dtype_bytes[str(dtype)] = (
-                dtype_bytes.get(str(dtype), 0) + int(byte_count)
-            )
+        checkpoint = components[name]["checkpoint"]
+        parameter_count += checkpoint["parameter_count"]
+        checkpoint_bytes += checkpoint["checkpoint_bytes"]
+        for dtype, byte_count in checkpoint["dtype_bytes"].items():
+            dtype_bytes[dtype] = dtype_bytes.get(dtype, 0) + byte_count
     return {
         "parameter_count": parameter_count,
         "checkpoint_bytes": checkpoint_bytes,
@@ -439,9 +414,7 @@ def _local_unet_profile(
         "guidance_mode": "classifier_free",
         "parameter_count": int(stats["parameter_count"]),
         "checkpoint_bytes": int(stats["checkpoint_bytes"]),
-        "checkpoint_dtype_bytes": copy.deepcopy(
-            stats["dtype_bytes"]
-        ),
+        "checkpoint_dtype_bytes": stats["dtype_bytes"],
         "block_out_channels": channels,
         "layers_per_block": max(layers_by_level),
         "layers_per_block_by_level": layers_by_level,
@@ -479,7 +452,7 @@ def _local_unet_profile(
         config.get("dual_cross_attention", False)
         or config.get("attention_type", "default") != "default"
         or any(block not in standard_down for block in down_block_types)
-        or any(block not in standard_up for block in config.get("up_block_types", []))
+        or any(block not in standard_up for block in config.get("up_block_types") or [])
         or config.get("mid_block_type", "UNetMidBlock2DCrossAttn")
         not in {None, "UNetMidBlock2DCrossAttn"}
     ):
@@ -560,6 +533,7 @@ def _local_transformer_profile(
         if has_conditioning
         else "none"
     )
+    mlp_ratio = config.get("mlp_ratio")
     return {
         "architecture": "transformer",
         "model_class": model_class,
@@ -567,16 +541,14 @@ def _local_transformer_profile(
         "guidance_mode": guidance_mode,
         "parameter_count": int(stats["parameter_count"]),
         "checkpoint_bytes": int(stats["checkpoint_bytes"]),
-        "checkpoint_dtype_bytes": copy.deepcopy(
-            stats["dtype_bytes"]
-        ),
+        "checkpoint_dtype_bytes": stats["dtype_bytes"],
         "num_layers": layers,
         "num_single_layers": single_layers,
         "attention_heads": heads,
         "attention_head_dim": head_dim,
         "patch_size": patch_size,
         "packing_factor": packing_factor,
-        "mlp_ratio": float(config.get("mlp_ratio", 4.0)),
+        "mlp_ratio": float(4.0 if mlp_ratio is None else mlp_ratio),
         "cross_attention_dim": _optional_positive_config(
             config,
             (
@@ -601,8 +573,8 @@ def _local_profile(
     vae_name = role_names["vae"][0]
     denoiser_component = declared[denoiser_name]
     vae_component = declared[vae_name]
-    denoiser_config = _mapping(denoiser_component["config"])
-    vae_config = _mapping(vae_component["config"])
+    denoiser_config = denoiser_component["config"]
+    vae_config = vae_component["config"]
 
     vae_channels = _config_positive_list(
         vae_config.get("block_out_channels"),
@@ -631,7 +603,7 @@ def _local_profile(
     text_layers: list[int] = []
     text_capacities: list[int] = []
     for component_name in role_names["conditioning"]:
-        config = _mapping(declared[component_name]["config"])
+        config = declared[component_name]["config"]
         width = _optional_positive_config(
             config,
             ("hidden_size", "d_model", "projection_dim"),
@@ -659,8 +631,10 @@ def _local_profile(
         if capacity is not None and capacity <= 1_000_000:
             text_capacities.append(capacity)
 
-    pipeline_defaults = _pipeline_defaults(pipeline_class)
-    default_tokens = int(pipeline_defaults["text_tokens"])
+    pipeline_defaults = _PIPELINE_DEFAULTS.get(
+        pipeline_class, _PIPELINE_DEFAULTS["StableDiffusionPipeline"]
+    )
+    default_tokens = pipeline_defaults["text_tokens"]
     maximum_tokens = max([default_tokens, *text_capacities])
     conditioning_width = _optional_positive_config(
         denoiser_config,
@@ -731,10 +705,8 @@ def _local_profile(
         "default_generation": {
             "height": default_height,
             "width": default_width,
-            "steps": int(pipeline_defaults["steps"]),
-            "guidance_scale": float(
-                pipeline_defaults["guidance_scale"]
-            ),
+            "steps": pipeline_defaults["steps"],
+            "guidance_scale": pipeline_defaults["guidance_scale"],
         },
         "latent": {
             "scale_factor": latent_scale,
@@ -786,13 +758,6 @@ def _local_profile(
             "parameter_source": "selected local safetensors headers",
         },
     }
-
-
-def _validate_local_profile(
-    profile_id: str,
-    profile: Mapping[str, Any],
-) -> None:
-    _validate_profile(profile_id, profile, allow_local=True)
 
 
 def _validate_profile(
@@ -908,17 +873,20 @@ def _validate_profile(
             denoiser.get("layers_per_block"),
             "denoiser.layers_per_block",
         )
-        block_channels = _positive_integer_list(
+        block_channels = _integer_list(
             denoiser.get("block_out_channels"),
             "denoiser.block_out_channels",
+            _positive_integer,
         )
-        attention_heads = _nonnegative_integer_list(
+        attention_heads = _integer_list(
             denoiser.get("attention_heads"),
             "denoiser.attention_heads",
+            _nonnegative_integer,
         )
-        transformer_layers = _nonnegative_integer_list(
+        transformer_layers = _integer_list(
             denoiser.get("transformer_layers_per_block"),
             "denoiser.transformer_layers_per_block",
+            _nonnegative_integer,
         )
         if not (
             len(block_channels)
@@ -958,9 +926,10 @@ def _validate_profile(
                 f"diffusion profile {profile_id!r}: invalid transformer "
                 "attention_pattern"
             )
-    _positive_integer_list(
+    _integer_list(
         vae.get("block_out_channels"),
         "vae.block_out_channels",
+        _positive_integer,
     )
     scale = int(latent["scale_factor"])
     if (
@@ -1032,7 +1001,7 @@ def load_diffusion_profiles(
             raise DiffusionEstimateError(
                 f"diffusion profile {profile_id!r} must be an object"
             )
-        profile = copy.deepcopy(dict(raw_profile))
+        profile = dict(raw_profile)
         _validate_profile(profile_id, profile)
         profile["id"] = profile_id
         validated[profile_id] = profile
@@ -1073,10 +1042,9 @@ def inspect_diffusion_pipeline(
 
     declared: dict[str, dict[str, Any]] = {}
     for component_name, declaration in model_index.items():
-        if component_name.startswith("_") or declaration is None:
-            continue
         if (
-            not isinstance(declaration, list)
+            component_name.startswith("_")
+            or not isinstance(declaration, list)
             or len(declaration) < 2
             or not isinstance(declaration[1], str)
         ):
@@ -1097,8 +1065,8 @@ def inspect_diffusion_pipeline(
         name
         for name, component in declared.items()
         if name in {"unet", "transformer"}
-        or "UNet" in str(component["class_name"])
-        or "Transformer" in str(component["class_name"])
+        or "UNet" in component["class_name"]
+        or "Transformer" in component["class_name"]
     ]
     if len(denoiser_names) != 1:
         raise DiffusionEstimateError(
@@ -1111,8 +1079,8 @@ def inspect_diffusion_pipeline(
         name
         for name, component in declared.items()
         if name == "vae"
-        or "Autoencoder" in str(component["class_name"])
-        or "VQModel" in str(component["class_name"])
+        or "Autoencoder" in component["class_name"]
+        or "VQModel" in component["class_name"]
     ]
     if len(vae_names) != 1:
         raise DiffusionEstimateError(
@@ -1125,8 +1093,8 @@ def inspect_diffusion_pipeline(
         name
         for name, component in declared.items()
         if name.startswith("text_encoder")
-        or "TextModel" in str(component["class_name"])
-        or "T5Encoder" in str(component["class_name"])
+        or "TextModel" in component["class_name"]
+        or "T5Encoder" in component["class_name"]
     )
     role_names = {
         "conditioning": conditioning_names,
@@ -1177,13 +1145,13 @@ def inspect_diffusion_pipeline(
         components=components,
         role_names=role_names,
     )
-    _validate_local_profile(root.name, profile)
+    _validate_profile(root.name, profile, allow_local=True)
     return {
         "schema_version": INSPECTION_SCHEMA_VERSION,
         "model_dir": str(root),
         "pipeline_class": pipeline_class,
         "weight_variant": weight_variant or "auto",
-        "roles": copy.deepcopy(role_names),
+        "roles": role_names,
         "components": components,
         "architecture": {
             "family": profile["denoiser"]["architecture"],

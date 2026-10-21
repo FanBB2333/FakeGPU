@@ -142,7 +142,6 @@ StagingBufferHandle& StagingBufferHandle::operator=(StagingBufferHandle&& other)
 
     fd_ = other.fd_;
     mapping_ = other.mapping_;
-    read_only_ = other.read_only_;
     unlinked_ = other.unlinked_;
     unlink_on_close_ = other.unlink_on_close_;
     metadata_ = std::move(other.metadata_);
@@ -207,7 +206,6 @@ bool StagingBufferHandle::unlink(std::string& error) {
 void StagingBufferHandle::reset() {
     fd_ = -1;
     mapping_ = nullptr;
-    read_only_ = false;
     unlinked_ = false;
     unlink_on_close_ = false;
     metadata_ = StagingBufferMetadata{};
@@ -267,7 +265,6 @@ bool StagingBufferManager::create(
 
     out.fd_ = fd;
     out.mapping_ = mapping;
-    out.read_only_ = false;
     out.unlinked_ = false;
     out.unlink_on_close_ = unlink_on_close;
     out.metadata_ = metadata;
@@ -327,7 +324,6 @@ bool StagingBufferManager::open(
 
     out.fd_ = fd;
     out.mapping_ = mapping;
-    out.read_only_ = read_only;
     out.unlinked_ = false;
     out.unlink_on_close_ = false;
     out.metadata_ = std::move(resolved);

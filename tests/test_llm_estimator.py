@@ -106,6 +106,39 @@ def test_checkpoint_headers_are_read_without_tensor_materialization(tmp_path: Pa
     assert report["dtype_bytes"] == {"BF16": 640}
 
 
+@pytest.mark.parametrize(
+    ("index", "message"),
+    [
+        ([], "invalid safetensors weight map"),
+        (
+            {"weight_map": {"a": "model.safetensors"}, "metadata": "oops"},
+            "invalid safetensors index metadata",
+        ),
+        (
+            {
+                "weight_map": {"a": "model.safetensors"},
+                "metadata": {"total_size": [1]},
+            },
+            "invalid safetensors index total_size",
+        ),
+    ],
+)
+def test_checkpoint_inspection_rejects_malformed_index(
+    tmp_path: Path,
+    index: object,
+    message: str,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    (model_dir / "model.safetensors.index.json").write_text(
+        json.dumps(index),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        inspect_safetensors_checkpoint(model_dir)
+
+
 def test_checkpoint_inspection_can_select_an_explicit_file_family(
     tmp_path: Path,
 ) -> None:
@@ -780,6 +813,77 @@ def test_moe_flops_memory_and_expert_parallel_traffic_are_modeled(
     assert report["memory"]["prefill_transient"]["router_bytes"] > 0
     assert report["communication"]["enabled"] is True
     assert report["communication"]["total_bytes"] > 0
+
+
+@pytest.mark.parametrize(
+    ("mlp_only_layers", "moe_layer_count"),
+    [([], 2), ([1], 1), ([0, 3], 1)],
+)
+def test_moe_layer_count_applies_mlp_only_layers_and_sparse_step(
+    tmp_path: Path,
+    mlp_only_layers: list[int],
+    moe_layer_count: int,
+) -> None:
+    model_dir = tmp_path / "moe"
+    _write_model(
+        model_dir,
+        config_overrides={
+            "num_hidden_layers": 4,
+            "num_experts": 4,
+            "num_experts_per_tok": 2,
+            "decoder_sparse_step": 2,
+            "mlp_only_layers": mlp_only_layers,
+        },
+    )
+
+    report = estimate_decoder_inference(model_dir, prompt_tokens=4)
+
+    assert report["model"]["moe_layer_count"] == moe_layer_count
+    assert report["model"]["dense_layer_count"] == 4 - moe_layer_count
+
+
+@pytest.mark.parametrize(
+    ("first_k_dense_replace", "moe_layer_count"),
+    [(None, 4), (0, 4), (3, 1), (6, 0)],
+)
+def test_moe_layer_count_skips_first_k_dense_layers(
+    tmp_path: Path,
+    first_k_dense_replace: int | None,
+    moe_layer_count: int,
+) -> None:
+    model_dir = tmp_path / "moe"
+    _write_model(
+        model_dir,
+        config_overrides={
+            "num_hidden_layers": 4,
+            "n_routed_experts": 4,
+            "num_experts_per_tok": 2,
+            "first_k_dense_replace": first_k_dense_replace,
+        },
+    )
+
+    report = estimate_decoder_inference(model_dir, prompt_tokens=4)
+
+    assert report["model"]["moe_layer_count"] == moe_layer_count
+    assert report["model"]["dense_layer_count"] == 4 - moe_layer_count
+
+
+def test_moe_layer_count_rejects_invalid_first_k_dense_replace(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "moe"
+    _write_model(
+        model_dir,
+        config_overrides={
+            "num_hidden_layers": 4,
+            "n_routed_experts": 4,
+            "num_experts_per_tok": 2,
+            "first_k_dense_replace": -1,
+        },
+    )
+
+    with pytest.raises(ValueError, match="first_k_dense_replace"):
+        estimate_decoder_inference(model_dir, prompt_tokens=4)
 
 
 def test_quantized_checkpoint_uses_exact_payload_storage(

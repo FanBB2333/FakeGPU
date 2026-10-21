@@ -4,6 +4,7 @@
 #include "communicator.hpp"
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -21,8 +22,6 @@ public:
     int run();
     void request_shutdown();
     const std::string& address() const { return address_; }
-    const std::string& socket_path() const { return address_; }
-    CoordinatorTransport transport() const { return transport_; }
 
 private:
     void accept_loop();
@@ -32,7 +31,11 @@ private:
     std::string address_;
     int server_fd_ = -1;
     std::atomic<bool> shutdown_requested_{false};
-    std::vector<std::thread> client_threads_;
+    struct ClientThread {
+        std::thread thread;
+        std::shared_ptr<std::atomic<bool>> done;
+    };
+    std::vector<ClientThread> client_threads_;
     std::mutex client_threads_mutex_;
     CommunicatorRegistry communicator_registry_;
 };

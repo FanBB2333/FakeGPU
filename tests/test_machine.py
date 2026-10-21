@@ -223,6 +223,9 @@ def test_dispatch_controls(service, child):
     assert ok["result"]["devices"] == "h100:4"
     assert MachineConfig.load(service.paths.config).devices == "h100:4"
     assert kinds(service)[-1] == "config.changed"
+    for changes in ({"devices": ["a100:8"]}, {"stale_after_seconds": "2"}):
+        wrong = service.dispatch({"method": "config.update", "params": {"changes": changes}})
+        assert wrong["error"]["code"] == "invalid_params"
 
     missing = service.dispatch({"method": "process.signal", "params": {"pid": child.pid}})
     assert missing["error"]["code"] == "not_found"
@@ -232,6 +235,17 @@ def test_dispatch_controls(service, child):
     assert sent["ok"]
     assert child.wait(timeout=5) == -signal.SIGTERM
     assert kinds(service)[-1] == "process.signal_sent"
+
+
+def test_config_cli_rejects_mistyped_settings(tmp_path, monkeypatch, capsys):
+    from fakegpu import daemon_cli
+
+    monkeypatch.setenv("FAKEGPU_HOME", str(tmp_path))
+    paths = MachinePaths.from_env()
+    paths.create()
+    paths.config.write_text(json.dumps({"devices": ["a100:8"]}))
+    assert daemon_cli.main(["config"]) == 2
+    assert capsys.readouterr().err.startswith("fakegpu daemon: devices must be a string")
 
 
 @pytest.mark.parametrize("stamp", [None, "bad", True, -1, 10**30])
@@ -246,6 +260,40 @@ def test_invalid_heartbeat_does_not_crash_the_machine(service, child, stamp):
     assert kinds(service).count("state.invalid") == 1
     service.poll()
     assert kinds(service).count("state.invalid") == 1
+
+
+@pytest.mark.parametrize(
+    ("device", "extra"),
+    [
+        ({"reported_peak_memory": "abc"}, {}),
+        ({"index": None}, {}),
+        ({"index": "1"}, {}),
+        ({}, {"fakegpu": "x"}),
+        ({}, {"software": "abc"}),
+    ],
+)
+def test_malformed_state_fields_do_not_crash_the_machine(service, child, device, extra):
+    publish(service, child.pid, **extra)
+    path = service.paths.state_dir / f"{child.pid}.json"
+    state = json.loads(path.read_text())
+    state["devices"][0].update(device)
+    path.write_text(json.dumps(state))
+    service.poll()
+    assert len(service.status()["processes"]) == 1
+
+
+@pytest.mark.parametrize("profile_id", ["custom-gpu", None])
+def test_devices_outside_the_catalog_do_not_crash_the_machine(service, child, profile_id):
+    publish(service, child.pid)
+    path = service.paths.state_dir / f"{child.pid}.json"
+    state = json.loads(path.read_text())
+    state["devices"][1]["profile_id"] = profile_id
+    path.write_text(json.dumps(state))
+    service.poll()
+    device = service.status()["devices"][-1]
+    assert device["in_layout"] is False
+    assert device["profile_id"] == (profile_id or "unknown")
+    assert device["power_limit_w"] is None
 
 
 def test_client_timeout_is_recoverable_by_the_console(tmp_path):

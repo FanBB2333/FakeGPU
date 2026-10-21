@@ -49,6 +49,8 @@ run_smoke() {
     --build-dir "$BUILD_DIR"
   "$PYTHON_BIN" tests/native/cublas_policy.py \
     --build-dir "$BUILD_DIR"
+  "$PYTHON_BIN" tests/native/cuda_api_contracts.py \
+    --build-dir "$BUILD_DIR"
   "$PYTHON_BIN" tests/native/monitor_telemetry.py --lib-dir "$BUILD_DIR"
 
   local collective_probe="$BUILD_DIR/collective_executor"
@@ -134,6 +136,8 @@ run_smoke() {
   done
   FAKEGPU_BUILD_DIR="$BUILD_DIR" \
     "$PYTHON_BIN" tests/native/coordinator_smoke.py
+  FAKEGPU_BUILD_DIR="$BUILD_DIR" \
+    "$PYTHON_BIN" tests/native/nccl_stubs_smoke.py
 
   if "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
     "$PYTHON_BIN" tests/support/fakecuda_profile_matrix.py

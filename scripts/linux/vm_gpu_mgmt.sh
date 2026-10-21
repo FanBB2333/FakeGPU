@@ -60,7 +60,6 @@ if ! command -v uv >/dev/null 2>&1; then
     else
       "$PYTHON_BIN" -m pip install --user -U uv
     fi
-    export PATH="$HOME/.local/bin:$PATH"
   fi
 
   if ! command -v uv >/dev/null 2>&1; then
@@ -96,8 +95,7 @@ fi
 FAKEGPU_PYTHON="$VENV_PY" BUILD_DIR="$BUILD_DIR" scripts/test.sh smoke
 
 # GPU management: NVML via pynvml + gpustat.
-FAKEGPU_PYTHON="$VENV_PY" \
-  "$VENV_PY" tests/native/nvml_pynvml.py --build-dir "$BUILD_DIR"
+"$VENV_PY" tests/native/nvml_pynvml.py --build-dir "$BUILD_DIR"
 
 if command -v gpustat >/dev/null 2>&1; then
   echo

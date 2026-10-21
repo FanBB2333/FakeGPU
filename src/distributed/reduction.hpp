@@ -36,92 +36,63 @@ T apply_reduce_op(T lhs, T rhs, CollectiveReduceOp op) {
     return lhs;
 }
 
-template <typename T>
-void reduce_typed_buffers(
-    const CollectiveExecutionRequest& request,
-    const std::vector<std::vector<char>>& buffers,
-    std::size_t element_count,
-    std::vector<char>& reduced_bytes) {
-    std::vector<T> reduced(element_count, static_cast<T>(0));
-    if (!buffers.empty()) {
-        std::memcpy(
-            reduced.data(),
-            buffers.front().data(),
-            element_count * sizeof(T));
-    }
-    for (std::size_t buffer_index = 1;
-         buffer_index < buffers.size();
-         ++buffer_index) {
-        const T* values = reinterpret_cast<const T*>(
-            buffers[buffer_index].data());
-        for (std::size_t index = 0; index < element_count; ++index) {
-            reduced[index] = apply_reduce_op(
-                reduced[index],
-                values[index],
-                request.reduce_op);
-        }
-    }
-    if (request.reduce_op == CollectiveReduceOp::Avg && !buffers.empty()) {
-        const T divisor = static_cast<T>(buffers.size());
-        for (T& value : reduced) {
-            value = static_cast<T>(value / divisor);
-        }
-    }
-    reduced_bytes.assign(
-        reinterpret_cast<const char*>(reduced.data()),
-        reinterpret_cast<const char*>(reduced.data()) +
-            element_count * sizeof(T));
-}
-
-template <typename Decode, typename Encode>
-void reduce_16bit_buffers(
+// Folds buffers of Storage elements in Acc precision. Native dtypes use
+// Storage == Acc; 16-bit floats are decoded to float and encoded back.
+template <typename Storage, typename Acc, typename Decode, typename Encode>
+void reduce_encoded_buffers(
     const CollectiveExecutionRequest& request,
     const std::vector<std::vector<char>>& buffers,
     std::size_t element_count,
     Decode decode,
     Encode encode,
     std::vector<char>& reduced_bytes) {
-    std::vector<float> reduced(element_count, 0.0f);
+    const auto load = [&](const std::vector<char>& buffer, std::size_t index) {
+        Storage stored {};
+        std::memcpy(&stored, buffer.data() + index * sizeof(Storage), sizeof(Storage));
+        return static_cast<Acc>(decode(stored));
+    };
+    std::vector<Acc> reduced(element_count, static_cast<Acc>(0));
     if (!buffers.empty()) {
         for (std::size_t index = 0; index < element_count; ++index) {
-            std::uint16_t bits = 0;
-            std::memcpy(
-                &bits,
-                buffers.front().data() + index * sizeof(bits),
-                sizeof(bits));
-            reduced[index] = decode(bits);
+            reduced[index] = load(buffers.front(), index);
         }
     }
     for (std::size_t buffer_index = 1;
          buffer_index < buffers.size();
          ++buffer_index) {
         for (std::size_t index = 0; index < element_count; ++index) {
-            std::uint16_t bits = 0;
-            std::memcpy(
-                &bits,
-                buffers[buffer_index].data() + index * sizeof(bits),
-                sizeof(bits));
             reduced[index] = apply_reduce_op(
                 reduced[index],
-                decode(bits),
+                load(buffers[buffer_index], index),
                 request.reduce_op);
         }
     }
     if (request.reduce_op == CollectiveReduceOp::Avg && !buffers.empty()) {
-        const float divisor = static_cast<float>(buffers.size());
-        for (float& value : reduced) {
-            value /= divisor;
+        const Acc divisor = static_cast<Acc>(buffers.size());
+        for (Acc& value : reduced) {
+            value = static_cast<Acc>(value / divisor);
         }
     }
 
-    std::vector<std::uint16_t> encoded(element_count, 0);
+    reduced_bytes.assign(element_count * sizeof(Storage), '\0');
     for (std::size_t index = 0; index < element_count; ++index) {
-        encoded[index] = encode(reduced[index]);
+        const Storage encoded = encode(reduced[index]);
+        std::memcpy(
+            reduced_bytes.data() + index * sizeof(Storage),
+            &encoded,
+            sizeof(Storage));
     }
-    reduced_bytes.assign(
-        reinterpret_cast<const char*>(encoded.data()),
-        reinterpret_cast<const char*>(encoded.data()) +
-            element_count * sizeof(std::uint16_t));
+}
+
+template <typename T>
+void reduce_typed_buffers(
+    const CollectiveExecutionRequest& request,
+    const std::vector<std::vector<char>>& buffers,
+    std::size_t element_count,
+    std::vector<char>& reduced_bytes) {
+    const auto identity = [](T value) { return value; };
+    reduce_encoded_buffers<T, T>(
+        request, buffers, element_count, identity, identity, reduced_bytes);
 }
 
 inline void reduce_buffers(
@@ -155,7 +126,7 @@ inline void reduce_buffers(
                 request, buffers, element_count, reduced_bytes);
             break;
         case CollectiveDataType::Float16:
-            reduce_16bit_buffers(
+            reduce_encoded_buffers<std::uint16_t, float>(
                 request,
                 buffers,
                 element_count,
@@ -164,7 +135,7 @@ inline void reduce_buffers(
                 reduced_bytes);
             break;
         case CollectiveDataType::BFloat16:
-            reduce_16bit_buffers(
+            reduce_encoded_buffers<std::uint16_t, float>(
                 request,
                 buffers,
                 element_count,

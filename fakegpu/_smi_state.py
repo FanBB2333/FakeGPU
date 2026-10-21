@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import socket
 import time
 import uuid
 import warnings
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -32,6 +34,7 @@ from ._smi_environment import (
     MAXIMUM_MODELED_MIG_INSTANCES_PER_DEVICE,
     _maximum_fault_severity,
     _modeled_health_status,
+    _modeled_mig_mode,
     _nonnegative_int,
 )
 
@@ -55,6 +58,17 @@ DEFAULT_STALE_AFTER_SECONDS = 2.0
 LAYOUT_ONLY_KEY = "layout_only"
 
 
+NATIVE_ACTIVITY_COUNTERS = (
+    "io_calls",
+    "io_bytes",
+    "kernel_launches",
+    "gemm_calls",
+    "gemm_flops",
+    "compatibility_events",
+    "unsupported_api_calls",
+)
+
+
 def _discover_state_paths(
     *,
     explicit_paths: Sequence[Path],
@@ -67,6 +81,24 @@ def _discover_state_paths(
     if fallback_state is not None:
         paths.append(fallback_state)
     return list(dict.fromkeys(paths))
+
+
+def _state_sources(
+    state_args: Sequence[str],
+    state_dir_arg: str | None,
+) -> tuple[list[Path], Path | None, Path | None]:
+    explicit_paths = [Path(value).expanduser().resolve() for value in state_args]
+    state_dir_text = state_dir_arg or os.environ.get("FAKEGPU_SMI_STATE_DIR")
+    state_dir = Path(state_dir_text).expanduser().resolve() if state_dir_text else None
+    fallback_state_text = None
+    if not explicit_paths and state_dir is None:
+        fallback_state_text = os.environ.get("FAKEGPU_SMI_STATE_PATH")
+    fallback_state = (
+        Path(fallback_state_text).expanduser().resolve()
+        if fallback_state_text
+        else None
+    )
+    return explicit_paths, state_dir, fallback_state
 
 
 def _load_states(
@@ -131,9 +163,8 @@ def _synthetic_uuid(host: str, index: int, profile_id: str) -> str:
 
 
 def _synthetic_pci_bus_id(index: int) -> str:
-    domain = max(0, int(index)) // 255
-    bus = max(0, int(index)) % 255 + 1
-    return f"{domain:08X}:{bus:02X}:00.0"
+    domain, bus = divmod(index, 255)
+    return f"{domain:08X}:{bus + 1:02X}:00.0"
 
 
 def _integer_mapping(value: Any) -> dict[str, int]:
@@ -147,12 +178,10 @@ def _integer_mapping(value: Any) -> dict[str, int]:
 
 def _sum_integer_mapping(
     target: dict[str, int],
-    source: Mapping[str, Any],
+    source: Mapping[str, int],
 ) -> None:
     for key, value in source.items():
-        target[str(key)] = target.get(str(key), 0) + _nonnegative_int(
-            value
-        )
+        target[key] = target.get(key, 0) + value
 
 
 def _mapping_list(value: Any) -> list[dict[str, Any]]:
@@ -196,31 +225,18 @@ def _catalog_metadata() -> dict[str, Any]:
             RuntimeWarning,
             stacklevel=2,
         )
-        profile_summary = {}
     try:
         from .capabilities import load_native_capabilities
 
         catalog = load_native_capabilities()
-        apis = list(catalog.get("apis") or [])
-        groups = list(catalog.get("groups") or [])
-        classifications: dict[str, int] = {}
-        for api in apis:
-            if not isinstance(api, Mapping):
-                continue
-            classification = str(
-                api.get("classification") or "unknown"
-            )
-            classifications[classification] = (
-                classifications.get(classification, 0) + 1
-            )
+        apis = catalog["apis"]
+        classifications = Counter(api["classification"] for api in apis)
         capability_summary = {
-            "schema_version": catalog.get("schema_version"),
-            "group_count": len(groups),
+            "schema_version": catalog["schema_version"],
+            "group_count": len(catalog["groups"]),
             "explicit_api_count": len(apis),
             "policy_enforced_api_count": sum(
-                bool(api.get("policy_enforced"))
-                for api in apis
-                if isinstance(api, Mapping)
+                api["policy_enforced"] for api in apis
             ),
             "classifications": dict(sorted(classifications.items())),
         }
@@ -230,7 +246,6 @@ def _catalog_metadata() -> dict[str, Any]:
             RuntimeWarning,
             stacklevel=2,
         )
-        capability_summary = {}
     return {
         "profile_catalog": profile_summary,
         "native_capabilities": capability_summary,
@@ -239,26 +254,23 @@ def _catalog_metadata() -> dict[str, Any]:
 
 def _profile_metadata(item: Mapping[str, Any]) -> dict[str, Any]:
     raw_profile = item.get("profile")
-    if isinstance(raw_profile, Mapping):
-        profile_id = str(
-            raw_profile.get("id")
-            or item.get("profile_id")
-            or ""
-        )
-        if profile_id:
-            try:
-                profile = dict(_catalog_profile_metadata(profile_id))
-                profile.update(raw_profile)
-                return profile
-            except (KeyError, OSError, RuntimeError, ValueError):
-                pass
-        return dict(raw_profile)
-    profile_id = str(item.get("profile_id") or "")
+    if not isinstance(raw_profile, Mapping):
+        raw_profile = None
+    profile_id = str(
+        (raw_profile or {}).get("id")
+        or item.get("profile_id")
+        or ""
+    )
+    catalog: dict[str, Any] = {}
     if profile_id:
         try:
-            return dict(_catalog_profile_metadata(profile_id))
+            catalog = _catalog_profile_metadata(profile_id)
         except (KeyError, OSError, RuntimeError, ValueError):
             pass
+    if raw_profile is not None:
+        return {**catalog, **raw_profile}
+    if catalog:
+        return dict(catalog)
     major = item.get("compute_major")
     minor = item.get("compute_minor")
     capability = (
@@ -299,15 +311,7 @@ def _normalize_native_activity(value: Any) -> dict[str, Any]:
     raw = dict(value) if isinstance(value, Mapping) else {}
     result = {
         key: _nonnegative_int(raw.get(key))
-        for key in (
-            "io_calls",
-            "io_bytes",
-            "kernel_launches",
-            "gemm_calls",
-            "gemm_flops",
-            "compatibility_events",
-            "unsupported_api_calls",
-        )
+        for key in NATIVE_ACTIVITY_COUNTERS
     }
     result["kernels"] = _integer_mapping(raw.get("kernels"))
     result["unsupported_apis"] = _mapping_list(
@@ -328,11 +332,8 @@ def _finite_float(value: Any, default: float | None = 0.0) -> float | None:
 
 def _normalize_device_topology(value: Any) -> dict[str, Any]:
     raw = dict(value) if isinstance(value, Mapping) else {}
-    nvlink_raw = (
-        dict(raw.get("nvlink") or {})
-        if isinstance(raw.get("nvlink"), Mapping)
-        else {}
-    )
+    nvlink_raw = raw.get("nvlink")
+    nvlink_raw = dict(nvlink_raw) if isinstance(nvlink_raw, Mapping) else {}
     source = str(raw.get("source") or "modeled_none")
     peers = []
     for item in _mapping_list(nvlink_raw.get("peers")):
@@ -529,13 +530,7 @@ def _normalize_device_mig(
         "disabled",
         "configuration_error",
     }:
-        mode = (
-            "configuration_error"
-            if not valid
-            else "enabled"
-            if instances
-            else "disabled"
-        )
+        mode = _modeled_mig_mode(valid=valid, has_instances=bool(instances))
     return {
         "source": str(raw.get("source") or "modeled_none"),
         "configured": bool(raw.get("configured", False)),
@@ -663,6 +658,23 @@ def _normalize_device(
         used,
         _nonnegative_int(reported_peak, default=used),
     )
+    memory = {
+        "total_bytes": total,
+        "used_bytes": used,
+        "free_bytes": 0,
+        "reported_peak_bytes": reported_peak,
+        "tracked_bytes": tracked,
+        "tracked_peak_bytes": tracked_peak,
+        "reserved_bytes": reserved,
+        "reserved_peak_bytes": reserved_peak,
+        "inactive_split_bytes": _nonnegative_int(
+            raw.get("inactive_split_bytes")
+        ),
+        "utilization_percent": None,
+        "headroom_bytes": 0,
+        "headroom_percent": None,
+    }
+    _fill_memory_ratios(memory)
     topology = _normalize_device_topology(raw.get("topology"))
     health = _normalize_device_health(raw.get("health"))
     mig = _normalize_device_mig(
@@ -696,35 +708,7 @@ def _normalize_device(
             raw.get("compiler_target")
             or profile.get("compiler_target")
         ),
-        "memory": {
-            "total_bytes": total,
-            "used_bytes": used,
-            "free_bytes": (
-                max(0, total - used) if total else 0
-            ),
-            "reported_peak_bytes": reported_peak,
-            "tracked_bytes": tracked,
-            "tracked_peak_bytes": tracked_peak,
-            "reserved_bytes": reserved,
-            "reserved_peak_bytes": reserved_peak,
-            "inactive_split_bytes": _nonnegative_int(
-                raw.get("inactive_split_bytes")
-            ),
-            "utilization_percent": (
-                round(used / total * 100, 3) if total else None
-            ),
-            "headroom_bytes": (
-                max(0, total - reported_peak) if total else 0
-            ),
-            "headroom_percent": (
-                round(
-                    max(0, total - reported_peak) / total * 100,
-                    3,
-                )
-                if total
-                else None
-            ),
-        },
+        "memory": memory,
         "allocator_model": str(
             raw.get("allocator_model") or "unknown"
         ),
@@ -770,19 +754,16 @@ def _state_fakegpu_metadata(
         **catalogs,
     }
     raw = state.get("fakegpu")
-    if isinstance(raw, Mapping):
-        result = dict(defaults)
-        result.update(raw)
-        for key in ("profile_catalog", "native_capabilities"):
-            default_catalog = defaults.get(key)
-            raw_catalog = raw.get(key)
-            if isinstance(default_catalog, Mapping):
-                merged_catalog = dict(default_catalog)
-                if isinstance(raw_catalog, Mapping):
-                    merged_catalog.update(raw_catalog)
-                result[key] = merged_catalog
-        return result
-    return defaults
+    if not isinstance(raw, Mapping):
+        return defaults
+    result = {**defaults, **raw}
+    for key in ("profile_catalog", "native_capabilities"):
+        raw_catalog = raw.get(key)
+        result[key] = {
+            **defaults[key],
+            **(raw_catalog if isinstance(raw_catalog, Mapping) else {}),
+        }
+    return result
 
 
 def _state_software_metadata(
@@ -847,22 +828,12 @@ def _matches_device(
     selectors: Sequence[str],
 ) -> bool:
     candidates = {
-        str(device.get("index", "")).casefold(),
-        str(device.get("uuid", "")).casefold(),
-        str(device.get("pci_bus_id", "")).casefold(),
-        str(device.get("profile_id", "")).casefold(),
+        str(device[key]).casefold()
+        for key in ("index", "uuid", "pci_bus_id", "profile_id")
     }
-    mig = device.get("mig")
-    if isinstance(mig, Mapping):
-        for instance in mig.get("instances") or []:
-            if not isinstance(instance, Mapping):
-                continue
-            candidates.add(
-                str(instance.get("uuid", "")).casefold()
-            )
-            candidates.add(
-                str(instance.get("profile", "")).casefold()
-            )
+    for instance in device["mig"]["instances"]:
+        candidates.add(instance["uuid"].casefold())
+        candidates.add(instance["profile"].casefold())
     return any(selector in candidates for selector in selectors)
 
 
@@ -915,13 +886,7 @@ def _empty_device_aggregate(
             "_models": set(),
         },
         "native_activity": {
-            "io_calls": 0,
-            "io_bytes": 0,
-            "kernel_launches": 0,
-            "gemm_calls": 0,
-            "gemm_flops": 0,
-            "compatibility_events": 0,
-            "unsupported_api_calls": 0,
+            **dict.fromkeys(NATIVE_ACTIVITY_COUNTERS, 0),
             "kernels": {},
             "unsupported_apis": [],
         },
@@ -952,8 +917,8 @@ def _accumulate_memory(
     memory: Mapping[str, Any],
 ) -> None:
     aggregate["total_bytes"] = max(
-        int(aggregate["total_bytes"]),
-        int(memory["total_bytes"]),
+        aggregate["total_bytes"],
+        memory["total_bytes"],
     )
     for key in (
         "used_bytes",
@@ -964,7 +929,7 @@ def _accumulate_memory(
         "reserved_peak_bytes",
         "inactive_split_bytes",
     ):
-        aggregate[key] = int(aggregate[key]) + int(memory[key])
+        aggregate[key] += memory[key]
 
 
 def _accumulate_allocator(
@@ -1000,49 +965,34 @@ def _accumulate_native_activity(
     pid: int,
     process_name: str,
 ) -> None:
-    for key in (
-        "io_calls",
-        "io_bytes",
-        "kernel_launches",
-        "gemm_calls",
-        "gemm_flops",
-        "compatibility_events",
-        "unsupported_api_calls",
-    ):
-        aggregate[key] = _nonnegative_int(
-            aggregate.get(key)
-        ) + _nonnegative_int(activity.get(key))
-    _sum_integer_mapping(
-        aggregate["kernels"],
-        activity.get("kernels") or {},
-    )
-    for raw_event in activity.get("unsupported_apis") or []:
-        if not isinstance(raw_event, Mapping):
-            continue
-        event = dict(raw_event)
-        event["pid"] = pid
-        event["process_name"] = process_name
-        aggregate["unsupported_apis"].append(event)
+    for key in NATIVE_ACTIVITY_COUNTERS:
+        aggregate[key] += activity[key]
+    _sum_integer_mapping(aggregate["kernels"], activity["kernels"])
+    for event in activity["unsupported_apis"]:
+        aggregate["unsupported_apis"].append(
+            {**event, "pid": pid, "process_name": process_name}
+        )
 
 
-def _finalize_device_aggregate(item: dict[str, Any]) -> dict[str, Any]:
-    memory = item["memory"]
-    total = int(memory["total_bytes"])
-    used = int(memory["used_bytes"])
-    peak = int(memory["reported_peak_bytes"])
+def _fill_memory_ratios(memory: dict[str, Any]) -> None:
+    total = memory["total_bytes"]
+    used = memory["used_bytes"]
+    peak = memory["reported_peak_bytes"]
     memory["free_bytes"] = max(0, total - used) if total else 0
-    memory["headroom_bytes"] = max(0, total - peak) if total else 0
     memory["utilization_percent"] = (
         round(used / total * 100, 3) if total else None
     )
+    memory["headroom_bytes"] = max(0, total - peak) if total else 0
     memory["headroom_percent"] = (
         round(memory["headroom_bytes"] / total * 100, 3)
         if total
         else None
     )
-    item["timestamp"] = _format_timestamp_ns(
-        _nonnegative_int(item["timestamp_ns"])
-    )
+
+
+def _finalize_device_aggregate(item: dict[str, Any]) -> dict[str, Any]:
+    _fill_memory_ratios(item["memory"])
+    item["timestamp"] = _format_timestamp_ns(item["timestamp_ns"])
 
     names = sorted(
         value for value in item.pop("_names") if value
@@ -1050,10 +1000,10 @@ def _finalize_device_aggregate(item: dict[str, Any]) -> dict[str, Any]:
     profiles = sorted(
         value for value in item.pop("_profile_ids") if value
     )
-    statuses = set(item.pop("_statuses"))
+    statuses = item.pop("_statuses")
     stages = sorted(value for value in item.pop("_stages") if value)
     tracking = sorted(value for value in item.pop("_tracking") if value)
-    ages = list(item.pop("_ages"))
+    ages = item.pop("_ages")
     layout_name = item.pop("_layout_name", None)
     item["name"] = ", ".join(names) or layout_name or "Fake NVIDIA GPU"
     item["profile_id"] = ", ".join(profiles) or "unknown"
@@ -1134,9 +1084,10 @@ def build_inventory(
         )
         fakegpu = _state_fakegpu_metadata(state)
         software = _state_software_metadata(state)
+        dispatch_tracking = state.get("dispatch_tracking")
         dispatch_tracking = (
-            dict(state.get("dispatch_tracking") or {})
-            if isinstance(state.get("dispatch_tracking"), Mapping)
+            dict(dispatch_tracking)
+            if isinstance(dispatch_tracking, Mapping)
             else {}
         )
         selected_device = False
@@ -1150,24 +1101,24 @@ def build_inventory(
             device = _normalize_device(raw_device, host=host)
             if selectors and not _matches_device(device, selectors):
                 continue
+            key = (host, str(device["uuid"]))
+            aggregate = device_rows.get(key)
+            if aggregate is None:
+                aggregate = device_rows[key] = _empty_device_aggregate(
+                    host=host,
+                    device=device,
+                    fakegpu=fakegpu,
+                    software=software,
+                )
+            aggregate["_profile_ids"].add(device["profile_id"])
+            _accumulate_memory(aggregate["memory"], device["memory"])
+            aggregate["timestamp_ns"] = max(
+                aggregate["timestamp_ns"],
+                timestamp_ns,
+            )
             if layout_only:
-                aggregate = device_rows.setdefault(
-                    (host, str(device["uuid"])),
-                    _empty_device_aggregate(
-                        host=host,
-                        device=device,
-                        fakegpu=fakegpu,
-                        software=software,
-                    ),
-                )
                 aggregate["_layout_name"] = device["name"]
-                aggregate["_profile_ids"].add(device["profile_id"])
-                _accumulate_memory(aggregate["memory"], device["memory"])
                 aggregate["_statuses"].add("idle")
-                aggregate["timestamp_ns"] = max(
-                    int(aggregate["timestamp_ns"]),
-                    timestamp_ns,
-                )
                 continue
             selected_device = True
             process = {
@@ -1197,36 +1148,17 @@ def build_inventory(
             }
             process_rows.append(process)
 
-            key = (host, str(device["uuid"]))
-            aggregate = device_rows.setdefault(
-                key,
-                _empty_device_aggregate(
-                    host=host,
-                    device=device,
-                    fakegpu=fakegpu,
-                    software=software,
-                ),
-            )
             aggregate["_names"].add(device["name"])
-            aggregate["_profile_ids"].add(device["profile_id"])
             aggregate["_statuses"].add(status)
             aggregate["_stages"].add(stage)
             aggregate["_tracking"].add(confidence)
             if age_seconds is not None:
                 aggregate["_ages"].append(age_seconds)
-            aggregate["timestamp_ns"] = max(
-                int(aggregate["timestamp_ns"]),
-                timestamp_ns,
-            )
             aggregate["process_count"] += 1
             if status == "stale":
                 aggregate["stale_process_count"] += 1
             if status == "exited":
                 aggregate["exited_process_count"] += 1
-            _accumulate_memory(
-                aggregate["memory"],
-                device["memory"],
-            )
             _accumulate_allocator(
                 aggregate["allocator"],
                 device,
@@ -1247,6 +1179,7 @@ def build_inventory(
                 aggregate["_transfers"].append(transfer)
 
         if selected_device or (not selectors and not raw_devices):
+            publisher = state.get("publisher")
             runtime_rows.append(
                 {
                     "schema_version": state.get("schema_version"),
@@ -1265,11 +1198,8 @@ def build_inventory(
                     "fakegpu": fakegpu,
                     "software": software,
                     "publisher": (
-                        dict(state.get("publisher") or {})
-                        if isinstance(
-                            state.get("publisher"),
-                            Mapping,
-                        )
+                        dict(publisher)
+                        if isinstance(publisher, Mapping)
                         else {}
                     ),
                     "dispatch_tracking": dispatch_tracking,
@@ -1300,10 +1230,7 @@ def build_inventory(
     return {
         "device_count": len(devices),
         "mig_instance_count": sum(
-            _nonnegative_int(
-                device.get("mig", {}).get("instance_count")
-            )
-            for device in devices
+            device["mig"]["instance_count"] for device in devices
         ),
         "process_count": len(process_rows),
         "runtime_count": len(runtime_rows),

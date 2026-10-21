@@ -58,6 +58,7 @@ extern "C" nvmlReturn_t fakegpuNvmlSetSnapshot(
         std::vector<FakeGpuNvmlTelemetryV1> telemetry(device_count);
         std::vector<FakeGpuNvmlLinksV1> links(device_count);
         std::vector<std::vector<UtilizationSample>> samples(device_count);
+        std::unordered_set<std::string> seen;
         for (unsigned int i = 0; i < device_count; ++i) {
             if (version == 1) devices[i] = static_cast<const FakeGpuNvmlDeviceV1*>(device_data)[i];
             else {
@@ -83,27 +84,17 @@ extern "C" nvmlReturn_t fakegpuNvmlSetSnapshot(
                     l.pcie_max_width > 32 || l.nvlink_count > 18)
                     return NVML_ERROR_INVALID_ARGUMENT;
             }
-        }
-        for (unsigned int i = 0; i < process_count; ++i) {
-            if (version == 1) processes[i] = static_cast<const FakeGpuNvmlProcessV1*>(process_data)[i];
-            else {
-                const auto& row = static_cast<const FakeGpuNvmlProcessV2*>(process_data)[i];
-                processes[i] = row.process;
-                if (row.process.device_index >= device_count || row.gpu > 100 || row.memory > 100)
-                    return NVML_ERROR_INVALID_ARGUMENT;
-                samples[row.process.device_index].push_back({row.process.pid, row.timestamp_us,
-                    row.gpu, row.memory, 0, 0});
-            }
-        }
-        std::unordered_set<std::string> seen;
-        for (unsigned int i = 0; i < device_count; ++i) {
             const auto& d = devices[i];
             if (!d.uuid || !*d.uuid || !d.name || !d.profile_id || !d.pci_bus_id ||
                 !seen.insert(d.uuid).second) return NVML_ERROR_INVALID_ARGUMENT;
         }
         for (unsigned int i = 0; i < process_count; ++i) {
-            if (processes[i].device_index >= device_count || !processes[i].pid)
+            const auto* row = version == 1 ? nullptr : static_cast<const FakeGpuNvmlProcessV2*>(process_data) + i;
+            processes[i] = row ? row->process : static_cast<const FakeGpuNvmlProcessV1*>(process_data)[i];
+            const auto& p = processes[i];
+            if (p.device_index >= device_count || !p.pid || (row && (row->gpu > 100 || row->memory > 100)))
                 return NVML_ERROR_INVALID_ARGUMENT;
+            if (row) samples[p.device_index].push_back({p.pid, row->timestamp_us, row->gpu, row->memory, 0, 0});
         }
         // Prepare all allocations before changing the published snapshot.
         std::vector<Entry> additions;
@@ -212,7 +203,6 @@ nvmlReturn_t processes(nvmlDevice_t device, unsigned int* count, void* infos, bo
     return NVML_SUCCESS;
 }
 nvmlReturn_t telemetry(nvmlDevice_t device, FakeGpuNvmlTelemetryV1* result) {
-    if (!device || !result) return NVML_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(mutex);
     auto* entry = find(device);
     if (!entry) return NVML_ERROR_INVALID_ARGUMENT;
@@ -222,7 +212,6 @@ nvmlReturn_t telemetry(nvmlDevice_t device, FakeGpuNvmlTelemetryV1* result) {
 }
 
 nvmlReturn_t links(nvmlDevice_t device, FakeGpuNvmlLinksV1* result) {
-    if (!device || !result) return NVML_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(mutex);
     auto* entry = find(device);
     if (!entry) return NVML_ERROR_INVALID_ARGUMENT;
@@ -233,7 +222,7 @@ nvmlReturn_t links(nvmlDevice_t device, FakeGpuNvmlLinksV1* result) {
 
 nvmlReturn_t process_utilization(nvmlDevice_t device, void* samples, unsigned int* count,
                                 unsigned long long last_seen) {
-    if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
+    if (!count) return NVML_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(mutex);
     auto* entry = find(device);
     if (!entry) return NVML_ERROR_INVALID_ARGUMENT;

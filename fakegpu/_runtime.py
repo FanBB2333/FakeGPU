@@ -53,13 +53,9 @@ def init(
             "Expected one of: 'auto', 'native', 'fakecuda'."
         )
 
-    selected_runtime = runtime_norm
-    if selected_runtime == "auto":
-        # The vendored fakegpu._upstream backend ships with this package, so
-        # the fakecuda runtime is always available and "auto" resolves to it.
-        selected_runtime = "fakecuda"
-
-    if selected_runtime == "native":
+    # The vendored fakegpu._upstream backend ships with this package, so the
+    # fakecuda runtime is always available and "auto" resolves to it.
+    if runtime_norm == "native":
         config = _FakeGpuRuntimeConfig(
             mode=mode,
             oom_policy=oom_policy,
@@ -91,7 +87,6 @@ def init(
         unsupported_api=unsupported_api,
         dist_mode=dist_mode,
         update_env=update_env,
-        force=force,
     )
 
 
@@ -149,7 +144,6 @@ def _init_fakecuda_runtime(
     unsupported_api: str | None = None,
     dist_mode: str | None = None,
     update_env: bool = True,
-    force: bool = False,
 ) -> RuntimeInitResult:
     config = _FakeGpuRuntimeConfig(
         mode=mode,
@@ -161,7 +155,6 @@ def _init_fakecuda_runtime(
     from ._api import _apply_config_env
 
     _apply_config_env(configured_env, config)
-    configured_env["FAKEGPU_RUNTIME"] = "fakecuda"
     if update_env:
         os.environ.update(configured_env)
     os.environ["FAKEGPU_RUNTIME"] = "fakecuda"

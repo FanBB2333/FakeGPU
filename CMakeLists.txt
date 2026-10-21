@@ -82,8 +82,7 @@ file(
 list(SORT FAKEGPU_PROFILE_FILES)
 set(FAKEGPU_GENERATED_PROFILE_HEADER "${CMAKE_BINARY_DIR}/generated_profiles.hpp")
 
-if(FAKEGPU_PROFILE_FILES)
-    file(WRITE ${FAKEGPU_GENERATED_PROFILE_HEADER}
+file(WRITE ${FAKEGPU_GENERATED_PROFILE_HEADER}
 "// Auto-generated from profiles/**/*.yaml - do not edit by hand\n"
 "#pragma once\n"
 "#include <string>\n"
@@ -96,39 +95,21 @@ if(FAKEGPU_PROFILE_FILES)
 "inline const std::vector<ProfileYamlBlob>& builtin_profile_yamls() {\n"
 "    static const std::vector<ProfileYamlBlob> kProfiles = {\n"
 )
-    set(_profile_idx 0)
-    foreach(_profile_path ${FAKEGPU_PROFILE_FILES})
-        file(READ ${_profile_path} _profile_content)
-        get_filename_component(_profile_name ${_profile_path} NAME)
-        file(APPEND ${FAKEGPU_GENERATED_PROFILE_HEADER}
+set(_profile_idx 0)
+foreach(_profile_path ${FAKEGPU_PROFILE_FILES})
+    file(READ ${_profile_path} _profile_content)
+    get_filename_component(_profile_name ${_profile_path} NAME)
+    file(APPEND ${FAKEGPU_GENERATED_PROFILE_HEADER}
 "        {\"${_profile_name}\", R\"fakegpu_${_profile_idx}(\n${_profile_content})fakegpu_${_profile_idx}\"},\n"
 )
-        math(EXPR _profile_idx "${_profile_idx} + 1")
-    endforeach()
-    file(APPEND ${FAKEGPU_GENERATED_PROFILE_HEADER}
+    math(EXPR _profile_idx "${_profile_idx} + 1")
+endforeach()
+file(APPEND ${FAKEGPU_GENERATED_PROFILE_HEADER}
 "    };\n"
 "    return kProfiles;\n"
 "}\n"
 "} // namespace fake_gpu\n"
 )
-else()
-    file(WRITE ${FAKEGPU_GENERATED_PROFILE_HEADER}
-"// Auto-generated: no YAML profiles were found\n"
-"#pragma once\n"
-"#include <string>\n"
-"#include <vector>\n"
-"namespace fake_gpu {\n"
-"struct ProfileYamlBlob {\n"
-"    const char* filename;\n"
-"    const char* yaml;\n"
-"};\n"
-"inline const std::vector<ProfileYamlBlob>& builtin_profile_yamls() {\n"
-"    static const std::vector<ProfileYamlBlob> kProfiles;\n"
-"    return kProfiles;\n"
-"}\n"
-"} // namespace fake_gpu\n"
-)
-endif()
 
 # Source directories
 add_subdirectory(src/core)
@@ -173,7 +154,6 @@ add_library(fake_cudart SHARED
 )
 fakegpu_link_common_system_libs(fake_cudart)
 target_link_libraries(fake_cudart PRIVATE fake_gpu_kernel)
-target_include_directories(fake_cudart PRIVATE src/cuda src/core)
 
 # cuBLAS Library (libcublas.so.12)
 # This library intercepts cuBLAS/cuBLASLt calls; supported ops can run on CPU for correctness
@@ -195,92 +175,53 @@ add_library(fake_nccl SHARED
     $<TARGET_OBJECTS:fake_gpu_distributed>
 )
 fakegpu_link_common_system_libs(fake_nccl)
-target_include_directories(fake_nccl PRIVATE src/nccl src/core src/distributed)
+
+# Library names and SONAMEs that CUDA, NVML and NCCL users look up.
+set_target_properties(fake_gpu PROPERTIES
+    OUTPUT_NAME "nvidia-ml"
+    VERSION "${FAKEGPU_VERSION}"
+    SOVERSION "1"
+)
+set_target_properties(fake_cuda PROPERTIES
+    OUTPUT_NAME "cuda"
+    VERSION "${FAKEGPU_VERSION}"
+    SOVERSION "1"
+)
+set_target_properties(fake_cudart PROPERTIES
+    OUTPUT_NAME "cudart"
+    VERSION "${FAKEGPU_VERSION}"
+    SOVERSION "12"
+)
+set_target_properties(fake_cublas PROPERTIES
+    OUTPUT_NAME "cublas"
+    VERSION "${FAKEGPU_VERSION}"
+    SOVERSION "12"
+)
+set_target_properties(fake_nccl PROPERTIES
+    OUTPUT_NAME "nccl"
+    VERSION "${FAKEGPU_VERSION}"
+    SOVERSION "2"
+)
 
 # Platform specific flags
 if(APPLE)
     # macOS: build dylibs with CUDA/NVML-compatible names so DYLD_* search works.
-    target_link_options(fake_gpu PRIVATE "-undefined" "dynamic_lookup")
-    target_link_options(fake_cuda PRIVATE "-undefined" "dynamic_lookup")
-    target_link_options(fake_cudart PRIVATE "-undefined" "dynamic_lookup")
-    target_link_options(fake_cublas PRIVATE "-undefined" "dynamic_lookup")
-    target_link_options(fake_nccl PRIVATE "-undefined" "dynamic_lookup")
-
-    set_target_properties(fake_gpu PROPERTIES
-        OUTPUT_NAME "nvidia-ml"
-        VERSION "${FAKEGPU_VERSION}"
-        SOVERSION "1"
-    )
+    foreach(_fakegpu_library fake_gpu fake_cuda fake_cudart fake_cublas fake_nccl)
+        target_link_options(${_fakegpu_library} PRIVATE "-undefined" "dynamic_lookup")
+    endforeach()
     add_custom_command(TARGET fake_gpu POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E create_symlink
             $<TARGET_FILE_NAME:fake_gpu>
             ${CMAKE_BINARY_DIR}/libfake_gpu.dylib
         COMMENT "Creating libfake_gpu.dylib symlink for backward compatibility"
     )
-
-    set_target_properties(fake_cuda PROPERTIES
-        OUTPUT_NAME "cuda"
-        VERSION "${FAKEGPU_VERSION}"
-        SOVERSION "1"
-    )
-
-    set_target_properties(fake_cudart PROPERTIES
-        OUTPUT_NAME "cudart"
-        VERSION "${FAKEGPU_VERSION}"
-        SOVERSION "12"
-    )
-
-    set_target_properties(fake_cublas PROPERTIES
-        OUTPUT_NAME "cublas"
-        VERSION "${FAKEGPU_VERSION}"
-        SOVERSION "12"
-    )
-
-    set_target_properties(fake_nccl PROPERTIES
-        OUTPUT_NAME "nccl"
-        VERSION "${FAKEGPU_VERSION}"
-        SOVERSION "2"
-    )
 else()
-    # Set OUTPUT_NAME to libnvidia-ml.so.1 so CMake sets the correct SONAME
-    set_target_properties(fake_gpu PROPERTIES
-        OUTPUT_NAME "nvidia-ml"
-        VERSION "${FAKEGPU_VERSION}"
-        SOVERSION "1"
-    )
     # Create symlink for backward compatibility with libfake_gpu.so name
     add_custom_command(TARGET fake_gpu POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E create_symlink
             libnvidia-ml.so.1
             ${CMAKE_BINARY_DIR}/libfake_gpu.so
         COMMENT "Creating libfake_gpu.so symlink for backward compatibility"
-    )
-
-    # Set OUTPUT_NAME to libcuda.so.1 for CUDA Driver API interception
-    set_target_properties(fake_cuda PROPERTIES
-        OUTPUT_NAME "cuda"
-        VERSION "${FAKEGPU_VERSION}"
-        SOVERSION "1"
-    )
-
-    # Set OUTPUT_NAME to libcudart.so.12 for CUDA Runtime API interception
-    set_target_properties(fake_cudart PROPERTIES
-        OUTPUT_NAME "cudart"
-        VERSION "${FAKEGPU_VERSION}"
-        SOVERSION "12"
-    )
-
-    # Set OUTPUT_NAME to libcublas.so.12 for cuBLAS API interception
-    set_target_properties(fake_cublas PROPERTIES
-        OUTPUT_NAME "cublas"
-        VERSION "${FAKEGPU_VERSION}"
-        SOVERSION "12"
-    )
-
-    set_target_properties(fake_nccl PROPERTIES
-        OUTPUT_NAME "nccl"
-        VERSION "${FAKEGPU_VERSION}"
-        SOVERSION "2"
     )
 endif()
 

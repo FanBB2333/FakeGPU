@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -146,101 +147,56 @@ inline const char* collective_reduce_op_name(CollectiveReduceOp op) {
 }
 
 inline bool parse_collective_type(const std::string& text, CollectiveType& out) {
-    if (text == "allreduce") {
-        out = CollectiveType::AllReduce;
-        return true;
-    }
-    if (text == "reduce") {
-        out = CollectiveType::Reduce;
-        return true;
-    }
-    if (text == "broadcast") {
-        out = CollectiveType::Broadcast;
-        return true;
-    }
-    if (text == "allgather") {
-        out = CollectiveType::AllGather;
-        return true;
-    }
-    if (text == "reducescatter") {
-        out = CollectiveType::ReduceScatter;
-        return true;
-    }
-    if (text == "alltoall") {
-        out = CollectiveType::AllToAll;
-        return true;
+    for (CollectiveType value : {
+             CollectiveType::AllReduce,
+             CollectiveType::Reduce,
+             CollectiveType::Broadcast,
+             CollectiveType::AllGather,
+             CollectiveType::ReduceScatter,
+             CollectiveType::AllToAll,
+         }) {
+        if (text == collective_type_name(value)) {
+            out = value;
+            return true;
+        }
     }
     return false;
 }
 
 inline bool parse_collective_data_type(const std::string& text, CollectiveDataType& out) {
-    if (text == "int8") {
-        out = CollectiveDataType::Int8;
-        return true;
-    }
-    if (text == "uint8") {
-        out = CollectiveDataType::Uint8;
-        return true;
-    }
-    if (text == "int32") {
-        out = CollectiveDataType::Int32;
-        return true;
-    }
-    if (text == "uint32") {
-        out = CollectiveDataType::Uint32;
-        return true;
-    }
-    if (text == "int64") {
-        out = CollectiveDataType::Int64;
-        return true;
-    }
-    if (text == "uint64") {
-        out = CollectiveDataType::Uint64;
-        return true;
-    }
-    if (text == "float16") {
-        out = CollectiveDataType::Float16;
-        return true;
-    }
-    if (text == "bfloat16") {
-        out = CollectiveDataType::BFloat16;
-        return true;
-    }
-    if (text == "float32") {
-        out = CollectiveDataType::Float32;
-        return true;
-    }
-    if (text == "float64") {
-        out = CollectiveDataType::Float64;
-        return true;
+    for (CollectiveDataType value : {
+             CollectiveDataType::Int8,
+             CollectiveDataType::Uint8,
+             CollectiveDataType::Int32,
+             CollectiveDataType::Uint32,
+             CollectiveDataType::Int64,
+             CollectiveDataType::Uint64,
+             CollectiveDataType::Float16,
+             CollectiveDataType::BFloat16,
+             CollectiveDataType::Float32,
+             CollectiveDataType::Float64,
+         }) {
+        if (text == collective_data_type_name(value)) {
+            out = value;
+            return true;
+        }
     }
     return false;
 }
 
 inline bool parse_collective_reduce_op(const std::string& text, CollectiveReduceOp& out) {
-    if (text == "none") {
-        out = CollectiveReduceOp::None;
-        return true;
-    }
-    if (text == "sum") {
-        out = CollectiveReduceOp::Sum;
-        return true;
-    }
-    if (text == "prod") {
-        out = CollectiveReduceOp::Prod;
-        return true;
-    }
-    if (text == "max") {
-        out = CollectiveReduceOp::Max;
-        return true;
-    }
-    if (text == "min") {
-        out = CollectiveReduceOp::Min;
-        return true;
-    }
-    if (text == "avg") {
-        out = CollectiveReduceOp::Avg;
-        return true;
+    for (CollectiveReduceOp value : {
+             CollectiveReduceOp::None,
+             CollectiveReduceOp::Sum,
+             CollectiveReduceOp::Prod,
+             CollectiveReduceOp::Max,
+             CollectiveReduceOp::Min,
+             CollectiveReduceOp::Avg,
+         }) {
+        if (text == collective_reduce_op_name(value)) {
+            out = value;
+            return true;
+        }
     }
     return false;
 }

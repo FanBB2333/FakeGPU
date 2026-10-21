@@ -9,7 +9,8 @@ import json
 import math
 from typing import Any
 
-from .finetune_data import SCHEMA_VERSION, FinetuneDataError
+from .finetune_data import SCHEMA_VERSION, FinetuneDataError, _integer
+from .structured_io import is_sha256_hex
 
 
 def apply_dataset_report(
@@ -335,12 +336,6 @@ def _mapping(parent: Mapping[str, Any], name: str) -> Mapping[str, Any]:
     return value
 
 
-def _integer(value: Any, name: str, minimum: int = 0) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise FinetuneDataError(f"{name} must be an integer >= {minimum}")
-    return value
-
-
 def _number_equal(value: Any, expected: float, name: str) -> None:
     if (
         isinstance(value, bool)
@@ -352,11 +347,7 @@ def _number_equal(value: Any, expected: float, name: str) -> None:
 
 
 def _digest(value: Any, name: str) -> None:
-    if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(char not in "0123456789abcdef" for char in value)
-    ):
+    if not is_sha256_hex(value):
         raise FinetuneDataError(
             f"dataset report {name} must be a lowercase SHA-256 digest"
         )

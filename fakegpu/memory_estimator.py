@@ -8,11 +8,15 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from os import PathLike
 from typing import Any
 
+from .profile_catalog import GpuProfile
 from .workspace_profiles import (
+    _catalog_summary,
     _iter_tensor_leaves,
+    _node_input_tensors,
+    _resolve_gpu_profile,
+    _tensor_bytes as _tensor_logical_bytes,
     load_workspace_profiles,
     match_workspace_profile,
-    workspace_profile_summary,
 )
 
 
@@ -176,16 +180,17 @@ def estimate_module_memory(
 
     args = tuple(example_args)
     kwargs = dict(example_kwargs or {})
+    input_leaves = [*_iter_tensor_leaves(args), *_iter_tensor_leaves(kwargs)]
     parameters = dict(module.named_parameters())
     trainable_parameters = {
         name: parameter
         for name, parameter in parameters.items()
-        if bool(getattr(parameter, "requires_grad", False))
+        if parameter.requires_grad
     }
     frozen_parameters = {
         name: parameter
         for name, parameter in parameters.items()
-        if not bool(getattr(parameter, "requires_grad", False))
+        if not parameter.requires_grad
     }
     buffers = dict(module.named_buffers())
 
@@ -260,8 +265,7 @@ def estimate_module_memory(
             *["trainable_parameter" for _ in _iter_tensor_leaves(trainable_parameters)],
             *["frozen_parameter" for _ in _iter_tensor_leaves(frozen_parameters)],
             *["buffer" for _ in _iter_tensor_leaves(buffers)],
-            *["input" for _ in _iter_tensor_leaves(args)],
-            *["input" for _ in _iter_tensor_leaves(kwargs)],
+            *["input" for _ in input_leaves],
         ]
         gradient_output_start = 1
         gradient_output_end = 1 + len(list(_iter_tensor_leaves(trainable_parameters)))
@@ -294,8 +298,7 @@ def estimate_module_memory(
         placeholder_categories = [
             *["parameter" for _ in _iter_tensor_leaves(parameters)],
             *["buffer" for _ in _iter_tensor_leaves(buffers)],
-            *["input" for _ in _iter_tensor_leaves(args)],
-            *["input" for _ in _iter_tensor_leaves(kwargs)],
+            *["input" for _ in input_leaves],
         ]
         gradient_output_start = None
         gradient_output_end = None
@@ -318,9 +321,7 @@ def estimate_module_memory(
     )
     frozen_parameter_bytes = _unique_tensor_storage_bytes(frozen_parameters.values())
     buffer_bytes = _unique_tensor_storage_bytes(buffers.values())
-    input_bytes = _unique_tensor_storage_bytes(
-        [*_iter_tensor_leaves(args), *_iter_tensor_leaves(kwargs)]
-    )
+    input_bytes = _unique_tensor_storage_bytes(input_leaves)
     optimizer_state = _optimizer_state_estimate(
         trainable_parameters.values(),
         optimizer=normalized_optimizer,
@@ -337,85 +338,41 @@ def estimate_module_memory(
         workspace_profile_paths=workspace_profile_paths,
         unknown_workspace_upper_bound_bytes=unknown_workspace_upper_bound_bytes,
     )
-    workspace_interval = dict(workspace_estimate["interval"])
-    lower_workspace_peak = int(
-        workspace_interval["lower"]["effective_peak_contribution_bytes"]
-    )
-    upper_workspace_peak_raw = (
-        workspace_interval.get("upper") or {}
-    ).get("effective_peak_contribution_bytes")
-    upper_workspace_peak = (
-        int(upper_workspace_peak_raw)
-        if upper_workspace_peak_raw is not None
-        else None
-    )
-    graph_phase_peak = (
-        int(graph["peak_live_bytes"])
-        + int(optimizer_state["total_bytes"])
-        + int(workspace_estimate["effective_peak_contribution_bytes"])
-    )
-    lower_graph_phase_peak = (
-        int(graph["peak_live_bytes"])
-        + int(optimizer_state["total_bytes"])
-        + lower_workspace_peak
-    )
-    upper_graph_phase_peak = (
-        int(graph["peak_live_bytes"])
-        + int(optimizer_state["total_bytes"])
-        + upper_workspace_peak
-        if upper_workspace_peak is not None
-        else None
-    )
-    first_step_graph_phase_peak = int(graph["peak_live_bytes"]) + int(
-        workspace_estimate["effective_peak_contribution_bytes"]
-    )
-    lower_first_step_graph_phase_peak = (
-        int(graph["peak_live_bytes"]) + lower_workspace_peak
-    )
-    upper_first_step_graph_phase_peak = (
-        int(graph["peak_live_bytes"]) + upper_workspace_peak
-        if upper_workspace_peak is not None
-        else None
-    )
+    graph_peak = graph["peak_live_bytes"]
+    state_bytes = optimizer_state["total_bytes"]
+    persistent_bytes = parameter_bytes + buffer_bytes + input_bytes
+    workspace_interval = workspace_estimate["interval"]
+    workspace_peaks = {
+        "lower": workspace_interval["lower"]["effective_peak_contribution_bytes"],
+        "expected": workspace_estimate["effective_peak_contribution_bytes"],
+        "upper": (
+            None
+            if workspace_interval["upper"] is None
+            else workspace_interval["upper"]["effective_peak_contribution_bytes"]
+        ),
+    }
     optimizer_phase_peak: int | None = None
     if normalized_mode == "training" and normalized_optimizer != "none":
         optimizer_phase_peak = (
-            int(graph["final_live_bytes"])
-            + int(optimizer_state["total_bytes"])
-            + int(optimizer_temporary["total_bytes"])
+            graph["final_live_bytes"]
+            + state_bytes
+            + optimizer_temporary["total_bytes"]
         )
-    estimated_peak = max(
-        graph_phase_peak,
-        optimizer_phase_peak if optimizer_phase_peak is not None else 0,
-    )
-    lower_estimated_peak = max(
-        lower_graph_phase_peak,
-        optimizer_phase_peak if optimizer_phase_peak is not None else 0,
-    )
-    upper_estimated_peak = (
-        max(
-            upper_graph_phase_peak,
-            optimizer_phase_peak if optimizer_phase_peak is not None else 0,
-        )
-        if upper_graph_phase_peak is not None
-        else None
-    )
-    first_step_estimated_peak = max(
-        first_step_graph_phase_peak,
-        optimizer_phase_peak if optimizer_phase_peak is not None else 0,
-    )
-    lower_first_step_estimated_peak = max(
-        lower_first_step_graph_phase_peak,
-        optimizer_phase_peak if optimizer_phase_peak is not None else 0,
-    )
-    upper_first_step_estimated_peak = (
-        max(
-            upper_first_step_graph_phase_peak,
-            optimizer_phase_peak if optimizer_phase_peak is not None else 0,
-        )
-        if upper_first_step_graph_phase_peak is not None
-        else None
-    )
+    optimizer_floor = optimizer_phase_peak or 0
+
+    def peaks(base: int, floor: int = 0) -> dict[str, int | None]:
+        return {
+            key: None if value is None else max(base + value, floor)
+            for key, value in workspace_peaks.items()
+        }
+
+    first_step_graph = peaks(graph_peak)
+    steady_graph = peaks(graph_peak + state_bytes)
+    first_step_estimated = peaks(graph_peak, optimizer_floor)
+    estimated = peaks(graph_peak + state_bytes, optimizer_floor)
+    graph_phase_peak = steady_graph["expected"]
+    estimated_peak = estimated["expected"]
+    first_step_estimated_peak = first_step_estimated["expected"]
     if optimizer_phase_peak is None or graph_phase_peak > optimizer_phase_peak:
         peak_phase = "graph"
     elif optimizer_phase_peak > graph_phase_peak:
@@ -426,34 +383,17 @@ def estimate_module_memory(
     memory_timeline_phases = [
         {
             "phase": "first_step_graph",
-            "peak_bytes": first_step_graph_phase_peak,
-            "interval_bytes": {
-                "lower": lower_first_step_graph_phase_peak,
-                "expected": first_step_graph_phase_peak,
-                "upper": upper_first_step_graph_phase_peak,
-            },
-            "persistent_bytes": parameter_bytes + buffer_bytes + input_bytes,
-            "workspace_peak_contribution_bytes": int(
-                workspace_estimate["effective_peak_contribution_bytes"]
-            ),
+            "peak_bytes": first_step_graph["expected"],
+            "interval_bytes": first_step_graph,
+            "persistent_bytes": persistent_bytes,
+            "workspace_peak_contribution_bytes": workspace_peaks["expected"],
         },
         {
             "phase": "steady_state_graph",
             "peak_bytes": graph_phase_peak,
-            "interval_bytes": {
-                "lower": lower_graph_phase_peak,
-                "expected": graph_phase_peak,
-                "upper": upper_graph_phase_peak,
-            },
-            "persistent_bytes": (
-                parameter_bytes
-                + buffer_bytes
-                + input_bytes
-                + int(optimizer_state["total_bytes"])
-            ),
-            "workspace_peak_contribution_bytes": int(
-                workspace_estimate["effective_peak_contribution_bytes"]
-            ),
+            "interval_bytes": steady_graph,
+            "persistent_bytes": persistent_bytes + state_bytes,
+            "workspace_peak_contribution_bytes": workspace_peaks["expected"],
         },
     ]
     if optimizer_phase_peak is not None:
@@ -466,15 +406,8 @@ def estimate_module_memory(
                     "expected": optimizer_phase_peak,
                     "upper": optimizer_phase_peak,
                 },
-                "persistent_bytes": (
-                    parameter_bytes
-                    + buffer_bytes
-                    + input_bytes
-                    + int(optimizer_state["total_bytes"])
-                ),
-                "optimizer_temporary_bytes": int(
-                    optimizer_temporary["total_bytes"]
-                ),
+                "persistent_bytes": persistent_bytes + state_bytes,
+                "optimizer_temporary_bytes": optimizer_temporary["total_bytes"],
             }
         )
 
@@ -487,10 +420,7 @@ def estimate_module_memory(
         unmodeled_components.append(
             "target_device_specific_operator_lowering_during_cpu_fake_trace"
         )
-    if any(
-        str(profile.get("confidence", "")).startswith("extrapolated_")
-        for profile in workspace_estimate["profiles"]
-    ):
+    if workspace_estimate["extrapolated_profile_count"]:
         unmodeled_components.append("workspace_profile_shape_extrapolation")
     if normalized_mode == "training" and normalized_optimizer != "none":
         unmodeled_components.append("optimizer_fused_or_foreach_extra_temporaries")
@@ -521,39 +451,27 @@ def estimate_module_memory(
         "frozen_parameter_bytes": frozen_parameter_bytes,
         "buffer_bytes": buffer_bytes,
         "input_bytes": input_bytes,
-        "graph_peak_live_bytes": int(graph["peak_live_bytes"]),
-        "post_graph_live_bytes": int(graph["final_live_bytes"]),
+        "graph_peak_live_bytes": graph_peak,
+        "post_graph_live_bytes": graph["final_live_bytes"],
         "optimizer_state": optimizer_state,
-        "optimizer_state_bytes": int(optimizer_state["total_bytes"]),
+        "optimizer_state_bytes": state_bytes,
         "optimizer_temporary": optimizer_temporary,
-        "optimizer_temporary_bytes": int(optimizer_temporary["total_bytes"]),
-        "first_step_graph_phase_peak_bytes": first_step_graph_phase_peak,
+        "optimizer_temporary_bytes": optimizer_temporary["total_bytes"],
+        "first_step_graph_phase_peak_bytes": first_step_graph["expected"],
         "graph_phase_peak_bytes": graph_phase_peak,
-        "graph_phase_peak_interval_bytes": {
-            "lower": lower_graph_phase_peak,
-            "expected": graph_phase_peak,
-            "upper": upper_graph_phase_peak,
-        },
+        "graph_phase_peak_interval_bytes": dict(steady_graph),
         "optimizer_phase_peak_bytes": optimizer_phase_peak,
         "first_step_estimated_peak_bytes": first_step_estimated_peak,
-        "first_step_estimated_peak_interval_bytes": {
-            "lower": lower_first_step_estimated_peak,
-            "expected": first_step_estimated_peak,
-            "upper": upper_first_step_estimated_peak,
-        },
+        "first_step_estimated_peak_interval_bytes": first_step_estimated,
         "steady_state_estimated_peak_bytes": estimated_peak,
         "peak_phase": peak_phase,
         "workspace_estimate": workspace_estimate,
-        "workspace_estimate_bytes": int(workspace_estimate["total_bytes"]),
-        "workspace_peak_contribution_bytes": int(
-            workspace_estimate["effective_peak_contribution_bytes"]
-        ),
+        "workspace_estimate_bytes": workspace_estimate["total_bytes"],
+        "workspace_peak_contribution_bytes": workspace_peaks["expected"],
         "estimated_peak_bytes": estimated_peak,
         "estimated_peak_interval_bytes": {
-            "lower": lower_estimated_peak,
-            "expected": estimated_peak,
-            "upper": upper_estimated_peak,
-            "upper_bound_complete": upper_estimated_peak is not None,
+            **estimated,
+            "upper_bound_complete": estimated["upper"] is not None,
             "source": "graph_liveness_plus_workspace_interval",
         },
         "memory_timeline": {
@@ -606,7 +524,7 @@ def analyze_graph_memory(
 
     nodes = list(graph_module.graph.nodes)
     node_index = {node: index for index, node in enumerate(nodes)}
-    node_storages: dict[Any, set[int]] = {}
+    node_storages: dict[Any, dict[int, None]] = {}
     storage_records: dict[int, dict[str, Any]] = {}
     warnings: list[str] = []
     categories = list(placeholder_categories or [])
@@ -623,7 +541,7 @@ def analyze_graph_memory(
         elif node.op == "get_attr":
             category = "constant"
 
-        keys: set[int] = set()
+        keys: dict[int, None] = {}
         for tensor in _iter_tensor_leaves(node.meta.get("val")):
             try:
                 key, nbytes = _tensor_storage_identity(tensor)
@@ -632,7 +550,7 @@ def analyze_graph_memory(
                 continue
             if nbytes <= 0:
                 continue
-            keys.add(key)
+            keys[key] = None
             record = storage_records.get(key)
             if record is None:
                 storage_records[key] = {
@@ -644,8 +562,8 @@ def analyze_graph_memory(
                     "producer_target": _target_name(node.target),
                     "producer_index": node_index[node],
                     "last_use_index": node_index[node],
-                    "dtype": str(getattr(tensor, "dtype", "unknown")),
-                    "shape": _shape_list(getattr(tensor, "shape", ())),
+                    "dtype": str(tensor.dtype),
+                    "shape": _shape_list(tensor.shape),
                     "aliases": [node.name],
                 }
             else:
@@ -657,7 +575,7 @@ def analyze_graph_memory(
     for node in nodes:
         consumer_index = node_index[node]
         for referenced_node in _iter_node_references((node.args, node.kwargs), Node):
-            for key in node_storages.get(referenced_node, set()):
+            for key in node_storages.get(referenced_node, {}):
                 storage_records[key]["last_use_index"] = max(
                     int(storage_records[key]["last_use_index"]),
                     consumer_index,
@@ -671,7 +589,7 @@ def analyze_graph_memory(
     )
     output_keys: set[int] = set()
     for output_position, referenced_node in enumerate(output_references):
-        keys = node_storages.get(referenced_node, set())
+        keys = node_storages.get(referenced_node, {})
         output_keys.update(keys)
         output_category = (
             "gradient"
@@ -778,80 +696,27 @@ def analyze_graph_memory(
     )
 
     peak_node = nodes[peak_index] if nodes else None
-    category_bytes: dict[str, int] = {}
-    for key in peak_live_keys:
-        record = storage_records[key]
-        category = str(record.get("category") or "unknown")
-        category_bytes[category] = category_bytes.get(category, 0) + int(
-            record["bytes"]
-        )
-
-    final_category_bytes: dict[str, int] = {}
-    for key in final_live_keys:
-        record = storage_records[key]
-        category = str(record.get("category") or "unknown")
-        final_category_bytes[category] = final_category_bytes.get(category, 0) + int(
-            record["bytes"]
-        )
 
     gradient_phase: dict[str, Any] | None = None
     if gradient_phase_peak_index is not None:
-        gradient_phase_category_bytes: dict[str, int] = {}
-        for key in gradient_phase_peak_live_keys:
-            record = storage_records[key]
-            category = str(record.get("category") or "unknown")
-            gradient_phase_category_bytes[category] = gradient_phase_category_bytes.get(
-                category, 0
-            ) + int(record["bytes"])
-        gradient_phase_peak_node = nodes[gradient_phase_peak_index]
-        gradient_phase_start_node = nodes[gradient_phase_start_index]
         gradient_phase = {
-            "start_node": {
-                "index": gradient_phase_start_index,
-                "name": gradient_phase_start_node.name,
-                "op": gradient_phase_start_node.op,
-                "target": _target_name(gradient_phase_start_node.target),
-            },
+            "start_node": _node_summary(nodes, gradient_phase_start_index),
             "peak_live_bytes": gradient_phase_peak_bytes,
-            "peak_node": {
-                "index": gradient_phase_peak_index,
-                "name": gradient_phase_peak_node.name,
-                "op": gradient_phase_peak_node.op,
-                "target": _target_name(gradient_phase_peak_node.target),
-            },
-            "peak_bytes_by_category": dict(
-                sorted(gradient_phase_category_bytes.items())
+            "peak_node": _node_summary(nodes, gradient_phase_peak_index),
+            "peak_bytes_by_category": _category_bytes(
+                storage_records, gradient_phase_peak_live_keys
             ),
         }
 
     forward_phase: dict[str, Any] | None = None
-    if forward_phase_peak_index is not None and backward_phase_start_index is not None:
-        forward_phase_category_bytes: dict[str, int] = {}
-        for key in forward_phase_peak_live_keys:
-            record = storage_records[key]
-            category = str(record.get("category") or "unknown")
-            forward_phase_category_bytes[category] = forward_phase_category_bytes.get(
-                category, 0
-            ) + int(record["bytes"])
-        forward_phase_peak_node = nodes[forward_phase_peak_index]
-        backward_phase_start_node = nodes[backward_phase_start_index]
+    if forward_phase_peak_index is not None:
         forward_phase = {
             "method": "explicit_backward_operator_boundary",
-            "backward_start_node": {
-                "index": backward_phase_start_index,
-                "name": backward_phase_start_node.name,
-                "op": backward_phase_start_node.op,
-                "target": _target_name(backward_phase_start_node.target),
-            },
+            "backward_start_node": _node_summary(nodes, backward_phase_start_index),
             "peak_live_bytes": forward_phase_peak_bytes,
-            "peak_node": {
-                "index": forward_phase_peak_index,
-                "name": forward_phase_peak_node.name,
-                "op": forward_phase_peak_node.op,
-                "target": _target_name(forward_phase_peak_node.target),
-            },
-            "peak_bytes_by_category": dict(
-                sorted(forward_phase_category_bytes.items())
+            "peak_node": _node_summary(nodes, forward_phase_peak_index),
+            "peak_bytes_by_category": _category_bytes(
+                storage_records, forward_phase_peak_live_keys
             ),
         }
 
@@ -878,7 +743,7 @@ def analyze_graph_memory(
                     "dtype": storage_records[key]["dtype"],
                     "shape": storage_records[key]["shape"],
                 }
-                for key in sorted(node_storages.get(node, set()))
+                for key in node_storages.get(node, {})
             ],
         }
         for node in nodes
@@ -894,11 +759,7 @@ def analyze_graph_memory(
 
     return {
         "node_count": len(nodes),
-        "operator_count": sum(
-            1
-            for node in nodes
-            if node.op in {"call_function", "call_method", "call_module"}
-        ),
+        "operator_count": sum(operator_histogram.values()),
         "operator_histogram": dict(sorted(operator_histogram.items())),
         "unique_storage_count": len(storage_records),
         "alias_node_count": sum(
@@ -918,8 +779,8 @@ def analyze_graph_memory(
             "op": getattr(peak_node, "op", None),
             "target": _target_name(getattr(peak_node, "target", "")),
         },
-        "peak_bytes_by_category": dict(sorted(category_bytes.items())),
-        "final_bytes_by_category": dict(sorted(final_category_bytes.items())),
+        "peak_bytes_by_category": _category_bytes(storage_records, peak_live_keys),
+        "final_bytes_by_category": _category_bytes(storage_records, final_live_keys),
         "forward_phase": forward_phase,
         "gradient_production_phase": gradient_phase,
         "top_peak_storages": top_peak_storages,
@@ -927,6 +788,28 @@ def analyze_graph_memory(
         "retained_placeholder_storage_count": len(retained_keys),
         "graph_fingerprint": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
         "warnings": warnings,
+    }
+
+
+def _category_bytes(
+    storage_records: Mapping[int, Mapping[str, Any]],
+    keys: Iterable[int],
+) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for key in keys:
+        record = storage_records[key]
+        category = str(record.get("category") or "unknown")
+        totals[category] = totals.get(category, 0) + int(record["bytes"])
+    return dict(sorted(totals.items()))
+
+
+def _node_summary(nodes: Sequence[Any], index: int) -> dict[str, Any]:
+    node = nodes[index]
+    return {
+        "index": index,
+        "name": node.name,
+        "op": node.op,
+        "target": _target_name(node.target),
     }
 
 
@@ -1034,21 +917,25 @@ def _estimate_backend_workspace(
     unprofiled_workspace_calls: list[dict[str, Any]] = []
     # Load the catalog once for the whole graph instead of per node.
     workspace_catalog = load_workspace_profiles(workspace_profile_paths)
+    call_nodes = [
+        node
+        for node in graph_module.graph.nodes
+        if node.op in {"call_function", "call_method", "call_module"}
+    ]
+    gpu_profile = _resolve_gpu_profile(target_profile) if call_nodes else None
 
-    for node in graph_module.graph.nodes:
-        if node.op not in {"call_function", "call_method", "call_module"}:
-            continue
+    for node in call_nodes:
         target = _target_name(node.target)
         profile = _backend_workspace_profile(
             node,
             target,
             target_device=target_device,
-            target_profile=target_profile,
+            target_profile=gpu_profile,
             workspace_profiles=workspace_catalog,
         )
         if profile is not None:
-            profile.setdefault("lower_bytes", int(profile.get("bytes", 0) or 0))
-            profile.setdefault("upper_bytes", int(profile.get("bytes", 0) or 0))
+            profile.setdefault("lower_bytes", profile["bytes"])
+            profile.setdefault("upper_bytes", profile["bytes"])
             profile.setdefault("bound_kind", "point_estimate")
             profile.setdefault("declared_interval", False)
             profiles.append(profile)
@@ -1090,14 +977,11 @@ def _estimate_backend_workspace(
         "lifetime_model": "node_liveness.v1",
         "target_device": str(target_device),
         "target_profile": target_profile,
-        "catalog": workspace_profile_summary(workspace_profile_paths),
+        "catalog": _catalog_summary(workspace_catalog),
         **summary,
         "profiles": profiles,
         "profiled_operator_count": len(profiles),
-        "extrapolated_profile_count": sum(
-            str(profile.get("confidence", "")).startswith("extrapolated_")
-            for profile in profiles
-        ),
+        "extrapolated_profile_count": coverage["extrapolated_operator_count"],
         "graph_modeled_attention_operators": dict(
             sorted(graph_modeled_attention_operators.items())
         ),
@@ -1198,7 +1082,7 @@ def _backend_workspace_profile(
     target: str,
     *,
     target_device: Any,
-    target_profile: str | None = None,
+    target_profile: str | GpuProfile | None = None,
     workspace_profiles: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     external = match_workspace_profile(
@@ -1221,42 +1105,14 @@ def _backend_workspace_profile(
     if query is None:
         return None
 
-    if "_scaled_dot_product_flash_attention_backward" in target:
-        workspace_bytes, sequence_length, sequence_tiles = (
-            _flash_attention_workspace_bytes(query, sequence_dimension=2)
-        )
-        if workspace_bytes <= 0:
-            return None
-        return {
-            "operator": target,
-            "node": node.name,
-            "profile": "cuda_flash_attention_backward_auxiliary.v1",
-            "kind": "backend_saved_or_workspace_storage",
-            "lifetime": "graph_phase_persistent",
-            "query_shape": _shape_list(query.shape),
-            "query_dtype": str(query.dtype),
-            "sequence_length": sequence_length,
-            "sequence_tile_size": 64,
-            "sequence_tile_count": sequence_tiles,
-            "bytes": workspace_bytes,
-            "confidence": _flash_attention_profile_confidence(
-                query,
-                sequence_dimension=2,
-                scaled_operator=True,
-            ),
-            "validated_envelope": {
-                "compute_capabilities": ["8.6", "12.0"],
-                "batch_size": [2, 4],
-                "sequence_length": [64, 128],
-                "attention_heads": [4, 4],
-                "head_dimension": [32, 32],
-                "dtype": "torch.bfloat16",
-            },
-        }
-
     if "_flash_attention_backward" in target:
+        scaled = "_scaled_dot_product_flash_attention_backward" in target
+        sequence_dimension = 2 if scaled else 1
         workspace_bytes, sequence_length, sequence_tiles = (
-            _flash_attention_workspace_bytes(query, sequence_dimension=1)
+            _flash_attention_workspace_bytes(
+                query,
+                sequence_dimension=sequence_dimension,
+            )
         )
         if workspace_bytes <= 0:
             return None
@@ -1274,13 +1130,24 @@ def _backend_workspace_profile(
             "bytes": workspace_bytes,
             "confidence": _flash_attention_profile_confidence(
                 query,
-                sequence_dimension=1,
-                scaled_operator=False,
+                sequence_dimension=sequence_dimension,
+                scaled_operator=scaled,
             ),
-            "validated_envelope": {
-                "source_profile": "scaled_dot_product_flash_attention_backward",
-                "compute_capabilities": ["8.6", "12.0"],
-            },
+            "validated_envelope": (
+                {
+                    "compute_capabilities": ["8.6", "12.0"],
+                    "batch_size": [2, 4],
+                    "sequence_length": [64, 128],
+                    "attention_heads": [4, 4],
+                    "head_dimension": [32, 32],
+                    "dtype": "torch.bfloat16",
+                }
+                if scaled
+                else {
+                    "source_profile": "scaled_dot_product_flash_attention_backward",
+                    "compute_capabilities": ["8.6", "12.0"],
+                }
+            ),
         }
 
     if (
@@ -1362,19 +1229,14 @@ def _workspace_peak_summary(
         allow_unknown=True,
     )
     unbounded_calls = [
-        {
-            "node": str(call.get("node") or ""),
-            "operator": str(call.get("operator") or ""),
-        }
+        {"node": call["node"], "operator": call["operator"]}
         for call in unprofiled_workspace_calls
         if call.get("upper_bytes") is None
     ]
     return {
         **expected,
-        "lower_total_bytes": int(lower["total_bytes"]),
-        "upper_total_bytes": (
-            int(upper["total_bytes"]) if upper is not None else None
-        ),
+        "lower_total_bytes": lower["total_bytes"],
+        "upper_total_bytes": upper["total_bytes"] if upper is not None else None,
         "interval": {
             "lower": lower,
             "expected": expected,
@@ -1399,13 +1261,10 @@ def _workspace_peak_for_values(
     unprofiled_workspace_calls: Sequence[Mapping[str, Any]],
     allow_unknown: bool = False,
 ) -> dict[str, Any] | None:
-    graph_peak_bytes = int(graph.get("peak_live_bytes", 0) or 0)
-    live_bytes_by_node = {
-        str(name): int(value)
-        for name, value in dict(graph.get("live_bytes_by_node") or {}).items()
-    }
+    graph_peak_bytes = graph["peak_live_bytes"]
+    live_bytes_by_node = graph["live_bytes_by_node"]
     persistent_bytes = sum(
-        int(profile.get(value_field, profile.get("bytes", 0)) or 0)
+        profile.get(value_field, profile["bytes"])
         for profile in profiles
         if profile.get("lifetime") == "graph_phase_persistent"
     )
@@ -1413,9 +1272,9 @@ def _workspace_peak_for_values(
     for profile in profiles:
         if profile.get("lifetime") != "operator_local":
             continue
-        node = str(profile.get("node") or "")
-        local_bytes_by_node[node] = local_bytes_by_node.get(node, 0) + int(
-            profile.get(value_field, profile.get("bytes", 0)) or 0
+        node = profile["node"]
+        local_bytes_by_node[node] = local_bytes_by_node.get(node, 0) + profile.get(
+            value_field, profile["bytes"]
         )
     for call in unprofiled_workspace_calls:
         raw_value = call.get(value_field)
@@ -1423,17 +1282,15 @@ def _workspace_peak_for_values(
             if allow_unknown:
                 return None
             raw_value = 0
-        node = str(call.get("node") or "")
-        local_bytes_by_node[node] = local_bytes_by_node.get(node, 0) + int(
-            raw_value
-        )
+        node = call["node"]
+        local_bytes_by_node[node] = local_bytes_by_node.get(node, 0) + raw_value
 
-    peak_node = str((graph.get("peak_node") or {}).get("name") or "")
+    peak_node = graph["peak_node"]["name"] or ""
     peak_graph_live_bytes = graph_peak_bytes
     peak_operator_workspace_bytes = 0
     combined_peak_bytes = graph_peak_bytes + persistent_bytes
     for node, operator_workspace_bytes in local_bytes_by_node.items():
-        graph_live_bytes = int(live_bytes_by_node.get(node, 0))
+        graph_live_bytes = live_bytes_by_node.get(node, 0)
         candidate = graph_live_bytes + persistent_bytes + operator_workspace_bytes
         if candidate > combined_peak_bytes:
             combined_peak_bytes = candidate
@@ -1442,8 +1299,7 @@ def _workspace_peak_for_values(
             peak_operator_workspace_bytes = operator_workspace_bytes
 
     profiled_bytes_sum = sum(
-        int(profile.get(value_field, profile.get("bytes", 0)) or 0)
-        for profile in profiles
+        profile.get(value_field, profile["bytes"]) for profile in profiles
     )
     unprofiled_bytes_sum = sum(
         int(call.get(value_field, 0) or 0)
@@ -1473,9 +1329,7 @@ def _unprofiled_workspace_call(
     *,
     upper_bound_bytes: int | None,
 ) -> dict[str, Any]:
-    input_tensors: list[Any] = []
-    for referenced in _iter_node_references((node.args, node.kwargs), type(node)):
-        input_tensors.extend(_iter_tensor_leaves(referenced.meta.get("val")))
+    input_tensors = _node_input_tensors(node)
     output_tensors = list(_iter_tensor_leaves(node.meta.get("val")))
     return {
         "node": str(node.name),
@@ -1631,10 +1485,9 @@ def _default_loss(output: Any) -> Any:
 
 def _fakegpu_saved_tensor_tracking_suspended():
     torch_patch = sys.modules.get("fakegpu.torch_patch")
-    suspend = getattr(torch_patch, "_suspend_autograd_saved_tensor_tracking", None)
-    if callable(suspend):
-        return suspend()
-    return contextlib.nullcontext()
+    if torch_patch is None:
+        return contextlib.nullcontext()
+    return torch_patch._suspend_autograd_saved_tensor_tracking()
 
 
 def _resolve_trace_device(
@@ -1671,10 +1524,7 @@ def _resolve_trace_device(
 
 
 def _torch_has_cuda_build(torch: Any) -> bool:
-    compiled_flag = getattr(getattr(torch, "_C", None), "_has_cuda", None)
-    if compiled_flag is not None:
-        return bool(compiled_flag)
-    return bool(getattr(torch.version, "cuda", None))
+    return bool(torch._C._has_cuda)
 
 
 def _resolve_trace_execution_device(torch: Any, target_device: Any) -> Any:
@@ -1728,7 +1578,7 @@ def _trace_with_fake_device(
                 )
 
             storage = value.untyped_storage()
-            storage_key = int(getattr(storage, "_cdata", id(storage)))
+            storage_key = storage._cdata
             byte_base = byte_storage_bases.get(storage_key)
             if byte_base is None:
                 storage_bytes = int(storage.nbytes())
@@ -1789,17 +1639,13 @@ def _iter_node_references(value: Any, node_type: type[Any]):
 
 def _tensor_storage_identity(tensor: Any) -> tuple[int, int]:
     storage = tensor.untyped_storage()
-    storage_key = int(getattr(storage, "_cdata", id(storage)))
-    return storage_key, int(storage.nbytes())
+    return storage._cdata, int(storage.nbytes())
 
 
 def _unique_tensor_storages(tensors: Iterable[Any]) -> list[tuple[int, int, Any]]:
     unique: dict[int, tuple[int, int, Any]] = {}
     for tensor in tensors:
-        try:
-            key, nbytes = _tensor_storage_identity(tensor)
-        except Exception:
-            continue
+        key, nbytes = _tensor_storage_identity(tensor)
         if nbytes <= 0:
             continue
         current = unique.get(key)
@@ -1813,10 +1659,6 @@ def _unique_tensors_by_identity(tensors: Iterable[Any]) -> list[Any]:
     for tensor in tensors:
         unique.setdefault(id(tensor), tensor)
     return list(unique.values())
-
-
-def _tensor_logical_bytes(tensor: Any) -> int:
-    return int(tensor.numel()) * int(tensor.element_size())
 
 
 def _unique_tensor_storage_bytes(tensors: Iterable[Any]) -> int:

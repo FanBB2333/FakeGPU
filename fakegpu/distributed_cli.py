@@ -39,27 +39,16 @@ def parse_ranks(value: str) -> list[int]:
         part = raw_part.strip()
         if not part:
             raise argparse.ArgumentTypeError("rank list contains an empty item")
-        if "-" in part:
-            start_text, separator, end_text = part.partition("-")
-            if (
-                separator != "-"
-                or not start_text.isdigit()
-                or not end_text.isdigit()
-            ):
-                raise argparse.ArgumentTypeError(
-                    "expected ranks such as 0,2,3 or 0-3"
-                )
-            start = int(start_text)
-            end = int(end_text)
-            if end < start:
-                raise argparse.ArgumentTypeError("rank ranges must be ascending")
-            ranks.extend(range(start, end + 1))
-        elif part.isdigit():
-            ranks.append(int(part))
-        else:
+        start_text, separator, end_text = part.partition("-")
+        if not start_text.isdigit() or (separator and not end_text.isdigit()):
             raise argparse.ArgumentTypeError(
                 "expected ranks such as 0,2,3 or 0-3"
             )
+        start = int(start_text)
+        end = int(end_text) if separator else start
+        if end < start:
+            raise argparse.ArgumentTypeError("rank ranges must be ascending")
+        ranks.extend(range(start, end + 1))
     if len(set(ranks)) != len(ranks):
         raise argparse.ArgumentTypeError("rank list contains duplicates")
     return ranks
@@ -98,9 +87,31 @@ def _coordinator_binary_path(native_dir: Path) -> Path:
     )
 
 
-def _clean_native_injection(env: dict[str, str]) -> None:
+def _set_path(env: dict[str, str], name: str, path: Path | None) -> None:
+    if path is not None:
+        env[name] = str(path.resolve())
+    else:
+        env.pop(name, None)
+
+
+def _tcp_simulation_env(endpoint: str, cluster_config: Path | None) -> dict[str, str]:
+    env = dict(os.environ)
     env.pop("LD_PRELOAD", None)
     env.pop("DYLD_INSERT_LIBRARIES", None)
+    env.update(
+        {
+            "FAKEGPU_MODE": "simulate",
+            "FAKEGPU_DIST_MODE": "simulate",
+            "FAKEGPU_COORDINATOR_TRANSPORT": "tcp",
+            "FAKEGPU_COORDINATOR_ADDR": endpoint,
+        }
+    )
+    _set_path(env, "FAKEGPU_CLUSTER_CONFIG", cluster_config)
+    return env
+
+
+def _coordinator_argv(coordinator: Path, listen: str) -> list[str]:
+    return [str(coordinator), "--transport", "tcp", "--address", listen]
 
 
 def _request_tcp(endpoint: str, request: str, timeout: float = 2.0) -> str:
@@ -300,32 +311,14 @@ def _coordinator_env(
     cluster_report: Path | None,
     cluster_markdown_report: Path | None = None,
 ) -> dict[str, str]:
-    env = dict(os.environ)
-    _clean_native_injection(env)
-    env.update(
-        {
-            "FAKEGPU_MODE": "simulate",
-            "FAKEGPU_DIST_MODE": "simulate",
-            "FAKEGPU_COORDINATOR_TRANSPORT": "tcp",
-            "FAKEGPU_COORDINATOR_ADDR": endpoint,
-        }
-    )
-    if cluster_config is not None:
-        env["FAKEGPU_CLUSTER_CONFIG"] = str(cluster_config.resolve())
-    else:
-        env.pop("FAKEGPU_CLUSTER_CONFIG", None)
-    if cluster_report is not None:
-        cluster_report.parent.mkdir(parents=True, exist_ok=True)
-        env["FAKEGPU_CLUSTER_REPORT_PATH"] = str(cluster_report.resolve())
-    else:
-        env.pop("FAKEGPU_CLUSTER_REPORT_PATH", None)
-    if cluster_markdown_report is not None:
-        cluster_markdown_report.parent.mkdir(parents=True, exist_ok=True)
-        env["FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH"] = str(
-            cluster_markdown_report.resolve()
-        )
-    else:
-        env.pop("FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH", None)
+    env = _tcp_simulation_env(endpoint, cluster_config)
+    for name, path in (
+        ("FAKEGPU_CLUSTER_REPORT_PATH", cluster_report),
+        ("FAKEGPU_CLUSTER_REPORT_MARKDOWN_PATH", cluster_markdown_report),
+    ):
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        _set_path(env, name, path)
     return env
 
 
@@ -378,8 +371,6 @@ def coordinator_main(argv: Sequence[str] | None = None) -> int:
                     "valid with --listen"
                 )
             endpoint = args.ping or args.shutdown
-            assert endpoint is not None
-            parse_tcp_endpoint(endpoint)
             request = "PING" if args.ping else "SHUTDOWN"
             response = _request_tcp(endpoint, request)
             if not response.startswith("OK "):
@@ -401,24 +392,13 @@ def coordinator_main(argv: Sequence[str] | None = None) -> int:
             cluster_report=args.report,
             cluster_markdown_report=args.markdown_report,
         )
-        os.execve(
-            str(coordinator),
-            [
-                str(coordinator),
-                "--transport",
-                "tcp",
-                "--address",
-                args.listen,
-            ],
-            env,
-        )
+        os.execve(str(coordinator), _coordinator_argv(coordinator, args.listen), env)
     except (
             argparse.ArgumentTypeError,
             OSError,
             ValueError,
            ) as exc:
         usage_error(parser, exc)
-    return 0
 
 
 def _worker_env(
@@ -427,24 +407,11 @@ def _worker_env(
     timeout_seconds: float,
     cluster_config: Path | None,
 ) -> dict[str, str]:
-    env = dict(os.environ)
-    _clean_native_injection(env)
-    env.update(
-        {
-            "FAKEGPU_MODE": "simulate",
-            "FAKEGPU_DIST_MODE": "simulate",
-            "FAKEGPU_COORDINATOR_TRANSPORT": "tcp",
-            "FAKEGPU_COORDINATOR_ADDR": endpoint,
-            "FAKEGPU_COORDINATOR_TIMEOUT_MS": str(
-                max(1, round(timeout_seconds * 1000))
-            ),
-            "FAKEGPU_STAGING_FORCE_SOCKET": "1",
-        }
+    env = _tcp_simulation_env(endpoint, cluster_config)
+    env["FAKEGPU_COORDINATOR_TIMEOUT_MS"] = str(
+        max(1, round(timeout_seconds * 1000))
     )
-    if cluster_config is not None:
-        env["FAKEGPU_CLUSTER_CONFIG"] = str(cluster_config.resolve())
-    else:
-        env.pop("FAKEGPU_CLUSTER_CONFIG", None)
+    env["FAKEGPU_STAGING_FORCE_SOCKET"] = "1"
     return env
 
 
@@ -518,23 +485,20 @@ def _run_workers(
             remaining = max(0.0, deadline - time.monotonic())
             try:
                 stdout, stderr = process.communicate(timeout=remaining)
+                problem = (
+                    f"exited with code {process.returncode}"
+                    if process.returncode != 0
+                    else ""
+                )
             except subprocess.TimeoutExpired:
                 process.kill()
                 stdout, stderr = process.communicate(timeout=5)
-                failures.append(
-                    f"rank {rank} exceeded {process_timeout:.1f}s\n"
-                    f"stdout:\n{stdout}\nstderr:\n{stderr}"
-                )
-                if report_path.is_file():
-                    reports.append(
-                        json.loads(report_path.read_text(encoding="utf-8"))
-                    )
-                continue
+                problem = f"exceeded {process_timeout:.1f}s"
             if report_path.is_file():
                 reports.append(json.loads(report_path.read_text(encoding="utf-8")))
-            if process.returncode != 0:
+            if problem:
                 failures.append(
-                    f"rank {rank} exited with code {process.returncode}\n"
+                    f"rank {rank} {problem}\n"
                     f"stdout:\n{stdout}\nstderr:\n{stderr}"
                 )
         if failures:
@@ -635,7 +599,9 @@ def _format_bytes(size: int) -> str:
     return f"{size} B"
 
 
-def _print_bandwidth_summary(report: dict[str, Any]) -> None:
+def _print_bandwidth_summary(
+    report: dict[str, Any], *, show_cluster_report: bool
+) -> None:
     status = str(report.get("status") or "error").lower()
     label = "PASS" if status == "success" else "FAIL"
     print(f"FakeGPU TCP bandwidth benchmark: {label}")
@@ -672,7 +638,8 @@ def _print_bandwidth_summary(report: dict[str, Any]) -> None:
                 f"{rank_report['algorithmic_bandwidth_gbps']:.3f} Gbit/s"
             )
     cluster_report = report.get("cluster_report")
-    if isinstance(cluster_report, dict):
+    # Without --cluster-report the report lives in a deleted temp directory.
+    if show_cluster_report and isinstance(cluster_report, dict):
         cluster = cluster_report.get("cluster")
         if isinstance(cluster, dict) and cluster.get("markdown_report_path"):
             print(
@@ -792,7 +759,9 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
         nccl_lib = _nccl_library_path(native_dir)
 
         if args.listen:
-            parse_tcp_endpoint(args.listen)
+            endpoint = _connect_endpoint_for_listen(args.listen)
+            listen_endpoint = args.listen
+            nodes = args.nodes
             if args.world_size is not None or args.ranks is not None:
                 parser.error(
                     "--world-size/--ranks are only used with --connect; "
@@ -801,7 +770,6 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
             world_size = args.nodes * args.ranks_per_node
             ranks = list(range(world_size))
             session = args.session or f"local-{secrets.token_hex(8)}"
-            connect_endpoint = _connect_endpoint_for_listen(args.listen)
 
             with tempfile.TemporaryDirectory(
                 prefix="fakegpu-tcp-bandwidth-"
@@ -837,13 +805,7 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
                 )
                 coordinator = _coordinator_binary_path(native_dir)
                 coordinator_process = subprocess.Popen(
-                    [
-                        str(coordinator),
-                        "--transport",
-                        "tcp",
-                        "--address",
-                        args.listen,
-                    ],
+                    _coordinator_argv(coordinator, args.listen),
                     env=_coordinator_env(
                         endpoint=args.listen,
                         cluster_config=cluster_config,
@@ -858,11 +820,11 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
                 )
                 try:
                     _wait_for_coordinator(
-                        connect_endpoint,
+                        endpoint,
                         coordinator_process,
                     )
                     rank_reports = _run_workers(
-                        endpoint=connect_endpoint,
+                        endpoint=endpoint,
                         ranks=ranks,
                         world_size=world_size,
                         session=session,
@@ -875,7 +837,7 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
                         cluster_config=cluster_config,
                     )
                     response = _request_tcp(
-                        connect_endpoint,
+                        endpoint,
                         "SHUTDOWN",
                         timeout=2.0,
                     )
@@ -897,26 +859,11 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
                         if cluster_report_path.is_file()
                         else None
                     )
-                    report = _aggregate_report(
-                        endpoint=connect_endpoint,
-                        listen_endpoint=args.listen,
-                        ranks=ranks,
-                        world_size=world_size,
-                        nodes=args.nodes,
-                        session=session,
-                        payload_bytes=args.payload_bytes,
-                        warmup=args.warmup,
-                        iterations=args.iterations,
-                        rank_reports=rank_reports,
-                        cluster_report=cluster_report,
-                    )
-                    if intra_node is not None:
-                        report["intra_node_fabric"] = intra_node
                 finally:
                     if coordinator_process.poll() is None:
                         try:
                             _request_tcp(
-                                connect_endpoint,
+                                endpoint,
                                 "SHUTDOWN",
                                 timeout=1.0,
                             )
@@ -940,14 +887,19 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
                 )
             if any(rank < 0 or rank >= args.world_size for rank in args.ranks):
                 parser.error("every rank must be within [0, world-size)")
+            endpoint = args.connect
+            listen_endpoint = None
+            nodes = None
             world_size = args.world_size
             ranks = args.ranks
             session = args.session
+            cluster_report = None
+            intra_node = None
             with tempfile.TemporaryDirectory(
                 prefix="fakegpu-tcp-bandwidth-client-"
             ) as temp_dir_text:
                 rank_reports = _run_workers(
-                    endpoint=args.connect,
+                    endpoint=endpoint,
                     ranks=ranks,
                     world_size=world_size,
                     session=session,
@@ -959,23 +911,28 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
                     report_dir=Path(temp_dir_text) / "ranks",
                     cluster_config=args.cluster_config,
                 )
-                report = _aggregate_report(
-                    endpoint=args.connect,
-                    listen_endpoint=None,
-                    ranks=ranks,
-                    world_size=world_size,
-                    nodes=None,
-                    session=session,
-                    payload_bytes=args.payload_bytes,
-                    warmup=args.warmup,
-                    iterations=args.iterations,
-                    rank_reports=rank_reports,
-                    cluster_report=None,
-                )
+
+        report = _aggregate_report(
+            endpoint=endpoint,
+            listen_endpoint=listen_endpoint,
+            ranks=ranks,
+            world_size=world_size,
+            nodes=nodes,
+            session=session,
+            payload_bytes=args.payload_bytes,
+            warmup=args.warmup,
+            iterations=args.iterations,
+            rank_reports=rank_reports,
+            cluster_report=cluster_report,
+        )
+        if intra_node is not None:
+            report["intra_node_fabric"] = intra_node
 
         if args.json_path:
             emit_json(args.json_path, report)
-        _print_bandwidth_summary(report)
+        _print_bandwidth_summary(
+            report, show_cluster_report=args.cluster_report is not None
+        )
         return 0
     except (
             argparse.ArgumentTypeError,

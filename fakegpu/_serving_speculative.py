@@ -132,28 +132,15 @@ def _select_larger_transient(
 
 def _speculative_report(
     *,
-    speculative: Mapping[str, Any] | None,
+    speculative: Mapping[str, Any],
     effective_proposal_tokens: Mapping[str, int],
-    target_kv_cache: Mapping[str, Any] | None,
-    draft_kv_cache: Mapping[str, Any] | None,
-    target_prefill_transient: Mapping[str, Any] | None,
-    draft_prefill_transient: Mapping[str, Any] | None,
-    target_verification_transient: Mapping[str, Any] | None,
-    draft_proposal_transient: Mapping[str, Any] | None,
+    target_kv_cache: Mapping[str, Any],
+    draft_kv_cache: Mapping[str, Any],
+    target_prefill_transient: Mapping[str, Any],
+    draft_prefill_transient: Mapping[str, Any],
+    target_verification_transient: Mapping[str, Any],
+    draft_proposal_transient: Mapping[str, Any],
 ) -> dict[str, Any]:
-    if speculative is None:
-        return {"enabled": False}
-    if (
-        target_kv_cache is None
-        or draft_kv_cache is None
-        or target_prefill_transient is None
-        or draft_prefill_transient is None
-        or target_verification_transient is None
-        or draft_proposal_transient is None
-    ):
-        raise ServingPlanError(
-            "incomplete speculative decoding memory components"
-        )
     effective_values = list(effective_proposal_tokens.values())
     configured_tokens = int(speculative["speculative_tokens"])
     target_parameter_bytes = int(speculative["target_parameter_bytes"])

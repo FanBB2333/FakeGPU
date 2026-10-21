@@ -58,55 +58,36 @@ def _resolve_profile_id() -> str | None:
     return None
 
 
-def _resolve_compute_capability() -> tuple[int, int]:
-    profile_id = _resolve_profile_id()
-    if profile_id and profile_id in _PROFILE_CC:
-        return _PROFILE_CC[profile_id]
-    return (8, 0)
-
-
-def _resolve_device_name() -> str:
-    name = os.environ.get("FAKEGPU_DEVICE_NAME", "")
-    if name:
-        return name
-    profile_id = _resolve_profile_id()
-    if profile_id:
-        return _PROFILE_NAMES.get(profile_id, "NVIDIA A100-SXM4-80GB")
-    return "NVIDIA A100-SXM4-80GB"
-
-
-def _resolve_total_memory() -> int:
-    profile_id = _resolve_profile_id()
-    if profile_id:
-        return _PROFILE_TOTAL_MEMORY.get(profile_id, 80 * 1024**3)
-    return 80 * 1024**3
-
-
 def _profile_entry(profile_id: str) -> dict[str, Any]:
     major, minor = _PROFILE_CC.get(profile_id, (8, 0))
+    profile = _PROFILE_CATALOG.get(profile_id)
     return {
         "profile_id": profile_id,
         "name": _PROFILE_NAMES.get(profile_id, "NVIDIA A100-SXM4-80GB"),
         "total_memory": _PROFILE_TOTAL_MEMORY.get(profile_id, 80 * 1024**3),
         "compute_major": major,
         "compute_minor": minor,
+        "sm_count": profile.sm_count if profile else 108,
+        "max_threads_per_multiprocessor": (
+            profile.max_threads_per_multiprocessor if profile else 2048
+        ),
+        "regs_per_block": profile.regs_per_block if profile else 65536,
+        "regs_per_multiprocessor": (
+            profile.regs_per_multiprocessor if profile else 65536
+        ),
     }
 
 
-def _resolve_per_device_profiles(
-    num_devices: int | None = None,
-) -> list[dict[str, Any]]:
+def _resolve_per_device_profiles(num_devices: int) -> list[dict[str, Any]]:
     """Resolve per-device profile info from FAKEGPU_PROFILES.
 
     Returns a list of dicts, one per device, each with keys:
-      'profile_id', 'name', 'total_memory', 'compute_major', 'compute_minor'
+      'profile_id', 'name', 'total_memory', 'compute_major', 'compute_minor',
+      'sm_count', 'max_threads_per_multiprocessor', 'regs_per_block',
+      'regs_per_multiprocessor'
     """
     profiles_env = os.environ.get("FAKEGPU_PROFILES", "")
-    target_count = int(
-        num_devices
-        if num_devices is not None
-        else os.environ.get("FAKEGPU_DEVICE_COUNT", "8")
-    )
+    target_count = int(num_devices)
     result: list[dict[str, Any]] = []
 
     if profiles_env:

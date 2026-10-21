@@ -10,7 +10,6 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timedelta
 import hashlib
-import json
 import statistics
 from typing import Any
 from uuid import UUID
@@ -20,20 +19,13 @@ from ._finetune_event_context import describe_root_events
 from ._finetune_events import SCHEMA_VERSION as EVENT_SCHEMA
 from .finetune_estimator import FinetuneEstimateError
 from .finetune_run_estimator import validate_native_run
+from .structured_io import canonical_json as _canonical, canonical_sha256 as _digest
 
 
 SCHEMA_VERSION = "fakegpu.finetune_window_estimate.v1"
 _DENSE_MODELS = {"llama", "mistral", "qwen2", "qwen3", "qwen3_5_text"}
 _MINIMUM_RUNS = 2
 _MINIMUM_SAMPLES = 2
-
-
-def _canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-
-
-def _digest(value: Any) -> str:
-    return hashlib.sha256(_canonical(value).encode()).hexdigest()
 
 
 def _run_identity(run: Mapping[str, Any]) -> dict[str, Any]:
@@ -61,6 +53,65 @@ def _run_identity(run: Mapping[str, Any]) -> dict[str, Any]:
     return deepcopy(dict(identity))
 
 
+def _require_calibration_runs(calibration_runs: Any, purpose: str) -> None:
+    if (
+        not isinstance(calibration_runs, Sequence)
+        or isinstance(calibration_runs, (str, bytes))
+        or len(calibration_runs) < _MINIMUM_RUNS
+    ):
+        raise FinetuneEstimateError(f"{purpose} calibration requires at least two runs")
+
+
+def _require_dense_model(model: Mapping[str, Any], purpose: str) -> None:
+    if model.get("model_type") not in _DENSE_MODELS or any(
+        model.get(field, 0)
+        for field in ("num_experts", "num_local_experts", "n_routed_experts")
+    ):
+        raise FinetuneEstimateError(
+            f"{purpose} calibration currently requires a dense model"
+        )
+
+
+def _require_comparable_runs(
+    calibrations: Sequence[Mapping[str, Any]], target: Mapping[str, Any], purpose: str
+) -> None:
+    runs = [*calibrations, target]
+    if len({run["identity"]["uuid"] for run in runs}) != len(runs):
+        raise FinetuneEstimateError("calibration and target require distinct run UUIDs")
+    if len({run["evidence_sha256"] for run in runs}) != len(runs):
+        raise FinetuneEstimateError(
+            "calibration and target contain duplicate timing evidence"
+        )
+    if any(run["signature"] != target["signature"] for run in calibrations):
+        raise FinetuneEstimateError(
+            f"{purpose} calibration signatures must match target model, data and execution"
+        )
+
+
+def _event_context(
+    latest: dict[str, Any], roots: Mapping[str, Any], update: Mapping[str, Any]
+) -> dict[str, Any]:
+    preceding = [roots[event_id] for event_id in update["preceding_event_ids"]]
+    if preceding:
+        boundary = {
+            "step": preceding[0]["optimizer_step"],
+            "events": [event["descriptor"] for event in preceding],
+        }
+        for event in preceding:
+            latest[event["descriptor"]["kind"]] = boundary
+    return {
+        kind: None
+        if boundary is None
+        else {
+            "events": boundary["events"],
+            "optimizer_updates_since_boundary": update["optimizer_step"]
+            - boundary["step"]
+            - 1,
+        }
+        for kind, boundary in latest.items()
+    }
+
+
 def _window_contexts(observation: Mapping[str, Any]):
     """Carry the latest event boundary for each kind into subsequent updates."""
     roots = {
@@ -69,25 +120,7 @@ def _window_contexts(observation: Mapping[str, Any]):
     }
     latest = {"evaluation": None, "checkpoint": None}
     for update in observation["updates"]:
-        preceding = [roots[event_id] for event_id in update["preceding_event_ids"]]
-        if preceding:
-            boundary = {
-                "step": preceding[0]["optimizer_step"],
-                "events": [event["descriptor"] for event in preceding],
-            }
-            for event in preceding:
-                latest[event["descriptor"]["kind"]] = boundary
-        yield {
-            kind: None
-            if boundary is None
-            else {
-                "events": boundary["events"],
-                "optimizer_updates_since_boundary": update["optimizer_step"]
-                - boundary["step"]
-                - 1,
-            }
-            for kind, boundary in latest.items()
-        }
+        yield _event_context(latest, roots, update)
 
 
 def _epoch_window_context(update: Mapping[str, Any]) -> dict[str, Any]:
@@ -130,14 +163,7 @@ def _samples(
             "window calibration does not support periodic evaluation or checkpointing; "
             "their effects on subsequent window state are not modeled"
         )
-    model = run["model_config"]
-    if model.get("model_type") not in _DENSE_MODELS or any(
-        model.get(field, 0)
-        for field in ("num_experts", "num_local_experts", "n_routed_experts")
-    ):
-        raise FinetuneEstimateError(
-            "window calibration currently requires a dense model"
-        )
+    _require_dense_model(run["model_config"], "window")
     identity = _run_identity(run)
     seen = set()
     groups = {}
@@ -260,12 +286,7 @@ def estimate_finetuning_windows(
         raise FinetuneEstimateError("event_context must be boolean")
     if not isinstance(epoch_context, bool):
         raise FinetuneEstimateError("epoch_context must be boolean")
-    if (
-        not isinstance(calibration_runs, Sequence)
-        or isinstance(calibration_runs, (str, bytes))
-        or len(calibration_runs) < _MINIMUM_RUNS
-    ):
-        raise FinetuneEstimateError("window calibration requires at least two runs")
+    _require_calibration_runs(calibration_runs, "window")
     calibrations = [
         _samples(run, event_context=event_context, epoch_context=epoch_context)
         for run in calibration_runs
@@ -273,17 +294,7 @@ def estimate_finetuning_windows(
     target = _samples(
         target_run, event_context=event_context, epoch_context=epoch_context
     )
-    runs = [*calibrations, target]
-    if len({run["identity"]["uuid"] for run in runs}) != len(runs):
-        raise FinetuneEstimateError("calibration and target require distinct run UUIDs")
-    if len({run["evidence_sha256"] for run in runs}) != len(runs):
-        raise FinetuneEstimateError(
-            "calibration and target contain duplicate timing evidence"
-        )
-    if any(run["signature"] != target["signature"] for run in calibrations):
-        raise FinetuneEstimateError(
-            "window calibration signatures must match target model, data and execution"
-        )
+    _require_comparable_runs(calibrations, target, "window")
     if event_context and any(
         run["hardware"] != target["hardware"] for run in calibrations
     ):
@@ -368,9 +379,33 @@ def estimate_finetuning_windows(
         }
         for update in target["trace"]
     ]
+    sampling_policy = {
+        "minimum_calibration_runs": _MINIMUM_RUNS,
+        "minimum_samples_per_window_per_run": _MINIMUM_SAMPLES,
+        "exclude_global_warmup": True,
+    }
+    if not (event_context or epoch_context):
+        sampling_policy["exclude_first_window_occurrence"] = True
+    sampling_policy["aggregation"] = "equal_weight_per_run_window_mean"
+    if event_context:
+        sampling_policy.update(
+            event_context="latest_complete_boundary_per_event_kind",
+            exclude_first_context_window_occurrence=True,
+        )
+    if epoch_context:
+        sampling_policy.update(
+            epoch_context="recorded_epoch_microsteps_per_batch",
+            exclude_first_context_window_occurrence=True,
+        )
+    scope = {
+        (False, False): "recorded_steady_optimizer_window_replay",
+        (True, False): "recorded_event_conditioned_optimizer_window_replay",
+        (False, True): "recorded_epoch_conditioned_optimizer_window_replay",
+        (True, True): "recorded_event_epoch_conditioned_optimizer_window_replay",
+    }[event_context, epoch_context]
     result = {
         "schema_version": SCHEMA_VERSION,
-        "scope": "recorded_steady_optimizer_window_replay",
+        "scope": scope,
         "signature": deepcopy(target["signature"]),
         "calibration_runs": [
             {
@@ -383,13 +418,7 @@ def estimate_finetuning_windows(
             key: deepcopy(target[key])
             for key in ("identity", "evidence_sha256", "sampling")
         },
-        "sampling_policy": {
-            "minimum_calibration_runs": _MINIMUM_RUNS,
-            "minimum_samples_per_window_per_run": _MINIMUM_SAMPLES,
-            "exclude_global_warmup": True,
-            "exclude_first_window_occurrence": True,
-            "aggregation": "equal_weight_per_run_window_mean",
-        },
+        "sampling_policy": sampling_policy,
         "coverage": {
             "target_window_groups": len(groups),
             "target_eligible_updates": target["sampling"]["eligible_updates"],
@@ -413,12 +442,6 @@ def estimate_finetuning_windows(
         ],
     }
     if event_context:
-        result["scope"] = "recorded_event_conditioned_optimizer_window_replay"
-        del result["sampling_policy"]["exclude_first_window_occurrence"]
-        result["sampling_policy"].update(
-            event_context="latest_complete_boundary_per_event_kind",
-            exclude_first_context_window_occurrence=True,
-        )
         result["limitations"].extend(
             [
                 "Event context retains the latest complete ordered boundary containing each event kind and the number of optimizer updates since it; it does not prove that older events, cache state or system load have no remaining effect.",
@@ -426,17 +449,6 @@ def estimate_finetuning_windows(
             ]
         )
     if epoch_context:
-        result["scope"] = (
-            "recorded_event_epoch_conditioned_optimizer_window_replay"
-            if event_context
-            else "recorded_epoch_conditioned_optimizer_window_replay"
-        )
-        if not event_context:
-            del result["sampling_policy"]["exclude_first_window_occurrence"]
-        result["sampling_policy"].update(
-            epoch_context="recorded_epoch_microsteps_per_batch",
-            exclude_first_context_window_occurrence=True,
-        )
         result["limitations"].append(
             "Epoch context uses each batch's recorded one-based microstep within its epoch; it does not include absolute epoch number or infer future epoch boundaries. Matching positions does not establish the cause of timing differences or control sampler, cache and system state."
         )

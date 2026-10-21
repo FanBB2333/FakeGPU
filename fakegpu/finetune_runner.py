@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager, ExitStack
 from datetime import datetime, timezone
-import importlib.metadata
 import hashlib
 import json
 import math
@@ -21,9 +20,17 @@ from uuid import uuid4
 
 from ._calibration_cuda import _reject_simulated_cuda_environment
 from ._finetune_allocator import capture_memory_allocator
-from ._finetune_batches import summarize_batch_updates, validate_batch_profile
+from ._finetune_batches import (
+    SCHEMA_VERSION as BATCH_SCHEMA,
+    summarize_batch_updates,
+    validate_batch_profile,
+)
 from ._finetune_cache import capture_cache_regime
-from ._finetune_events import summarize_phase_events, validate_event_profile
+from ._finetune_events import (
+    SCHEMA_VERSION as EVENT_SCHEMA,
+    summarize_phase_events,
+    validate_event_profile,
+)
 from ._finetune_model import (
     actual_training_config as _actual_training_config,
     native_config_signature as _execution_signature,
@@ -38,7 +45,7 @@ from ._local_checkpoint import bind_local_checkpoint
 from .finetune_config import normalize_finetune_config
 from .finetune_data import profile_tokenized_records
 from .finetune_estimator import finetune_workload_signature
-from .finetune_probe import installed_training_versions
+from .finetune_probe import _package_versions, installed_training_versions
 from .profile_catalog import get_profile
 from .structured_io import load_mapping
 
@@ -68,18 +75,16 @@ def native_training_versions(framework: str) -> dict[str, str]:
         raise ValueError(
             "native framework must be huggingface, llamafactory or axolotl"
         )
-    versions = installed_training_versions()
     packages = (
         ("datasets", "trl")
         if framework == "huggingface"
         else (framework, "datasets", "trl")
     )
-    for package in packages:
-        try:
-            versions[package] = importlib.metadata.version(package)
-        except importlib.metadata.PackageNotFoundError:
-            versions[package] = "not-installed"
-    return versions
+    return installed_training_versions() | _package_versions(packages)
+
+
+def _enum_value(value):
+    return getattr(value, "value", value)
 
 
 def _prepare_config(
@@ -170,9 +175,7 @@ def _prepare_config(
     output = raw.get("output_dir")
     if not isinstance(output, str) or not output:
         raise ValueError("native runner requires an explicit output_dir")
-    output_dir = Path(output).expanduser()
-    if not output_dir.is_absolute():
-        output_dir = path.parent / output_dir
+    output_dir = path.parent / Path(output).expanduser()
     if output_dir.resolve() == model_dir:
         raise ValueError("output_dir must differ from the source checkpoint")
     if output_dir.exists() and any(output_dir.iterdir()):
@@ -216,24 +219,35 @@ def _invoke_native(framework, config_path, raw):
         do_train(load_cfg(str(config_path)), TrainerCliArgs())
 
 
-def run_finetuning(
-    config_path: str | Path,
-    *,
-    framework: str,
-    profile_id: str,
-    warmup_steps: int = 2,
-    cache_regime: str = "uncontrolled",
-    planning_epochs: float | None = None,
-    planning_max_steps: int | None = None,
-    length_grouping_seed: int | None = None,
-    packing_seed: int | None = None,
-) -> dict[str, Any]:
-    """Run native SFT; return evidence only after successful finite GPU updates.
+def _native_schedule(trainer):
+    args = trainer.args
+    schedule = {
+        key: _enum_value(getattr(args, key))
+        for key in ("eval_strategy", "save_strategy")
+    }
+    schedule.update(
+        requested_eval_steps=args.eval_steps,
+        requested_save_steps=args.save_steps,
+        resolved_eval_steps=trainer.state.eval_steps,
+        logging_strategy=_enum_value(args.logging_strategy),
+        requested_logging_steps=args.logging_steps,
+        resolved_logging_steps=trainer.state.logging_steps,
+        logging_first_step=args.logging_first_step,
+        resolved_save_steps=trainer.state.save_steps,
+        eval_on_start=args.eval_on_start,
+        eval_delay=args.eval_delay,
+        save_only_model=args.save_only_model,
+        save_total_limit=args.save_total_limit,
+        load_best_model_at_end=args.load_best_model_at_end,
+        max_steps=trainer.state.max_steps,
+        num_train_epochs=args.num_train_epochs,
+    )
+    return schedule
 
-    Use a fresh process/environment for each framework. No config field changes
-    the configured training duration; warmup_steps excludes initial updates only
-    from steady timing samples, independently of the native LR warmup setting.
-    """
+
+def _validate_horizon(
+    planning_epochs, planning_max_steps, length_grouping_seed, packing_seed
+):
     if planning_epochs is not None and planning_max_steps is not None:
         raise ValueError("provide only one planning duration")
     if packing_seed is not None:
@@ -269,6 +283,30 @@ def run_finetuning(
         validate_length_grouping_seed(length_grouping_seed)
         if not planning:
             raise ValueError("length_grouping_seed requires a planning horizon")
+    return planning
+
+
+def run_finetuning(
+    config_path: str | Path,
+    *,
+    framework: str,
+    profile_id: str,
+    warmup_steps: int = 2,
+    cache_regime: str = "uncontrolled",
+    planning_epochs: float | None = None,
+    planning_max_steps: int | None = None,
+    length_grouping_seed: int | None = None,
+    packing_seed: int | None = None,
+) -> dict[str, Any]:
+    """Run native SFT; return evidence only after successful finite GPU updates.
+
+    Use a fresh process/environment for each framework. No config field changes
+    the configured training duration; warmup_steps excludes initial updates only
+    from steady timing samples, independently of the native LR warmup setting.
+    """
+    planning = _validate_horizon(
+        planning_epochs, planning_max_steps, length_grouping_seed, packing_seed
+    )
     started = time.perf_counter()
     cache_evidence = capture_cache_regime(cache_regime)
     run_identity = {
@@ -277,14 +315,9 @@ def run_finetuning(
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     path = Path(config_path).expanduser().resolve()
-    if packing_seed is None:
-        raw, config, model_config, model_dir = _prepare_config(
-            path, framework, warmup_steps
-        )
-    else:
-        raw, config, model_config, model_dir = _prepare_config(
-            path, framework, warmup_steps, packed_reference=True
-        )
+    raw, config, model_config, model_dir = _prepare_config(
+        path, framework, warmup_steps, packed_reference=packing_seed is not None
+    )
     if planning:
         from .finetune_pipeline_plan import _validate_native_schedule_options
 
@@ -321,22 +354,25 @@ def run_finetuning(
         hash_seconds = time.perf_counter() - hash_started
         config["software_versions"] = native_training_versions(framework)
         config["native_execution_signature"] = _execution_signature(raw)
-        config["batch_observation_version"] = "fakegpu.finetune_batches.v1"
-        config["event_observation_version"] = "fakegpu.finetune_events.v1"
+        config["batch_observation_version"] = BATCH_SCHEMA
+        config["event_observation_version"] = EVENT_SCHEMA
         config["timeline_observation_version"] = TIMELINE_SCHEMA
         if planning:
-            from ._finetune_sampler import LENGTH_SCHEMA_VERSION, SCHEMA_VERSION
+            from ._finetune_sampler import (
+                LENGTH_SCHEMA_VERSION,
+                PACKED_SCHEMA_VERSION,
+                SCHEMA_VERSION,
+            )
 
             config["sampler_observation_version"] = (
-                LENGTH_SCHEMA_VERSION
+                PACKED_SCHEMA_VERSION
+                if packing_seed is not None
+                else LENGTH_SCHEMA_VERSION
                 if length_grouping_seed is not None
                 else SCHEMA_VERSION
             )
-            if packing_seed is not None:
-                from ._finetune_sampler import PACKED_SCHEMA_VERSION
-
-                config["sampler_observation_version"] = PACKED_SCHEMA_VERSION
-                config["packing_seed"] = packing_seed
+        if packing_seed is not None:
+            config["packing_seed"] = packing_seed
         if length_grouping_seed is not None:
             config["length_grouping_seed"] = length_grouping_seed
         state = {}
@@ -347,9 +383,7 @@ def run_finetuning(
                 from ._finetune_packed_sampler import install_packed_random_sampling
                 from ._finetune_segments import isolated_qwen35_segments
 
-                strategy = getattr(
-                    trainer.args.eval_strategy, "value", trainer.args.eval_strategy
-                )
+                strategy = _enum_value(trainer.args.eval_strategy)
                 if (
                     strategy != "no"
                     or trainer.args.do_eval
@@ -493,6 +527,7 @@ def run_finetuning(
                 observer.trainer, config
             )
         measured = [update for update in observer.updates if not update["warmup"]]
+        warmup = [update for update in observer.updates if update["warmup"]]
         if len(measured) < 2 or not math.isfinite(
             float(observer.outcome.training_loss)
         ):
@@ -530,9 +565,7 @@ def run_finetuning(
             "batch_instrumentation_seconds": observer.batch_instrumentation_seconds,
             "event_instrumentation_seconds": observer.event_instrumentation_seconds,
             "checkpoint_hash_seconds": hash_seconds,
-            "warmup_training_seconds": sum(
-                update["seconds"] for update in observer.updates if update["warmup"]
-            ),
+            "warmup_training_seconds": sum(update["seconds"] for update in warmup),
             "eventcounts": {
                 key: observer.events[key] for key in ("evaluation", "checkpoint")
             },
@@ -583,11 +616,7 @@ def run_finetuning(
                 "microsteps": observer.microsteps,
                 "warmup_optimizer_steps": warmup_steps,
                 "measured_optimizer_steps": len(measured),
-                "warmup_microsteps": sum(
-                    update["microsteps"]
-                    for update in observer.updates
-                    if update["warmup"]
-                ),
+                "warmup_microsteps": sum(update["microsteps"] for update in warmup),
                 "measured_microsteps": sum(update["microsteps"] for update in measured),
                 "shape_counts": shape_counts,
                 "fixed_shape": fixed_shape,
@@ -625,30 +654,7 @@ def run_finetuning(
             run_end_seconds=finished - started,
         )
         validate_native_timeline(observation, timing=timing)
-        args = observer.trainer.args
-        schedule = {
-            key: getattr(getattr(args, key, "no"), "value", getattr(args, key, "no"))
-            for key in ("eval_strategy", "save_strategy")
-        }
-        schedule.update(
-            requested_eval_steps=args.eval_steps,
-            requested_save_steps=args.save_steps,
-            resolved_eval_steps=observer.trainer.state.eval_steps,
-            logging_strategy=getattr(
-                args.logging_strategy, "value", args.logging_strategy
-            ),
-            requested_logging_steps=args.logging_steps,
-            resolved_logging_steps=observer.trainer.state.logging_steps,
-            logging_first_step=args.logging_first_step,
-            resolved_save_steps=observer.trainer.state.save_steps,
-            eval_on_start=args.eval_on_start,
-            eval_delay=args.eval_delay,
-            save_only_model=args.save_only_model,
-            save_total_limit=args.save_total_limit,
-            load_best_model_at_end=args.load_best_model_at_end,
-            max_steps=observer.trainer.state.max_steps,
-            num_train_epochs=args.num_train_epochs,
-        )
+        schedule = _native_schedule(observer.trainer)
         return {
             "schema_version": "fakegpu.finetune_run.v1",
             "run_identity": run_identity,

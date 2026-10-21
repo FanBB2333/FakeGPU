@@ -186,6 +186,54 @@ int main() {
     }
 
     // -------------------------
+    // Test 1b: k=0 GEMM scales C by beta; A and B are never read, so padded
+    // leading dimensions must not be checked against their allocations.
+    // -------------------------
+    {
+        const int m = 2;
+        const int n = 2;
+        const float alpha = 1.0f;
+        const float beta = 2.0f;
+        const std::vector<float> hC = {1.0f, 2.0f, 3.0f, 4.0f};
+        const std::vector<float> expected = {2.0f, 4.0f, 6.0f, 8.0f};
+
+        float *dA = nullptr, *dB = nullptr, *dC = nullptr;
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dA), 4 * sizeof(float)), "cudaMalloc A");
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dB), 4 * sizeof(float)), "cudaMalloc B");
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dC), hC.size() * sizeof(float)), "cudaMalloc C");
+
+        cublasHandle_t handle = nullptr;
+        check_cublas(cublasCreate_v2(&handle), "cublasCreate_v2");
+        for (int variant = 0; variant < 2; ++variant) {
+            check_cuda(cudaMemcpy(dC, hC.data(), hC.size() * sizeof(float), cudaMemcpyHostToDevice), "H2D C");
+            if (variant == 0) {
+                check_cublas(
+                    cublasSgemm_v2(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, 0, &alpha, dA, 4, dB, 1, &beta, dC, m),
+                    "cublasSgemm_v2 k=0"
+                );
+            } else {
+                check_cublas(
+                    cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_T, m, n, 0, &alpha, dA, 0, m, dB, 0, 4, &beta,
+                                 dC, 0, m, 0, CUBLAS_GEMM_DEFAULT),
+                    "cublasGemmEx k=0"
+                );
+            }
+            std::vector<float> got(hC.size());
+            check_cuda(cudaMemcpy(got.data(), dC, got.size() * sizeof(float), cudaMemcpyDeviceToHost), "D2H C");
+            if (!allclose(got, expected, 0.0f, 0.0f)) {
+                std::fprintf(stderr, "Test1b failed: k=0 GEMM variant %d mismatch\n", variant);
+                return 1;
+            }
+        }
+
+        check_cublas(cublasDestroy_v2(handle), "cublasDestroy_v2");
+        check_cuda(cudaFree(dA), "cudaFree A");
+        check_cuda(cudaFree(dB), "cudaFree B");
+        check_cuda(cudaFree(dC), "cudaFree C");
+        std::printf("Test1b OK: k=0 GEMM\n");
+    }
+
+    // -------------------------
     // Test 2: cublasLtMatmul (row-major + bias + relu)
     // -------------------------
     {

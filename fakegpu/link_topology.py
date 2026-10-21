@@ -46,9 +46,6 @@ from typing import Any
 
 DATA_PATH = Path(__file__).resolve().parent / "data" / "platforms.json"
 
-ENVIRONMENT_VARIABLES = ("FAKEGPU_PLATFORM", "FAKEGPU_SLOTS", "FAKEGPU_NVLINK_FABRIC")
-LEGACY_NVLINK_VARIABLES = ("FAKEGPU_NVLINK_GROUPS", "FAKEGPU_NVLINK_BANDWIDTH_GBPS")
-
 DEFAULT_NVLINK_BANDWIDTH_GBPS = 900.0
 MAXIMUM_NVLINK_BANDWIDTH_GBPS = 1_000_000.0
 MAXIMUM_NVLINKS_PER_DEVICE = 18
@@ -113,9 +110,7 @@ class PcieLink:
     def bandwidth_gbps(self) -> float:
         return round(pcie_lane_gbps()[self.generation] * self.width, 3)
 
-    def limited_by(self, other: PcieLink | None) -> PcieLink:
-        if other is None:
-            return self
+    def limited_by(self, other: PcieLink) -> PcieLink:
         return PcieLink(min(self.generation, other.generation), min(self.width, other.width))
 
 
@@ -295,7 +290,7 @@ class LinkTopology:
         try:
             slots = base.slots
             if slots_text:
-                entries = [entry for entry in slots_text.split(";")]
+                entries = slots_text.split(";")
                 if len(entries) < count or any(not entry.strip() for entry in entries):
                     raise TopologyError(
                         f"FAKEGPU_SLOTS describes {len([e for e in entries if e.strip()])} GPUs "
@@ -369,15 +364,13 @@ class LinkTopology:
                 self._add_peer(found, port.peer, 1, "direct", port.bandwidth_gbps, port.link)
         switch_ports = [port for port in self.ports(index) if port.remote == "nvswitch"]
         if switch_ports:
+            first = switch_ports[0].link
             for group in self.nvlink:
                 if group.kind != "switch" or index not in group.members:
                     continue
-                first = next(port.link for port in switch_ports)
                 for member in group.members:
-                    if member == index:
-                        continue
-                    links = min(group.links, self._switch_links(member))
-                    self._add_peer(found, member, links, "nvswitch", links * group.link_gbps, first)
+                    if member != index:
+                        self._add_peer(found, member, group.links, "nvswitch", group.links * group.link_gbps, first)
         return [found[key] for key in sorted(found)]
 
     def nvlink_links(self, source: int, target: int) -> int:
@@ -425,9 +418,6 @@ class LinkTopology:
         return self.slots[index].host_bandwidth_gbps
 
     # -- internals --------------------------------------------------------
-
-    def _switch_links(self, index: int) -> int:
-        return sum(group.links for group in self.nvlink if group.kind == "switch" and index in group.members)
 
     @staticmethod
     def _add_peer(
@@ -531,7 +521,7 @@ def _legacy_groups(
                 "FAKEGPU_NVLINK_BANDWIDTH_GBPS must be a finite number greater than 0 and no greater than 1000000"
             )
     pairs: set[tuple[int, int]] = set()
-    for group_index, group_text in enumerate(str(groups_text).split(";"), start=1):
+    for group_index, group_text in enumerate(groups_text.split(";"), start=1):
         group_text = group_text.strip()
         if not group_text:
             raise TopologyError("FAKEGPU_NVLINK_GROUPS contains an empty group")
@@ -550,6 +540,4 @@ def _legacy_groups(
         for offset, left in enumerate(members):
             for right in members[offset + 1 :]:
                 pairs.add((left, right))
-    if not pairs:
-        raise TopologyError("FAKEGPU_NVLINK_GROUPS did not define any links")
     return tuple(NvlinkGroup("mesh", pair, 1, bandwidth) for pair in sorted(pairs)), bandwidth

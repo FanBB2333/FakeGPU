@@ -20,53 +20,22 @@ public:
     // Check if real libraries are available
     bool is_available() const { return cuda_driver_handle_ != nullptr; }
     bool has_cudart() const { return cudart_handle_ != nullptr; }
-    bool has_cublas() const { return cublas_handle_ != nullptr; }
-    bool has_nvml() const { return nvml_handle_ != nullptr; }
 
     // Get function pointers from real libraries
-    void* get_cuda_driver_func(const char* name) {
-        if (!cuda_driver_handle_) return nullptr;
-        const dlsym_fn real_dlsym = resolve_real_dlsym();
-        return real_dlsym ? real_dlsym(cuda_driver_handle_, name) : nullptr;
-    }
-
-    void* get_cudart_func(const char* name) {
-        if (!cudart_handle_) return nullptr;
-        const dlsym_fn real_dlsym = resolve_real_dlsym();
-        return real_dlsym ? real_dlsym(cudart_handle_, name) : nullptr;
-    }
-
-    void* get_cublas_func(const char* name) {
-        if (!cublas_handle_) return nullptr;
-        const dlsym_fn real_dlsym = resolve_real_dlsym();
-        return real_dlsym ? real_dlsym(cublas_handle_, name) : nullptr;
-    }
-
-    void* get_nvml_func(const char* name) {
-        if (!nvml_handle_) return nullptr;
-        const dlsym_fn real_dlsym = resolve_real_dlsym();
-        return real_dlsym ? real_dlsym(nvml_handle_, name) : nullptr;
-    }
+    void* get_cuda_driver_func(const char* name) { return lookup(cuda_driver_handle_, name); }
+    void* get_cudart_func(const char* name) { return lookup(cudart_handle_, name); }
 
     // Initialize/load real libraries
     bool initialize_driver() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (driver_initialized_) return is_available();
-        driver_initialized_ = true;
 
-        const BackendConfig& config = BackendConfig::instance();
-        if (!config.use_real_cuda()) {
+        if (!BackendConfig::instance().use_real_cuda()) {
+            driver_initialized_ = true;
             FGPU_LOG("[RealCudaLoader] Mode is simulate, not loading real CUDA driver\n");
             return false;
         }
-
-        cuda_driver_handle_ = load_library(config.real_cuda_driver_path(), "libcuda.so");
-        if (cuda_driver_handle_) {
-            FGPU_LOG("[RealCudaLoader] Loaded real CUDA driver library\n");
-        } else {
-            FGPU_LOG("[RealCudaLoader] WARNING: Could not load real CUDA driver library\n");
-        }
-        return is_available();
+        return load_driver_locked();
     }
 
     bool initialize() {
@@ -85,16 +54,9 @@ public:
         FGPU_LOG("[RealCudaLoader] Attempting to load real CUDA libraries...\n");
 
         // Load CUDA driver library first (libcuda.so).  Driver-only users call
-        // initialize_driver() so they do not inject a second libcudart/cuBLAS
+        // initialize_driver() so they do not inject a second libcudart
         // version into framework processes.
-        if (!driver_initialized_) {
-            driver_initialized_ = true;
-            cuda_driver_handle_ = load_library(config.real_cuda_driver_path(), "libcuda.so");
-        }
-        if (cuda_driver_handle_) {
-            FGPU_LOG("[RealCudaLoader] Loaded real CUDA driver library\n");
-        } else {
-            FGPU_LOG("[RealCudaLoader] WARNING: Could not load real CUDA driver library\n");
+        if (!load_driver_locked()) {
             return false;
         }
 
@@ -106,33 +68,17 @@ public:
             FGPU_LOG("[RealCudaLoader] WARNING: Could not load real CUDA runtime library\n");
         }
 
-        // Load cuBLAS library
-        cublas_handle_ = load_library(config.real_cublas_path(), "libcublas.so");
-        if (cublas_handle_) {
-            FGPU_LOG("[RealCudaLoader] Loaded real cuBLAS library\n");
-        } else {
-            FGPU_LOG("[RealCudaLoader] WARNING: Could not load real cuBLAS library\n");
-        }
-
-        // Load NVML library
-        nvml_handle_ = load_library(config.real_nvml_path(), "libnvidia-ml.so");
-        if (nvml_handle_) {
-            FGPU_LOG("[RealCudaLoader] Loaded real NVML library\n");
-        } else {
-            FGPU_LOG("[RealCudaLoader] WARNING: Could not load real NVML library\n");
-        }
-
         return is_available();
     }
 
     // Query real GPU information
+    static constexpr int kMaxRealGpus = 16;
+
     struct RealGpuInfo {
-        int device_count = 0;
-        size_t total_memory[16] = {0};  // Per-device total memory
-        size_t free_memory[16] = {0};   // Per-device free memory
-        int compute_major[16] = {0};
-        int compute_minor[16] = {0};
-        char name[16][256] = {{0}};
+        int device_count = 0;  // At most kMaxRealGpus
+        size_t total_memory[kMaxRealGpus] = {0};  // Per-device total memory
+        int compute_major[kMaxRealGpus] = {0};
+        int compute_minor[kMaxRealGpus] = {0};
         bool valid = false;
     };
 
@@ -143,12 +89,6 @@ public:
             real_gpu_info_cached_ = true;
         }
         return real_gpu_info_;
-    }
-
-    // Refresh real GPU info (e.g., after memory changes)
-    void refresh_real_gpu_info() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        query_real_gpu_info();
     }
 
 private:
@@ -174,6 +114,26 @@ private:
         return fn;
     }
 
+    static void* lookup(void* handle, const char* name) {
+        if (!handle) return nullptr;
+        const dlsym_fn real_dlsym = resolve_real_dlsym();
+        return real_dlsym ? real_dlsym(handle, name) : nullptr;
+    }
+
+    // Loads the driver on first use and logs the outcome; callers hold mutex_.
+    bool load_driver_locked() {
+        if (!driver_initialized_) {
+            driver_initialized_ = true;
+            cuda_driver_handle_ = load_library(BackendConfig::instance().real_cuda_driver_path(), "libcuda.so");
+        }
+        if (cuda_driver_handle_) {
+            FGPU_LOG("[RealCudaLoader] Loaded real CUDA driver library\n");
+        } else {
+            FGPU_LOG("[RealCudaLoader] WARNING: Could not load real CUDA driver library\n");
+        }
+        return is_available();
+    }
+
     void* load_library(const std::string& path, const char* fallback_name) {
         const dlopen_fn real_dlopen = resolve_real_dlopen();
         if (!real_dlopen) {
@@ -190,34 +150,32 @@ private:
             FGPU_LOG("[RealCudaLoader] Failed to load %s: %s\n", path.c_str(), dlerror());
         }
 
-        if (fallback_name && *fallback_name) {
-            const std::string platform_fallback = platform_fallback_name(fallback_name);
-            void* handle = real_dlopen(platform_fallback.c_str(), RTLD_NOW | RTLD_LOCAL);
-            if (handle) {
-                FGPU_LOG(
-                    "[RealCudaLoader] Loaded %s via fallback name %s\n",
-                    fallback_name,
-                    platform_fallback.c_str());
-                return handle;
-            }
+        const std::string platform_fallback = platform_fallback_name(fallback_name);
+        void* handle = real_dlopen(platform_fallback.c_str(), RTLD_NOW | RTLD_LOCAL);
+        if (handle) {
             FGPU_LOG(
-                "[RealCudaLoader] Failed to load fallback %s: %s\n",
-                platform_fallback.c_str(),
-                dlerror());
+                "[RealCudaLoader] Loaded %s via fallback name %s\n",
+                fallback_name,
+                platform_fallback.c_str());
+            return handle;
         }
+        FGPU_LOG(
+            "[RealCudaLoader] Failed to load fallback %s: %s\n",
+            platform_fallback.c_str(),
+            dlerror());
         return nullptr;
     }
 
     static std::string platform_fallback_name(const char* fallback_name) {
 #ifdef __APPLE__
-        std::string name = fallback_name ? std::string(fallback_name) : std::string();
+        std::string name(fallback_name);
         const std::size_t so_pos = name.rfind(".so");
         if (so_pos != std::string::npos) {
             name.replace(so_pos, 3, ".dylib");
         }
         return name;
 #else
-        return fallback_name ? std::string(fallback_name) : std::string();
+        return fallback_name;
 #endif
     }
 
@@ -231,11 +189,7 @@ private:
         typedef int (*cuInit_t)(unsigned int);
         typedef int (*cuDeviceGetCount_t)(int*);
         typedef int (*cuDeviceTotalMem_t)(size_t*, int);
-        typedef int (*cuDeviceGetName_t)(char*, int, int);
         typedef int (*cuDeviceGetAttribute_t)(int*, int, int);
-        typedef int (*cuMemGetInfo_t)(size_t*, size_t*);
-        typedef int (*cuCtxCreate_t)(void**, unsigned int, int);
-        typedef int (*cuCtxDestroy_t)(void*);
 
         const dlsym_fn real_dlsym = resolve_real_dlsym();
         if (!real_dlsym) {
@@ -247,11 +201,7 @@ private:
         auto cuInit = (cuInit_t)real_dlsym(cuda_driver_handle_, "cuInit");
         auto cuDeviceGetCount = (cuDeviceGetCount_t)real_dlsym(cuda_driver_handle_, "cuDeviceGetCount");
         auto cuDeviceTotalMem = (cuDeviceTotalMem_t)real_dlsym(cuda_driver_handle_, "cuDeviceTotalMem_v2");
-        auto cuDeviceGetName = (cuDeviceGetName_t)real_dlsym(cuda_driver_handle_, "cuDeviceGetName");
         auto cuDeviceGetAttribute = (cuDeviceGetAttribute_t)real_dlsym(cuda_driver_handle_, "cuDeviceGetAttribute");
-        auto cuMemGetInfo = (cuMemGetInfo_t)real_dlsym(cuda_driver_handle_, "cuMemGetInfo_v2");
-        auto cuCtxCreate = (cuCtxCreate_t)real_dlsym(cuda_driver_handle_, "cuCtxCreate_v2");
-        auto cuCtxDestroy = (cuCtxDestroy_t)real_dlsym(cuda_driver_handle_, "cuCtxDestroy_v2");
 
         if (!cuInit || !cuDeviceGetCount) {
             FGPU_LOG("[RealCudaLoader] Missing required CUDA driver functions\n");
@@ -276,15 +226,15 @@ private:
         }
 
         FGPU_LOG("[RealCudaLoader] Found %d real GPU(s)\n", real_gpu_info_.device_count);
+        if (real_gpu_info_.device_count > kMaxRealGpus) {
+            FGPU_LOG("[RealCudaLoader] Using the first %d real GPUs\n", kMaxRealGpus);
+            real_gpu_info_.device_count = kMaxRealGpus;
+        }
 
         // Query each device
-        for (int i = 0; i < real_gpu_info_.device_count && i < 16; ++i) {
+        for (int i = 0; i < real_gpu_info_.device_count; ++i) {
             if (cuDeviceTotalMem) {
                 cuDeviceTotalMem(&real_gpu_info_.total_memory[i], i);
-            }
-
-            if (cuDeviceGetName) {
-                cuDeviceGetName(real_gpu_info_.name[i], 256, i);
             }
 
             if (cuDeviceGetAttribute) {
@@ -294,21 +244,9 @@ private:
                 cuDeviceGetAttribute(&real_gpu_info_.compute_minor[i], 76, i);
             }
 
-            // Get free memory (requires context)
-            if (cuCtxCreate && cuMemGetInfo && cuCtxDestroy) {
-                void* ctx = nullptr;
-                if (cuCtxCreate(&ctx, 0, i) == 0) {
-                    size_t free_mem = 0, total_mem = 0;
-                    cuMemGetInfo(&free_mem, &total_mem);
-                    real_gpu_info_.free_memory[i] = free_mem;
-                    cuCtxDestroy(ctx);
-                }
-            }
-
-            FGPU_LOG("[RealCudaLoader] GPU %d: %s, %zu MB total, %zu MB free, CC %d.%d\n",
-                    i, real_gpu_info_.name[i],
+            FGPU_LOG("[RealCudaLoader] GPU %d: %zu MB total, CC %d.%d\n",
+                    i,
                     real_gpu_info_.total_memory[i] / (1024 * 1024),
-                    real_gpu_info_.free_memory[i] / (1024 * 1024),
                     real_gpu_info_.compute_major[i], real_gpu_info_.compute_minor[i]);
         }
 
@@ -322,8 +260,6 @@ private:
 
     void* cuda_driver_handle_ = nullptr;
     void* cudart_handle_ = nullptr;
-    void* cublas_handle_ = nullptr;
-    void* nvml_handle_ = nullptr;
 
     RealGpuInfo real_gpu_info_;
 };

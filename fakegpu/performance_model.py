@@ -8,10 +8,10 @@ from typing import Any
 from ._cli import (
     add_json_path_argument,
     command_prog,
+    emit_json_report,
     usage_error,
 )
 from .profile_catalog import THROUGHPUT_FIELDS, get_profile
-from .structured_io import emit_json
 
 
 SCHEMA_VERSION = "fakegpu.roofline_estimate.v1"
@@ -293,9 +293,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         usage_error(parser, exc)
 
     if args.json_path:
-        output = emit_json(args.json_path, report)
-        if output is not None:
-            print(f"Roofline estimate: {output}")
+        emit_json_report(args.json_path, report, "Roofline estimate")
     else:
         interval = report["latency_interval_seconds"]
         print("FakeGPU analytical roofline estimate")

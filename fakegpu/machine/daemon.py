@@ -20,10 +20,9 @@ from .service import MachineService
 POLL_INTERVAL_SECONDS = 0.5
 
 
-def run_daemon(paths: MachinePaths | None = None) -> int:
+def run_daemon(paths: MachinePaths) -> int:
     """Serve the machine in this process until stopped."""
 
-    paths = paths or MachinePaths.from_env()
     paths.create()
     with paths.pidfile.open("a+") as lock:
         try:
@@ -93,14 +92,13 @@ async def _serve(service: MachineService) -> None:
 
 
 def start_daemon(
-    paths: MachinePaths | None = None,
+    paths: MachinePaths,
     *,
     changes: Mapping[str, Any] | None = None,
     timeout: float = 15.0,
 ) -> int:
     """Start the daemon unless it already runs, apply ``changes``, return its PID."""
 
-    paths = paths or MachinePaths.from_env()
     paths.create()
     pid = daemon_pid(paths)
     if pid is not None:
@@ -133,10 +131,9 @@ def start_daemon(
     raise MachineError("start_failed", f"the daemon did not start; see {paths.log}")
 
 
-def stop_daemon(paths: MachinePaths | None = None, *, timeout: float = 10.0) -> bool:
+def stop_daemon(paths: MachinePaths, *, timeout: float = 10.0) -> bool:
     """Stop the daemon. Returns False when it was not running."""
 
-    paths = paths or MachinePaths.from_env()
     pid = daemon_pid(paths)
     if pid is None:
         return False

@@ -119,6 +119,12 @@ void* resolve_symbol(void* handle, const char* name, std::string& error) {
     return symbol;
 }
 
+template <typename Fn>
+bool resolve_required(void* handle, const char* name, Fn& out, std::string& error) {
+    out = reinterpret_cast<Fn>(resolve_symbol(handle, name, error));
+    return out != nullptr;
+}
+
 }  // namespace
 
 RealNcclLoader& RealNcclLoader::instance() {
@@ -131,9 +137,6 @@ bool RealNcclLoader::load_handle(std::string& error) {
     const std::string self_path = current_library_path();
 
     for (const std::string& candidate : candidate_paths()) {
-        if (candidate.empty()) {
-            continue;
-        }
         char resolved[PATH_MAX] = {};
         std::string resolved_path = candidate;
         if (::realpath(candidate.c_str(), resolved) != nullptr) {
@@ -159,64 +162,28 @@ bool RealNcclLoader::load_handle(std::string& error) {
 
 bool RealNcclLoader::resolve_symbols(std::string& error) {
     LoaderState& state = loader_state();
-    state.get_version =
-        reinterpret_cast<ncclGetVersion_fn>(resolve_symbol(state.handle, "ncclGetVersion", error));
-    if (!state.get_version) {
-        return false;
-    }
-    state.get_unique_id =
-        reinterpret_cast<ncclGetUniqueId_fn>(resolve_symbol(state.handle, "ncclGetUniqueId", error));
-    if (!state.get_unique_id) {
-        return false;
-    }
-    state.comm_init_rank =
-        reinterpret_cast<ncclCommInitRank_fn>(resolve_symbol(state.handle, "ncclCommInitRank", error));
-    if (!state.comm_init_rank) {
-        return false;
-    }
-    state.comm_destroy =
-        reinterpret_cast<ncclCommDestroy_fn>(resolve_symbol(state.handle, "ncclCommDestroy", error));
-    if (!state.comm_destroy) {
+    void* handle = state.handle;
+    if (!resolve_required(handle, "ncclGetVersion", state.get_version, error) ||
+        !resolve_required(handle, "ncclGetUniqueId", state.get_unique_id, error) ||
+        !resolve_required(handle, "ncclCommInitRank", state.comm_init_rank, error) ||
+        !resolve_required(handle, "ncclCommDestroy", state.comm_destroy, error)) {
         return false;
     }
     state.comm_abort =
-        reinterpret_cast<ncclCommAbort_fn>(::dlsym(state.handle, "ncclCommAbort"));
+        reinterpret_cast<ncclCommAbort_fn>(::dlsym(handle, "ncclCommAbort"));
     ::dlerror();
-    state.get_error_string =
-        reinterpret_cast<ncclGetErrorString_fn>(resolve_symbol(state.handle, "ncclGetErrorString", error));
-    if (!state.get_error_string) {
-        return false;
-    }
-    state.all_reduce =
-        reinterpret_cast<ncclAllReduce_fn>(resolve_symbol(state.handle, "ncclAllReduce", error));
-    if (!state.all_reduce) {
-        return false;
-    }
-    state.reduce =
-        reinterpret_cast<ncclReduce_fn>(resolve_symbol(state.handle, "ncclReduce", error));
-    if (!state.reduce) {
-        return false;
-    }
-    state.broadcast =
-        reinterpret_cast<ncclBroadcast_fn>(resolve_symbol(state.handle, "ncclBroadcast", error));
-    if (!state.broadcast) {
-        return false;
-    }
-    state.all_gather =
-        reinterpret_cast<ncclAllGather_fn>(resolve_symbol(state.handle, "ncclAllGather", error));
-    if (!state.all_gather) {
+    if (!resolve_required(handle, "ncclGetErrorString", state.get_error_string, error) ||
+        !resolve_required(handle, "ncclAllReduce", state.all_reduce, error) ||
+        !resolve_required(handle, "ncclReduce", state.reduce, error) ||
+        !resolve_required(handle, "ncclBroadcast", state.broadcast, error) ||
+        !resolve_required(handle, "ncclAllGather", state.all_gather, error)) {
         return false;
     }
     ::dlerror();
     state.all_to_all =
-        reinterpret_cast<ncclAlltoAll_fn>(::dlsym(state.handle, "ncclAlltoAll"));
+        reinterpret_cast<ncclAlltoAll_fn>(::dlsym(handle, "ncclAlltoAll"));
     ::dlerror();
-    state.reduce_scatter =
-        reinterpret_cast<ncclReduceScatter_fn>(resolve_symbol(state.handle, "ncclReduceScatter", error));
-    if (!state.reduce_scatter) {
-        return false;
-    }
-    return true;
+    return resolve_required(handle, "ncclReduceScatter", state.reduce_scatter, error);
 }
 
 bool RealNcclLoader::initialize(std::string& error) {
@@ -235,6 +202,9 @@ bool RealNcclLoader::initialize(std::string& error) {
         return false;
     }
     if (!resolve_symbols(error)) {
+        ::dlclose(state.handle);
+        state.handle = nullptr;
+        state.loaded_path.clear();
         return false;
     }
     return true;
@@ -248,22 +218,12 @@ const std::string& RealNcclLoader::loaded_path() const {
     return loader_state().loaded_path;
 }
 
-ncclResult_t RealNcclLoader::get_version(int* version, std::string& error) const {
-    const LoaderState& state = loader_state();
-    if (!state.get_version) {
-        error = "real ncclGetVersion is unavailable";
-        return ncclSystemError;
-    }
-    return state.get_version(version);
+ncclResult_t RealNcclLoader::get_version(int* version, std::string& /*error*/) const {
+    return loader_state().get_version(version);
 }
 
-ncclResult_t RealNcclLoader::get_unique_id(ncclUniqueId* unique_id, std::string& error) const {
-    const LoaderState& state = loader_state();
-    if (!state.get_unique_id) {
-        error = "real ncclGetUniqueId is unavailable";
-        return ncclSystemError;
-    }
-    return state.get_unique_id(unique_id);
+ncclResult_t RealNcclLoader::get_unique_id(ncclUniqueId* unique_id, std::string& /*error*/) const {
+    return loader_state().get_unique_id(unique_id);
 }
 
 ncclResult_t RealNcclLoader::comm_init_rank(
@@ -271,22 +231,12 @@ ncclResult_t RealNcclLoader::comm_init_rank(
     int nranks,
     ncclUniqueId comm_id,
     int rank,
-    std::string& error) const {
-    const LoaderState& state = loader_state();
-    if (!state.comm_init_rank) {
-        error = "real ncclCommInitRank is unavailable";
-        return ncclSystemError;
-    }
-    return state.comm_init_rank(comm, nranks, comm_id, rank);
+    std::string& /*error*/) const {
+    return loader_state().comm_init_rank(comm, nranks, comm_id, rank);
 }
 
-ncclResult_t RealNcclLoader::comm_destroy(ncclComm_t comm, std::string& error) const {
-    const LoaderState& state = loader_state();
-    if (!state.comm_destroy) {
-        error = "real ncclCommDestroy is unavailable";
-        return ncclSystemError;
-    }
-    return state.comm_destroy(comm);
+ncclResult_t RealNcclLoader::comm_destroy(ncclComm_t comm, std::string& /*error*/) const {
+    return loader_state().comm_destroy(comm);
 }
 
 ncclResult_t RealNcclLoader::comm_abort(ncclComm_t comm, std::string& error) const {
@@ -297,13 +247,8 @@ ncclResult_t RealNcclLoader::comm_abort(ncclComm_t comm, std::string& error) con
     return comm_destroy(comm, error);
 }
 
-const char* RealNcclLoader::get_error_string(ncclResult_t result, std::string& error) const {
-    const LoaderState& state = loader_state();
-    if (!state.get_error_string) {
-        error = "real ncclGetErrorString is unavailable";
-        return nullptr;
-    }
-    return state.get_error_string(result);
+const char* RealNcclLoader::get_error_string(ncclResult_t result, std::string& /*error*/) const {
+    return loader_state().get_error_string(result);
 }
 
 ncclResult_t RealNcclLoader::all_reduce(
@@ -314,13 +259,8 @@ ncclResult_t RealNcclLoader::all_reduce(
     ncclRedOp_t op,
     ncclComm_t comm,
     cudaStream_t stream,
-    std::string& error) const {
-    const LoaderState& state = loader_state();
-    if (!state.all_reduce) {
-        error = "real ncclAllReduce is unavailable";
-        return ncclSystemError;
-    }
-    return state.all_reduce(sendbuff, recvbuff, count, datatype, op, comm, stream);
+    std::string& /*error*/) const {
+    return loader_state().all_reduce(sendbuff, recvbuff, count, datatype, op, comm, stream);
 }
 
 ncclResult_t RealNcclLoader::reduce(
@@ -332,13 +272,8 @@ ncclResult_t RealNcclLoader::reduce(
     int root,
     ncclComm_t comm,
     cudaStream_t stream,
-    std::string& error) const {
-    const LoaderState& state = loader_state();
-    if (!state.reduce) {
-        error = "real ncclReduce is unavailable";
-        return ncclSystemError;
-    }
-    return state.reduce(sendbuff, recvbuff, count, datatype, op, root, comm, stream);
+    std::string& /*error*/) const {
+    return loader_state().reduce(sendbuff, recvbuff, count, datatype, op, root, comm, stream);
 }
 
 ncclResult_t RealNcclLoader::broadcast(
@@ -349,13 +284,8 @@ ncclResult_t RealNcclLoader::broadcast(
     int root,
     ncclComm_t comm,
     cudaStream_t stream,
-    std::string& error) const {
-    const LoaderState& state = loader_state();
-    if (!state.broadcast) {
-        error = "real ncclBroadcast is unavailable";
-        return ncclSystemError;
-    }
-    return state.broadcast(sendbuff, recvbuff, count, datatype, root, comm, stream);
+    std::string& /*error*/) const {
+    return loader_state().broadcast(sendbuff, recvbuff, count, datatype, root, comm, stream);
 }
 
 ncclResult_t RealNcclLoader::all_gather(
@@ -365,13 +295,8 @@ ncclResult_t RealNcclLoader::all_gather(
     ncclDataType_t datatype,
     ncclComm_t comm,
     cudaStream_t stream,
-    std::string& error) const {
-    const LoaderState& state = loader_state();
-    if (!state.all_gather) {
-        error = "real ncclAllGather is unavailable";
-        return ncclSystemError;
-    }
-    return state.all_gather(sendbuff, recvbuff, sendcount, datatype, comm, stream);
+    std::string& /*error*/) const {
+    return loader_state().all_gather(sendbuff, recvbuff, sendcount, datatype, comm, stream);
 }
 
 ncclResult_t RealNcclLoader::all_to_all(
@@ -398,13 +323,8 @@ ncclResult_t RealNcclLoader::reduce_scatter(
     ncclRedOp_t op,
     ncclComm_t comm,
     cudaStream_t stream,
-    std::string& error) const {
-    const LoaderState& state = loader_state();
-    if (!state.reduce_scatter) {
-        error = "real ncclReduceScatter is unavailable";
-        return ncclSystemError;
-    }
-    return state.reduce_scatter(sendbuff, recvbuff, recvcount, datatype, op, comm, stream);
+    std::string& /*error*/) const {
+    return loader_state().reduce_scatter(sendbuff, recvbuff, recvcount, datatype, op, comm, stream);
 }
 
 }  // namespace fake_gpu::nccl

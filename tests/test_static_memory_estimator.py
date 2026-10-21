@@ -39,6 +39,38 @@ def test_graph_liveness_deduplicates_view_storage() -> None:
     assert report["warnings"] == []
 
 
+def test_graph_fingerprint_does_not_depend_on_storage_addresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from torch.fx.experimental.proxy_tensor import make_fx
+
+    import fakegpu.memory_estimator as memory_estimator
+
+    graph_module = make_fx(
+        lambda value: torch.max(value, dim=0),
+        tracing_mode="fake",
+    )(torch.randn(2, 4))
+    fingerprint = memory_estimator.analyze_graph_memory(graph_module)[
+        "graph_fingerprint"
+    ]
+
+    storage_identity = memory_estimator._tensor_storage_identity
+
+    def reversed_address_order(tensor):
+        key, nbytes = storage_identity(tensor)
+        return -key, nbytes
+
+    monkeypatch.setattr(
+        memory_estimator,
+        "_tensor_storage_identity",
+        reversed_address_order,
+    )
+    assert (
+        memory_estimator.analyze_graph_memory(graph_module)["graph_fingerprint"]
+        == fingerprint
+    )
+
+
 def test_forward_estimate_uses_fx_storage_liveness() -> None:
     from fakegpu.memory_estimator import estimate_module_memory
 

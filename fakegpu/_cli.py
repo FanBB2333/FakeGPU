@@ -32,7 +32,9 @@ import importlib
 import re
 from argparse import ArgumentParser, ArgumentTypeError, _ActionsContainer
 from dataclasses import dataclass
-from typing import Callable, NoReturn, Sequence
+from typing import Any, Callable, NoReturn, Sequence
+
+from .structured_io import emit_json
 
 
 # ``ArgumentParser`` and the groups created by ``add_argument_group`` and
@@ -192,3 +194,32 @@ def usage_error(parser: ArgumentParser, error: object) -> NoReturn:
 
     parser.exit(EXIT_USAGE, f"{parser.prog}: {error}\n")
     raise AssertionError("parser.exit must not return")
+
+
+def bounded_argument(
+    parse: Callable[[str], Any],
+    accept: Callable[[Any], bool],
+    message: str,
+    *,
+    parse_message: str | None = None,
+) -> Callable[[str], Any]:
+    """Build an argparse ``type=`` converter that parses and range-checks."""
+
+    def convert(text: str) -> Any:
+        try:
+            value = parse(text)
+        except ValueError as exc:
+            raise ArgumentTypeError(parse_message or message) from exc
+        if not accept(value):
+            raise ArgumentTypeError(message)
+        return value
+
+    return convert
+
+
+def emit_json_report(target: str, payload: Any, label: str) -> None:
+    """Emit a ``--json`` report and name the file it was written to, if any."""
+
+    output = emit_json(target, payload)
+    if output is not None:
+        print(f"{label}: {output}")

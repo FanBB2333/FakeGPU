@@ -31,7 +31,12 @@ from fakegpu.operator_profiles import (
     match_operator_profile,
 )
 from fakegpu.repository_analyzer import analyze_repository
-from fakegpu.topology import Topology, TopologyError, simulate_collective
+from fakegpu.topology import (
+    Topology,
+    TopologyError,
+    simulate_collective,
+    simulate_point_to_point,
+)
 from fakegpu.trace_replay import _resilience_summary, replay_trace
 from fakegpu.training_plan import (
     estimate_training_plan,
@@ -788,6 +793,22 @@ def test_transformers_runner_measures_phases_and_builds_vllm_sample(
     assert vllm_sample["phases"]["decode"]["peak_bytes"] == 2_400
     assert vllm_sample["environment"]["software"]["framework"] == "vllm"
 
+    for memory_bytes in (None, 0, -5):
+        invalid_plan = _serving_protocol_plan()
+        if memory_bytes is None:
+            del invalid_plan["target"]["profile"]["memory_bytes"]
+        else:
+            invalid_plan["target"]["profile"]["memory_bytes"] = memory_bytes
+        with pytest.raises(CalibrationError, match="no valid memory_bytes"):
+            build_cuda_serving_sample(
+                invalid_plan,
+                phase_peaks={"prefill": 2_000, "decode": 2_400},
+                metric="nvml.process_family_peak_bytes",
+                framework="vllm",
+                framework_version="0.10.2",
+                run_index=5,
+            )
+
     monkeypatch.setenv(
         "FAKEGPU_SERVING_WORKLOAD_SIGNATURE",
         "wrong-signature",
@@ -1208,6 +1229,12 @@ def test_topology_keeps_parallel_links_distinct_and_rejects_duplicate_nics() -> 
         Topology.from_mapping(duplicate_nic_config)
 
 
+def test_point_to_point_rejects_an_unknown_rank_sent_to_itself() -> None:
+    topology = Topology.from_mapping(_topology_config())
+    with pytest.raises(TopologyError, match="unknown rank 7->7"):
+        simulate_point_to_point(topology, src_rank=7, dst_rank=7, payload_bytes=1)
+
+
 def test_trace_replay_reports_overlap_pairs_memory_and_recovery() -> None:
     trace = {
         "traceEvents": [
@@ -1393,6 +1420,31 @@ def test_trace_replay_accepts_native_cluster_timeline_shape() -> None:
     assert report["summary"]["event_count"] == 4
     assert report["summary"]["communication_bytes"] == 8_192
     assert all(item["explicit_wait_us"] == 5 for item in report["rank_summary"])
+
+
+def test_trace_replay_accepts_null_links() -> None:
+    generic = replay_trace(
+        {"events": [{"name": "x", "duration_us": 1, "links": None}]}
+    )
+    assert [event["links"] for event in generic["events"]] == [[]]
+
+    cluster = replay_trace(
+        {
+            "operation_timeline": {
+                "entries": [
+                    {
+                        "kind": "collective",
+                        "operation": "all_reduce",
+                        "ranks": [0, 1],
+                        "logical_payload_bytes": 8,
+                        "execution_time_us": 2,
+                        "links": None,
+                    }
+                ]
+            }
+        }
+    )
+    assert [event["links"] for event in cluster["events"]] == [[], []]
 
 
 def test_operator_profile_catalog_matches_exact_shape(tmp_path: Path) -> None:

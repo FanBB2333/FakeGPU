@@ -10,7 +10,6 @@
 namespace fake_gpu::distributed {
 
 struct StagingChunkPlanEntry {
-    std::size_t chunk_index = 0;
     std::size_t offset_elements = 0;
     std::size_t element_count = 0;
     std::size_t input_bytes = 0;
@@ -19,14 +18,8 @@ struct StagingChunkPlanEntry {
 };
 
 struct StagingChunkPlan {
-    std::size_t total_elements = 0;
     std::size_t dtype_size = 0;
-    std::size_t chunk_threshold_bytes = 0;
     std::vector<StagingChunkPlanEntry> chunks;
-
-    bool chunked() const {
-        return chunks.size() > 1;
-    }
 };
 
 inline bool build_staging_chunk_plan(
@@ -46,10 +39,6 @@ inline bool build_staging_chunk_plan(
     }
 
     const std::size_t dtype_size = collective_data_type_size(dtype);
-    if (dtype_size == 0) {
-        error = "unsupported dtype";
-        return false;
-    }
     if (element_count == 0) {
         error = "count must be > 0";
         return false;
@@ -77,17 +66,14 @@ inline bool build_staging_chunk_plan(
         max_chunk_elements = std::min(max_chunk_elements, element_count);
     }
 
-    out.total_elements = element_count;
     out.dtype_size = dtype_size;
-    out.chunk_threshold_bytes = chunk_threshold_bytes;
 
-    for (std::size_t offset = 0, chunk_index = 0; offset < element_count; ++chunk_index) {
+    for (std::size_t offset = 0; offset < element_count;) {
         const std::size_t chunk_elements =
             std::min(max_chunk_elements, element_count - offset);
         const std::size_t chunk_bytes = chunk_elements * dtype_size;
 
         StagingChunkPlanEntry chunk;
-        chunk.chunk_index = chunk_index;
         chunk.offset_elements = offset;
         chunk.element_count = chunk_elements;
 

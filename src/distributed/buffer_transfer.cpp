@@ -6,6 +6,29 @@
 
 namespace fake_gpu::distributed {
 
+namespace {
+
+bool open_participant_staging(
+    const std::string& staging_name,
+    CollectiveDataType dtype,
+    std::size_t bytes,
+    const std::vector<std::size_t>& shape,
+    int owner_rank,
+    std::uint64_t staging_id,
+    StagingBufferHandle& handle,
+    std::string& error) {
+    StagingBufferMetadata metadata;
+    metadata.name = staging_name;
+    metadata.dtype = collective_data_type_name(dtype);
+    metadata.bytes = bytes;
+    metadata.shape = shape;
+    metadata.owner_rank = owner_rank;
+    metadata.staging_id = staging_id;
+    return StagingBufferManager().open(metadata, false, handle, error);
+}
+
+}  // namespace
+
 bool load_participant_buffer(
     BufferTransport transport,
     const std::string& staging_name,
@@ -29,17 +52,9 @@ bool load_participant_buffer(
         return true;
     }
 
-    StagingBufferMetadata metadata;
-    metadata.name = staging_name;
-    metadata.dtype = collective_data_type_name(dtype);
-    metadata.bytes = bytes;
-    metadata.shape = shape;
-    metadata.owner_rank = owner_rank;
-    metadata.staging_id = staging_id;
-
-    StagingBufferManager manager;
     StagingBufferHandle handle;
-    if (!manager.open(metadata, false, handle, error)) {
+    if (!open_participant_staging(
+            staging_name, dtype, bytes, shape, owner_rank, staging_id, handle, error)) {
         return false;
     }
 
@@ -67,17 +82,9 @@ bool store_participant_buffer(
         return true;
     }
 
-    StagingBufferMetadata metadata;
-    metadata.name = staging_name;
-    metadata.dtype = collective_data_type_name(dtype);
-    metadata.bytes = bytes;
-    metadata.shape = shape;
-    metadata.owner_rank = owner_rank;
-    metadata.staging_id = staging_id;
-
-    StagingBufferManager manager;
     StagingBufferHandle handle;
-    if (!manager.open(metadata, false, handle, error)) {
+    if (!open_participant_staging(
+            staging_name, dtype, bytes, shape, owner_rank, staging_id, handle, error)) {
         return false;
     }
 

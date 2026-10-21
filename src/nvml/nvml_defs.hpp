@@ -150,11 +150,7 @@ typedef struct nvmlPciInfo_v3_st {
 } nvmlPciInfo_v3_t;
 
 // Constants
-#define NVML_DEVICE_NAME_BUFFER_SIZE 64
-#define NVML_DEVICE_UUID_BUFFER_SIZE 80
 #define NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE 32
-#define NVML_DEVICE_PCI_BUS_ID_BUFFER_V2_SIZE 16
-#define NVML_DEVICE_PART_NUMBER_BUFFER_SIZE 80
 #define NVML_GSP_FIRMWARE_VERSION_BUF_SIZE 0x40
 
 // Versioned structs/constants used by nvidia-smi and pynvml.
@@ -167,8 +163,6 @@ typedef struct nvmlDeviceAddressingMode_st {
 
 // Addressing mode values
 #define NVML_DEVICE_ADDRESSING_MODE_NONE 0
-#define NVML_DEVICE_ADDRESSING_MODE_HMM 1
-#define NVML_DEVICE_ADDRESSING_MODE_ATS 2
 
 #define nvmlPciInfoExt_v1 0x1000040
 
@@ -219,14 +213,10 @@ typedef struct nvmlDramEncryptionInfo_st {
     unsigned int encryptionState;
 } nvmlDramEncryptionInfo_t;
 
-#define nvmlMarginTemperature_v1 0x1000008
-
 typedef struct nvmlMarginTemperature_v1_st {
     unsigned int version;
     int marginTemperature;
 } nvmlMarginTemperature_v1_t;
-
-#define VgpuHeterogeneousMode_v1 0x1000008
 
 typedef struct nvmlVgpuHeterogeneousMode_v1_st {
     unsigned int version;

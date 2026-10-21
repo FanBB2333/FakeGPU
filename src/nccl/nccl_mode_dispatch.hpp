@@ -17,12 +17,6 @@ inline bool validate_direct_init_config(
         error = "FAKEGPU_DIST_MODE must be set to simulate, proxy, or passthrough";
         return false;
     }
-    if (config.mode != distributed::DistributedMode::Simulate &&
-        config.mode != distributed::DistributedMode::Proxy &&
-        config.mode != distributed::DistributedMode::Passthrough) {
-        error = "only FAKEGPU_DIST_MODE=simulate/proxy/passthrough is implemented for fake NCCL init";
-        return false;
-    }
     if (config.mode != distributed::DistributedMode::Passthrough &&
         config.coordinator_address.empty()) {
         error = "FAKEGPU_COORDINATOR_ADDR must be set";

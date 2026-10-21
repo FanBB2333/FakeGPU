@@ -2,10 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 
 namespace fake_gpu::distributed {
@@ -17,24 +15,6 @@ double transfer_time_us(std::uint64_t bytes, const FabricLinkConfig& fabric) {
         (static_cast<double>(bytes) * 8.0 * fabric.oversubscription) /
         (fabric.bandwidth_gbps * 1000.0);
     return fabric.latency_us + transfer_component_us;
-}
-
-double traffic_multiplier_for_collective(CollectiveType type) {
-    switch (type) {
-        case CollectiveType::AllReduce:
-            return 2.0;
-        case CollectiveType::Reduce:
-            return 1.0;
-        case CollectiveType::Broadcast:
-            return 1.0;
-        case CollectiveType::AllGather:
-            return 1.0;
-        case CollectiveType::ReduceScatter:
-            return 1.0;
-        case CollectiveType::AllToAll:
-            return 1.0;
-    }
-    return 1.0;
 }
 
 std::string make_link_key(
@@ -68,32 +48,15 @@ bool TopologyModel::build(const ClusterConfigModel& config, TopologyModel& out, 
     }
 
     TopologyModel built;
-    built.config_ = config;
-    built.world_size_ = config.world_size;
-    built.node_count_ = config.nodes.size();
-
+    built.intra_node_fabric_ = config.intra_node_fabric;
+    built.inter_node_fabric_ = config.inter_node_fabric;
     for (const ClusterNodeConfig& node : config.nodes) {
         for (int rank : node.ranks) {
-            if (!built.node_by_rank_.emplace(rank, node.id).second) {
-                error = "duplicate rank in topology model: " + std::to_string(rank);
-                return false;
-            }
+            built.node_by_rank_.emplace(rank, node.id);
             built.ordered_ranks_.push_back(rank);
         }
     }
-
     std::sort(built.ordered_ranks_.begin(), built.ordered_ranks_.end());
-    if (built.ordered_ranks_.size() != built.world_size_) {
-        error = "topology model rank count does not match world_size";
-        return false;
-    }
-
-    for (std::size_t index = 0; index < built.ordered_ranks_.size(); ++index) {
-        if (built.ordered_ranks_[index] != static_cast<int>(index)) {
-            error = "topology model requires contiguous ranks from 0 to world_size - 1";
-            return false;
-        }
-    }
 
     out = std::move(built);
     return true;
@@ -106,15 +69,6 @@ bool TopologyModel::estimate_transfer(
     TopologyLinkEstimate& out,
     std::string& error) const {
     error.clear();
-    if (!valid()) {
-        error = "topology model is not initialized";
-        return false;
-    }
-    if (bytes == 0) {
-        error = "bytes must be > 0";
-        return false;
-    }
-
     const auto src_it = node_by_rank_.find(src_rank);
     const auto dst_it = node_by_rank_.find(dst_rank);
     if (src_it == node_by_rank_.end() || dst_it == node_by_rank_.end()) {
@@ -130,7 +84,7 @@ bool TopologyModel::estimate_transfer(
 
     const bool same_node = src_it->second == dst_it->second;
     const FabricLinkConfig& fabric =
-        same_node ? config_.intra_node_fabric : config_.inter_node_fabric;
+        same_node ? intra_node_fabric_ : inter_node_fabric_;
 
     out.scope = same_node ? TopologyLinkScope::IntraNode : TopologyLinkScope::InterNode;
     out.bandwidth_gbps = fabric.bandwidth_gbps;
@@ -161,60 +115,24 @@ bool TopologyModel::estimate_ring_collective(
     std::string& error) const {
     error.clear();
     out = CollectiveTopologyEstimate{};
-    out.type = type;
-    out.algorithm = "ring";
-    out.world_size = participant_ranks.size();
-    out.bytes_per_rank = bytes_per_rank;
 
-    if (!valid()) {
-        error = "topology model is not initialized";
-        out.error = error;
-        return false;
-    }
-    if (bytes_per_rank == 0) {
-        error = "bytes_per_rank must be > 0";
-        out.error = error;
-        return false;
-    }
-    if (participant_ranks.empty()) {
-        error = "participant_ranks must not be empty";
-        out.error = error;
-        return false;
-    }
-
-    std::unordered_set<int> unique_ranks;
-    unique_ranks.reserve(participant_ranks.size());
     for (int rank : participant_ranks) {
         if (node_by_rank_.find(rank) == node_by_rank_.end()) {
             error = "participant rank is not part of the topology: " +
                     std::to_string(rank);
-            out.error = error;
-            return false;
-        }
-        if (!unique_ranks.insert(rank).second) {
-            error = "participant_ranks contains duplicate rank: " +
-                    std::to_string(rank);
-            out.error = error;
             return false;
         }
     }
 
     if (participant_ranks.size() < 2) {
-        out.ok = true;
         return true;
     }
 
-    const double multiplier = traffic_multiplier_for_collective(type);
+    const double multiplier = type == CollectiveType::AllReduce ? 2.0 : 1.0;
     const std::uint64_t edge_bytes = static_cast<std::uint64_t>(
         std::llround(static_cast<double>(bytes_per_rank) * multiplier));
-    if (edge_bytes == 0) {
-        error = "edge_bytes must be > 0";
-        out.error = error;
-        return false;
-    }
 
     std::unordered_map<std::string, TopologyLinkEstimate> aggregates;
-    double total_time_us = 0.0;
 
     for (std::size_t index = 0; index < participant_ranks.size(); ++index) {
         const int src_rank = participant_ranks[index];
@@ -223,10 +141,8 @@ bool TopologyModel::estimate_ring_collective(
 
         TopologyLinkEstimate edge;
         if (!estimate_transfer(src_rank, dst_rank, edge_bytes, edge, error)) {
-            out.error = error;
             return false;
         }
-        total_time_us += edge.estimated_time_us;
 
         const std::string key = make_link_key(edge.src_node, edge.dst_node, edge.scope);
         auto it = aggregates.find(key);
@@ -256,9 +172,6 @@ bool TopologyModel::estimate_ring_collective(
             return std::string(topology_link_scope_name(lhs.scope)) <
                    topology_link_scope_name(rhs.scope);
         });
-
-    out.estimated_time_us = total_time_us;
-    out.ok = true;
     return true;
 }
 

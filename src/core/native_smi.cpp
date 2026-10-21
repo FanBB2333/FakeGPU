@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cerrno>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -39,6 +38,8 @@ namespace {
 constexpr const char* kStateSchema = "fakegpu.smi_state.v2";
 constexpr double kDefaultIntervalMs = 250.0;
 constexpr double kMinimumIntervalMs = 50.0;
+// Keeps the steady_clock deadline in wait_for() from overflowing.
+constexpr double kMaximumIntervalMs = 1e12;
 constexpr std::size_t kDefaultDetailLimit = 64;
 constexpr std::size_t kMaximumDetailLimit = 1024;
 constexpr std::size_t kDefaultMaxStateBytes = 1024 * 1024;
@@ -111,7 +112,7 @@ std::chrono::milliseconds configured_interval() {
             milliseconds = parsed;
         }
     }
-    milliseconds = std::max(kMinimumIntervalMs, milliseconds);
+    milliseconds = std::min(kMaximumIntervalMs, std::max(kMinimumIntervalMs, milliseconds));
     return std::chrono::milliseconds(
         static_cast<std::chrono::milliseconds::rep>(milliseconds));
 }
@@ -125,11 +126,14 @@ std::size_t configured_size_limit(
     if (!value || !*value) {
         return fallback;
     }
-    errno = 0;
+    // strtoll saturates out-of-range values, which then clamp like Python's int().
     char* end = nullptr;
-    const unsigned long long parsed = std::strtoull(value, &end, 10);
-    if (errno != 0 || end == value || !end || *end != '\0') {
+    const long long parsed = std::strtoll(value, &end, 10);
+    if (end == value || *end != '\0') {
         return fallback;
+    }
+    if (parsed < 0) {
+        return minimum;
     }
     return static_cast<std::size_t>(
         std::min<unsigned long long>(
@@ -228,6 +232,14 @@ void append_string_array(
         append_json_string(out, values[index]);
     }
     out << ']';
+}
+
+template <class Model>
+void append_validity(std::ostringstream& out, const Model& model) {
+    out << ",\"configured\":" << (model.configured ? "true" : "false");
+    out << ",\"valid\":" << (model.valid ? "true" : "false");
+    out << ",\"error\":";
+    append_json_string(out, model.error);
 }
 
 struct NativeActivity {
@@ -414,12 +426,8 @@ void append_device_topology(
     const DeviceReportStats& device,
     const std::vector<DeviceReportStats>& devices,
     const ModeledDeviceTopology& topology) {
-    static const std::vector<ModeledNvLinkPeer> no_ports;
     const int index = device.index;
-    const auto& ports =
-        index >= 0 && static_cast<std::size_t>(index) < topology.nvlink_peers.size()
-        ? topology.nvlink_peers[static_cast<std::size_t>(index)]
-        : no_ports;
+    const auto& ports = topology.nvlink_peers[static_cast<std::size_t>(index)];
     const auto peers = topology.peers(index);
     double aggregate_bandwidth_gbps = 0.0;
     for (const auto& port : ports) {
@@ -430,36 +438,31 @@ void append_device_topology(
     append_json_string(out, topology.source);
     out << ",\"platform\":";
     append_json_string(out, topology.platform);
-    out << ",\"configured\":"
-        << (topology.configured ? "true" : "false");
-    out << ",\"valid\":" << (topology.valid ? "true" : "false");
-    out << ",\"error\":";
-    append_json_string(out, topology.error);
-    if (const ModeledSlot* slot = topology.slot(index)) {
-        out << ",\"slot\":{\"type\":";
-        append_json_string(out, slot->type);
-        out << ",\"numa_node\":" << slot->numa;
-        out << ",\"host_bridge\":" << slot->bridge;
-        out << ",\"pcie_switch\":";
-        append_json_string(out, slot->pcie_switch);
-        out << "},\"pcie\":";
-        if (slot->pcie.present()) {
-            out << '{';
-            append_pcie_link_fields(out, "generation", "width", slot->pcie);
-            out << ',';
-            append_pcie_link_fields(out, "max_generation", "max_width", slot->pcie);
-            out << ',';
-            append_pcie_link_fields(out, "gpu_max_generation", "gpu_max_width", slot->gpu_max_pcie());
-            out << ",\"bandwidth_gbps\":" << slot->pcie.bandwidth_gbps() << '}';
-        } else {
-            out << "null";
-        }
-        out << ",\"host_link\":{\"kind\":";
-        append_json_string(out, slot->host_link);
-        out << ",\"bandwidth_gbps\":";
-        append_optional_gbps(out, slot->host_bandwidth_gbps());
-        out << '}';
+    append_validity(out, topology);
+    const ModeledSlot& slot = *topology.slot(index);
+    out << ",\"slot\":{\"type\":";
+    append_json_string(out, slot.type);
+    out << ",\"numa_node\":" << slot.numa;
+    out << ",\"host_bridge\":" << slot.bridge;
+    out << ",\"pcie_switch\":";
+    append_json_string(out, slot.pcie_switch);
+    out << "},\"pcie\":";
+    if (slot.pcie.present()) {
+        out << '{';
+        append_pcie_link_fields(out, "generation", "width", slot.pcie);
+        out << ',';
+        append_pcie_link_fields(out, "max_generation", "max_width", slot.pcie);
+        out << ',';
+        append_pcie_link_fields(out, "gpu_max_generation", "gpu_max_width", slot.gpu_max_pcie());
+        out << ",\"bandwidth_gbps\":" << slot.pcie.bandwidth_gbps() << '}';
+    } else {
+        out << "null";
     }
+    out << ",\"host_link\":{\"kind\":";
+    append_json_string(out, slot.host_link);
+    out << ",\"bandwidth_gbps\":";
+    append_optional_gbps(out, slot.host_bandwidth_gbps());
+    out << '}';
     out << ",\"peer_access\":[";
     bool first = true;
     for (const auto& remote : devices) {
@@ -479,38 +482,32 @@ void append_device_topology(
     out << ",\"links\":[";
     for (std::size_t position = 0; position < ports.size(); ++position) {
         const ModeledNvLinkPeer& port = ports[position];
-        const DeviceReportStats* remote =
-            port.peer_index >= 0 ? find_device(devices, port.peer_index) : nullptr;
         out << (position ? "," : "") << "{\"link\":" << port.link;
-        out << ",\"remote\":" << (port.peer_index >= 0 ? "\"gpu\"" : "\"nvswitch\"");
-        out << ",\"index\":";
         if (port.peer_index >= 0) {
-            out << port.peer_index;
+            const DeviceReportStats& remote = *find_device(devices, port.peer_index);
+            out << ",\"remote\":\"gpu\",\"index\":" << port.peer_index;
+            out << ",\"uuid\":";
+            append_json_string(out, remote.uuid);
+            out << ",\"pci_bus_id\":";
+            append_json_string(out, remote.pci_bus_id);
         } else {
-            out << "null";
+            out << ",\"remote\":\"nvswitch\",\"index\":null,\"uuid\":\"\"";
+            out << ",\"pci_bus_id\":";
+            append_json_string(out, kNvSwitchPciBusId);
         }
-        out << ",\"uuid\":";
-        append_json_string(
-            out,
-            port.peer_index < 0 ? std::string() : remote ? remote->uuid : std::string("unknown"));
-        out << ",\"pci_bus_id\":";
-        append_json_string(
-            out,
-            port.peer_index < 0 ? std::string(kNvSwitchPciBusId)
-                                : remote ? remote->pci_bus_id : std::string("unknown"));
         out << ",\"bandwidth_gbps\":" << port.bandwidth_gbps;
         out << ",\"active\":true}";
     }
     out << "],\"peers\":[";
     for (std::size_t position = 0; position < peers.size(); ++position) {
         const auto& peer = peers[position];
-        const DeviceReportStats* remote = find_device(devices, peer.index);
+        const DeviceReportStats& remote = *find_device(devices, peer.index);
         out << (position ? "," : "") << "{\"link\":" << peer.first_link;
         out << ",\"index\":" << peer.index;
         out << ",\"uuid\":";
-        append_json_string(out, remote ? remote->uuid : std::string("unknown"));
+        append_json_string(out, remote.uuid);
         out << ",\"pci_bus_id\":";
-        append_json_string(out, remote ? remote->pci_bus_id : std::string("unknown"));
+        append_json_string(out, remote.pci_bus_id);
         out << ",\"links\":" << peer.links;
         out << ",\"via\":";
         append_json_string(out, peer.via);
@@ -532,7 +529,6 @@ void append_topology(
     for (const auto& source : devices) {
         for (const auto& peer : topology.peers(source.index)) {
             if (peer.index <= source.index) continue;
-            const DeviceReportStats* target = find_device(devices, peer.index);
             links << (link_count ? "," : "");
             ++link_count;
             links << "{\"source_index\":" << source.index;
@@ -540,7 +536,7 @@ void append_topology(
             links << ",\"source_uuid\":";
             append_json_string(links, source.uuid);
             links << ",\"target_uuid\":";
-            append_json_string(links, target ? target->uuid : std::string("unknown"));
+            append_json_string(links, find_device(devices, peer.index)->uuid);
             links << ",\"kind\":\"NVLink\"";
             links << ",\"via\":";
             append_json_string(links, peer.via);
@@ -559,11 +555,7 @@ void append_topology(
     append_json_string(out, topology.source);
     out << ",\"platform\":";
     append_json_string(out, topology.platform);
-    out << ",\"configured\":"
-        << (topology.configured ? "true" : "false");
-    out << ",\"valid\":" << (topology.valid ? "true" : "false");
-    out << ",\"error\":";
-    append_json_string(out, topology.error);
+    append_validity(out, topology);
     out << ",\"nvlink_bandwidth_gbps\":"
         << topology.nvlink_bandwidth_gbps;
     out << ",\"link_count\":" << link_count;
@@ -626,58 +618,11 @@ void append_fault_event(
     out << '}';
 }
 
-void append_fault_model(
+void append_fault_body(
     std::ostringstream& out,
     const ModeledFaultModel& model,
+    const std::vector<const ModeledFaultEvent*>& events,
     std::size_t detail_limit) {
-    uint64_t event_count = 0;
-    int maximum_severity = model.valid ? 0 : 3;
-    for (const auto& event : model.events) {
-        event_count = saturating_add(event_count, event.count);
-        maximum_severity = std::max(
-            maximum_severity,
-            modeled_fault_severity_rank(event.severity));
-    }
-    const std::size_t retained =
-        std::min(detail_limit, model.events.size());
-
-    out << ",\"faults\":{";
-    out << "\"schema_version\":\"fakegpu.fault_model.v1\"";
-    out << ",\"source\":";
-    append_json_string(out, model.source);
-    out << ",\"configured\":"
-        << (model.configured ? "true" : "false");
-    out << ",\"valid\":" << (model.valid ? "true" : "false");
-    out << ",\"error\":";
-    append_json_string(out, model.error);
-    out << ",\"hardware_health\":\"unobserved\"";
-    out << ",\"status\":";
-    append_json_string(
-        out,
-        modeled_health_status(model, maximum_severity));
-    out << ",\"max_severity\":";
-    append_json_string(
-        out,
-        fault_severity_name(maximum_severity));
-    out << ",\"event_count\":" << event_count;
-    out << ",\"event_types_total\":" << model.events.size();
-    out << ",\"event_types_retained\":" << retained;
-    out << ",\"events\":[";
-    for (std::size_t index = 0; index < retained; ++index) {
-        if (index != 0) {
-            out << ',';
-        }
-        append_fault_event(out, model.events[index], model.source);
-    }
-    out << "]}";
-}
-
-void append_device_health(
-    std::ostringstream& out,
-    const ModeledFaultModel& model,
-    int device_index,
-    std::size_t detail_limit) {
-    const auto events = fault_events_for_device(model, device_index);
     uint64_t event_count = 0;
     int maximum_severity = model.valid ? 0 : 3;
     for (const ModeledFaultEvent* event : events) {
@@ -689,13 +634,9 @@ void append_device_health(
     const std::size_t retained =
         std::min(detail_limit, events.size());
 
-    out << ",\"health\":{\"source\":";
+    out << "\"source\":";
     append_json_string(out, model.source);
-    out << ",\"configured\":"
-        << (model.configured ? "true" : "false");
-    out << ",\"valid\":" << (model.valid ? "true" : "false");
-    out << ",\"error\":";
-    append_json_string(out, model.error);
+    append_validity(out, model);
     out << ",\"hardware_health\":\"unobserved\"";
     out << ",\"status\":";
     append_json_string(
@@ -716,6 +657,32 @@ void append_device_health(
         append_fault_event(out, *events[index], model.source);
     }
     out << "]}";
+}
+
+void append_fault_model(
+    std::ostringstream& out,
+    const ModeledFaultModel& model,
+    std::size_t detail_limit) {
+    std::vector<const ModeledFaultEvent*> events;
+    for (const auto& event : model.events) {
+        events.push_back(&event);
+    }
+    out << ",\"faults\":{";
+    out << "\"schema_version\":\"fakegpu.fault_model.v1\",";
+    append_fault_body(out, model, events, detail_limit);
+}
+
+void append_device_health(
+    std::ostringstream& out,
+    const ModeledFaultModel& model,
+    int device_index,
+    std::size_t detail_limit) {
+    out << ",\"health\":{";
+    append_fault_body(
+        out,
+        model,
+        fault_events_for_device(model, device_index),
+        detail_limit);
 }
 
 std::vector<const ModeledMigInstance*> mig_instances_for_device(
@@ -785,11 +752,7 @@ void append_device_mig(
 
     out << ",\"mig\":{\"source\":";
     append_json_string(out, layout.source);
-    out << ",\"configured\":"
-        << (layout.configured ? "true" : "false");
-    out << ",\"valid\":" << (layout.valid ? "true" : "false");
-    out << ",\"error\":";
-    append_json_string(out, layout.error);
+    append_validity(out, layout);
     out << ",\"mode\":";
     append_json_string(out, mode);
     out << ",\"max_instance_count\":"
@@ -828,11 +791,7 @@ void append_mig_layout(
     out << "\"schema_version\":\"fakegpu.mig_layout.v1\"";
     out << ",\"source\":";
     append_json_string(out, layout.source);
-    out << ",\"configured\":"
-        << (layout.configured ? "true" : "false");
-    out << ",\"valid\":" << (layout.valid ? "true" : "false");
-    out << ",\"error\":";
-    append_json_string(out, layout.error);
+    append_validity(out, layout);
     out << ",\"enabled_device_count\":"
         << enabled_devices.size();
     out << ",\"instance_count\":" << layout.instances.size();
@@ -859,31 +818,28 @@ void append_device(
         ? device.total_memory - device.used_memory_peak
         : 0;
 
+    const std::string compute_capability =
+        std::to_string(device.compute_major) + "." +
+        std::to_string(device.compute_minor);
+    const std::string compiler_target =
+        "sm_" + std::to_string(device.compute_major) +
+        std::to_string(device.compute_minor);
+
     out << "{\"index\":" << device.index;
     out << ",\"name\":";
     append_json_string(out, device.name);
     out << ",\"profile_id\":";
-    append_json_string(
-        out,
-        device.profile_id.empty() ? "unknown" : device.profile_id);
+    append_json_string(out, device.profile_id);
     out << ",\"profile\":{\"id\":";
-    append_json_string(
-        out,
-        device.profile_id.empty() ? "unknown" : device.profile_id);
+    append_json_string(out, device.profile_id);
     out << ",\"name\":";
     append_json_string(out, device.name);
     out << ",\"architecture\":";
     append_json_string(out, device.architecture);
     out << ",\"compute_capability\":";
-    append_json_string(
-        out,
-        std::to_string(device.compute_major) + "." +
-            std::to_string(device.compute_minor));
+    append_json_string(out, compute_capability);
     out << ",\"compiler_target\":";
-    append_json_string(
-        out,
-        "sm_" + std::to_string(device.compute_major) +
-            std::to_string(device.compute_minor));
+    append_json_string(out, compiler_target);
     out << ",\"memory_bytes\":" << device.total_memory;
     out << ",\"sm_count\":" << device.sm_count;
     out << ",\"memory_bus_width_bits\":"
@@ -906,15 +862,9 @@ void append_device(
     out << ",\"architecture\":";
     append_json_string(out, device.architecture);
     out << ",\"compute_capability\":";
-    append_json_string(
-        out,
-        std::to_string(device.compute_major) + "." +
-            std::to_string(device.compute_minor));
+    append_json_string(out, compute_capability);
     out << ",\"compiler_target\":";
-    append_json_string(
-        out,
-        "sm_" + std::to_string(device.compute_major) +
-            std::to_string(device.compute_minor));
+    append_json_string(out, compiler_target);
     out << ",\"total_memory\":" << device.total_memory;
     out << ",\"free_memory\":" << free_memory;
     out << ",\"tracked_memory\":" << device.used_memory_current;
@@ -1066,139 +1016,187 @@ private:
         }
     }
 
+    std::string render_state(bool running) {
+        const std::vector<DeviceReportStats> devices =
+            state_.snapshot_device_report();
+        const ModeledDeviceTopology topology =
+            state_.snapshot_device_topology();
+        const ModeledFaultModel fault_model =
+            state_.snapshot_fault_model();
+        const ModeledMigLayout mig_layout =
+            state_.snapshot_mig_layout();
+        const BackendConfig& config = BackendConfig::instance();
+        const double interval_seconds =
+            static_cast<double>(interval_.count()) / 1000.0;
+
+        std::ostringstream out;
+        out.imbue(std::locale::classic());
+        out << "{\"schema_version\":\"" << kStateSchema << '"';
+        out << ",\"timestamp_ns\":" << current_timestamp_ns();
+        out << ",\"hostname\":";
+        append_json_string(out, hostname_);
+        out << ",\"pid\":" << static_cast<long long>(getpid());
+        out << ",\"process_name\":";
+        append_json_string(out, process_name_);
+        out << ",\"runtime\":\"native\"";
+        out << ",\"fakegpu\":{\"version\":";
+        append_json_string(out, FAKEGPU_VERSION);
+        out << ",\"runtime\":\"native\"";
+        out << ",\"backend\":\"native_interception\"";
+        out << ",\"mode\":";
+        append_json_string(out, mode_name(config.mode()));
+        out << ",\"oom_policy\":";
+        append_json_string(out, policy_name(config.oom_policy()));
+        out << ",\"unsupported_api_policy\":";
+        append_json_string(
+            out,
+            unsupported_api_policy_name(
+                config.unsupported_api_policy()));
+        out << ",\"distributed_mode\":";
+        append_json_string(
+            out,
+            distributed::distributed_mode_name(
+                config.distributed_config().mode));
+        out << ",\"memory_tracking_enabled\":true";
+        out << ",\"dispatch_memory_tracking_enabled\":false";
+        out << ",\"profile_catalog\":{\"profile_count\":"
+            << profile_count_ << '}';
+        out << ",\"native_capabilities\":{}}";
+        out << ",\"software\":{\"python_version\":null";
+        out << ",\"python_implementation\":null";
+        out << ",\"python_executable\":null";
+        out << ",\"platform\":";
+        append_json_string(out, platform_name());
+        out << ",\"torch_version\":null";
+        out << ",\"torch_cuda_build\":null";
+        out << ",\"cuda_version\":";
+        append_json_string(
+            out,
+            environment_text(
+                "FAKEGPU_CUDA_VERSION",
+                "12.1"));
+        out << ",\"cuda_version_source\":\"native_fakegpu_default\"";
+        out << ",\"driver_version\":";
+        append_json_string(
+            out,
+            environment_text(
+                "FAKEGPU_DRIVER_VERSION",
+                "simulated"));
+        out << '}';
+        out << ",\"publisher\":{\"interval_seconds\":"
+            << interval_seconds;
+        out << ",\"runtime_overhead_bytes\":0";
+        out << ",\"source\":\"native_monitor\"";
+        out << ",\"health\":{\"attempted_writes\":"
+            << attempted_writes_ + 1;
+        out << ",\"successful_writes\":"
+            << successful_writes_ + 1;
+        out << ",\"failed_writes\":" << failed_writes_;
+        out << ",\"last_duration_us\":" << last_duration_us_;
+        out << ",\"max_duration_us\":" << max_duration_us_;
+        out << ",\"last_serialized_bytes\":"
+            << last_serialized_bytes_;
+        out << ",\"last_error\":";
+        append_json_string(out, last_error_code_);
+        out << '}';
+        out << ",\"limits\":{\"detail_entries\":"
+            << limits_.detail_entries;
+        out << ",\"max_state_bytes\":"
+            << limits_.max_state_bytes << "}}";
+        out << ",\"running\":" << (running ? "true" : "false");
+        out << ",\"tracking_confidence\":"
+            << "\"C2_native_allocation_lifetime\"";
+        out << ",\"stage\":";
+        append_json_string(
+            out,
+            environment_text(
+                "FAKEGPU_PREFLIGHT_STAGE",
+                "native"));
+        out << ",\"allocator_model\":"
+            << "\"direct_native_allocations.v1\"";
+        out << ",\"dispatch_tracking\":{"
+            << "\"enabled\":false,"
+            << "\"operator_calls\":0,"
+            << "\"output_tensors\":0,"
+            << "\"new_allocations\":0,"
+            << "\"alias_outputs\":0,"
+            << "\"inaccessible_outputs\":0,"
+            << "\"operators\":{}}";
+        append_topology(out, devices, topology);
+        append_fault_model(
+            out,
+            fault_model,
+            limits_.detail_entries);
+        append_mig_layout(out, mig_layout);
+        out << ",\"devices\":[";
+        for (std::size_t index = 0;
+             index < devices.size();
+             ++index) {
+            if (index != 0) {
+                out << ',';
+            }
+            append_device(
+                out,
+                devices[index],
+                devices,
+                topology,
+                fault_model,
+                mig_layout,
+                limits_.detail_entries);
+        }
+        out << "]}\n";
+        return out.str();
+    }
+
+    // Returns nullptr on success, otherwise the error code to record.
+    const char* store_state(const std::string& payload) {
+        const std::filesystem::path parent = path_.parent_path();
+        std::error_code error;
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent, error);
+            if (error) {
+                FGPU_LOG(
+                    "[NativeSMI] Failed to create state directory: %s\n",
+                    error.message().c_str());
+                return "create_state_directory_failed";
+            }
+        }
+
+        const std::filesystem::path temporary =
+            path_.parent_path() /
+            ("." + path_.filename().string() + "." +
+             std::to_string(static_cast<long long>(getpid())) +
+             ".tmp");
+        {
+            std::ofstream stream(
+                temporary,
+                std::ios::binary | std::ios::trunc);
+            stream.write(
+                payload.data(),
+                static_cast<std::streamsize>(payload.size()));
+            stream.flush();
+            if (!stream.good()) {
+                stream.close();
+                std::filesystem::remove(temporary, error);
+                return "write_temporary_state_failed";
+            }
+        }
+        std::filesystem::rename(temporary, path_, error);
+        if (error) {
+            FGPU_LOG(
+                "[NativeSMI] Failed to replace state file: %s\n",
+                error.message().c_str());
+            std::filesystem::remove(temporary, error);
+            return "replace_state_file_failed";
+        }
+        return nullptr;
+    }
+
     void write_state(bool running) noexcept {
         const SteadyClock::time_point started = SteadyClock::now();
         std::size_t serialized_bytes = 0;
         try {
-            const std::vector<DeviceReportStats> devices =
-                state_.snapshot_device_report();
-            const ModeledDeviceTopology topology =
-                state_.snapshot_device_topology();
-            const ModeledFaultModel fault_model =
-                state_.snapshot_fault_model();
-            const ModeledMigLayout mig_layout =
-                state_.snapshot_mig_layout();
-            const BackendConfig& config = BackendConfig::instance();
-            const double interval_seconds =
-                static_cast<double>(interval_.count()) / 1000.0;
-
-            std::ostringstream out;
-            out.imbue(std::locale::classic());
-            out << "{\"schema_version\":\"" << kStateSchema << '"';
-            out << ",\"timestamp_ns\":" << current_timestamp_ns();
-            out << ",\"hostname\":";
-            append_json_string(out, hostname_);
-            out << ",\"pid\":" << static_cast<long long>(getpid());
-            out << ",\"process_name\":";
-            append_json_string(out, process_name_);
-            out << ",\"runtime\":\"native\"";
-            out << ",\"fakegpu\":{\"version\":";
-            append_json_string(out, FAKEGPU_VERSION);
-            out << ",\"runtime\":\"native\"";
-            out << ",\"backend\":\"native_interception\"";
-            out << ",\"mode\":";
-            append_json_string(out, mode_name(config.mode()));
-            out << ",\"oom_policy\":";
-            append_json_string(out, policy_name(config.oom_policy()));
-            out << ",\"unsupported_api_policy\":";
-            append_json_string(
-                out,
-                unsupported_api_policy_name(
-                    config.unsupported_api_policy()));
-            out << ",\"distributed_mode\":";
-            append_json_string(
-                out,
-                distributed::distributed_mode_name(
-                    config.distributed_config().mode));
-            out << ",\"memory_tracking_enabled\":true";
-            out << ",\"dispatch_memory_tracking_enabled\":false";
-            out << ",\"profile_catalog\":{\"profile_count\":"
-                << profile_count_ << '}';
-            out << ",\"native_capabilities\":{}}";
-            out << ",\"software\":{\"python_version\":null";
-            out << ",\"python_implementation\":null";
-            out << ",\"python_executable\":null";
-            out << ",\"platform\":";
-            append_json_string(out, platform_name());
-            out << ",\"torch_version\":null";
-            out << ",\"torch_cuda_build\":null";
-            out << ",\"cuda_version\":";
-            append_json_string(
-                out,
-                environment_text(
-                    "FAKEGPU_CUDA_VERSION",
-                    "12.1"));
-            out << ",\"cuda_version_source\":\"native_fakegpu_default\"";
-            out << ",\"driver_version\":";
-            append_json_string(
-                out,
-                environment_text(
-                    "FAKEGPU_DRIVER_VERSION",
-                    "simulated"));
-            out << '}';
-            out << ",\"publisher\":{\"interval_seconds\":"
-                << interval_seconds;
-            out << ",\"runtime_overhead_bytes\":0";
-            out << ",\"source\":\"native_monitor\"";
-            out << ",\"health\":{\"attempted_writes\":"
-                << attempted_writes_ + 1;
-            out << ",\"successful_writes\":"
-                << successful_writes_ + 1;
-            out << ",\"failed_writes\":" << failed_writes_;
-            out << ",\"last_duration_us\":" << last_duration_us_;
-            out << ",\"max_duration_us\":" << max_duration_us_;
-            out << ",\"last_serialized_bytes\":"
-                << last_serialized_bytes_;
-            out << ",\"last_error\":";
-            append_json_string(out, last_error_code_);
-            out << '}';
-            out << ",\"limits\":{\"detail_entries\":"
-                << limits_.detail_entries;
-            out << ",\"max_state_bytes\":"
-                << limits_.max_state_bytes << "}}";
-            out << ",\"running\":" << (running ? "true" : "false");
-            out << ",\"tracking_confidence\":"
-                << "\"C2_native_allocation_lifetime\"";
-            out << ",\"stage\":";
-            append_json_string(
-                out,
-                environment_text(
-                    "FAKEGPU_PREFLIGHT_STAGE",
-                    "native"));
-            out << ",\"allocator_model\":"
-                << "\"direct_native_allocations.v1\"";
-            out << ",\"dispatch_tracking\":{"
-                << "\"enabled\":false,"
-                << "\"operator_calls\":0,"
-                << "\"output_tensors\":0,"
-                << "\"new_allocations\":0,"
-                << "\"alias_outputs\":0,"
-                << "\"inaccessible_outputs\":0,"
-                << "\"operators\":{}}";
-            append_topology(out, devices, topology);
-            append_fault_model(
-                out,
-                fault_model,
-                limits_.detail_entries);
-            append_mig_layout(out, mig_layout);
-            out << ",\"devices\":[";
-            for (std::size_t index = 0;
-                 index < devices.size();
-                 ++index) {
-                if (index != 0) {
-                    out << ',';
-                }
-                append_device(
-                    out,
-                    devices[index],
-                    devices,
-                    topology,
-                    fault_model,
-                    mig_layout,
-                    limits_.detail_entries);
-            }
-            out << "]}\n";
-            const std::string payload = out.str();
+            const std::string payload = render_state(running);
             serialized_bytes = payload.size();
             if (serialized_bytes > limits_.max_state_bytes) {
                 record_failure(
@@ -1211,61 +1209,8 @@ private:
                     limits_.max_state_bytes);
                 return;
             }
-
-            const std::filesystem::path parent = path_.parent_path();
-            std::error_code error;
-            if (!parent.empty()) {
-                std::filesystem::create_directories(parent, error);
-                if (error) {
-                    FGPU_LOG(
-                        "[NativeSMI] Failed to create state directory: %s\n",
-                        error.message().c_str());
-                    record_failure(
-                        started,
-                        serialized_bytes,
-                        "create_state_directory_failed");
-                    return;
-                }
-            }
-
-            const std::filesystem::path temporary =
-                path_.parent_path() /
-                ("." + path_.filename().string() + "." +
-                 std::to_string(static_cast<long long>(getpid())) +
-                 ".tmp");
-            {
-                std::ofstream stream(
-                    temporary,
-                    std::ios::binary | std::ios::trunc);
-                stream.write(
-                    payload.data(),
-                    static_cast<std::streamsize>(payload.size()));
-                stream.flush();
-                if (!stream.good()) {
-                    stream.close();
-                    std::filesystem::remove(temporary, error);
-                    record_failure(
-                        started,
-                        serialized_bytes,
-                        "write_temporary_state_failed");
-                    return;
-                }
-            }
-            std::filesystem::rename(temporary, path_, error);
-            if (error) {
-                std::filesystem::remove(path_, error);
-                error.clear();
-                std::filesystem::rename(temporary, path_, error);
-            }
-            if (error) {
-                FGPU_LOG(
-                    "[NativeSMI] Failed to replace state file: %s\n",
-                    error.message().c_str());
-                std::filesystem::remove(temporary, error);
-                record_failure(
-                    started,
-                    serialized_bytes,
-                    "replace_state_file_failed");
+            if (const char* error_code = store_state(payload)) {
+                record_failure(started, serialized_bytes, error_code);
                 return;
             }
             record_success(started, serialized_bytes);

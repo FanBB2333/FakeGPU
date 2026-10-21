@@ -221,6 +221,87 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
     )
 
 
+def test_fakecuda_module_transfer_reports_buffer_category() -> None:
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", profile="test-512m", device_count=1)
+
+        import torch
+        from fakegpu import torch_patch
+
+        class WithBuffer(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("buf", torch.zeros(256, 1024))
+
+        moved = [WithBuffer().cuda(), WithBuffer().to("cuda")]
+        snapshot = torch_patch.memory_snapshot()
+        print(json.dumps(snapshot["devices"][0]["current_bytes_by_category"]))
+        """
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    categories = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert categories.get("buffer", 0) >= 2 * MIB
+    assert "tensor" not in categories
+
+
+def test_fakecuda_allocation_stacks_skip_fakegpu_frames() -> None:
+    code = textwrap.dedent(
+        """
+        import json
+        import os
+
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+        os.environ["FAKEGPU_ALLOCATION_STACKS"] = "1"
+        os.environ["FAKEGPU_ALLOCATION_STACK_DEPTH"] = "2"
+
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", profile="test-512m", device_count=1)
+
+        import torch
+        from fakegpu import torch_patch
+
+        def allocate_here():
+            return torch.empty(1024, 1024, device="cuda")
+
+        tensor = allocate_here()
+        snapshot = torch_patch.memory_snapshot()
+        print(json.dumps(snapshot["devices"][0]["largest_allocations"][0]["stack"]))
+        """
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(ROOT)
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    stack = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert len(stack) == 2
+    assert stack[-1]["function"] == "allocate_here"
+    assert all("/fakegpu/" not in frame["file"] for frame in stack)
+
+
 def test_fakecuda_patches_the_distributed_process_group_lifecycle() -> None:
     code = textwrap.dedent(
         """
