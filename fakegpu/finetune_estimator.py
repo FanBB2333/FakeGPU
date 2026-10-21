@@ -404,6 +404,13 @@ def _workload(config: Mapping[str, Any]) -> dict[str, Any]:
     if max_steps is not None:
         optimizer_steps = _positive_int(max_steps, "max_steps")
         stop_rule = "max_steps"
+    elif config.get("source_framework") == "axolotl" and not config.get("packing"):
+        # Axolotl 0.18.0 always hands Trainer max_steps. Without packing it is
+        # ceil(rows * num_epochs / batch_size), which ignores each epoch's
+        # shorter final accumulation window (utils/trainer.py,
+        # calculate_total_num_steps; core/builders/base.py).
+        optimizer_steps = math.ceil(samples * float(epochs) / (batch * accumulation))
+        stop_rule = "axolotl_epoch_steps"
     else:
         # Finish optimizer updates rather than stopping halfway through an
         # accumulation window; the last update of each epoch can be shorter.

@@ -118,6 +118,36 @@ def test_max_steps_overrides_epochs_and_handles_short_last_update() -> None:
     assert report["workload"]["stop_rule"] == "max_steps"
 
 
+def test_axolotl_epochs_follow_its_max_steps_conversion() -> None:
+    # Axolotl 0.18.0 passes TrainingArguments(max_steps=ceil(rows * num_epochs
+    # / batch_size)) for unpacked data, here ceil(25 * 30 / 8) = 94; Trainer
+    # then wraps epochs of 4 updates (4, 4, 4 and 1 microsteps). Hugging Face
+    # Trainer on its own would run 30 * 4 = 120 updates.
+    hf = _estimate(
+        _training(num_samples=25, micro_batch_size=2, epochs=30)
+    )["workload"]
+    assert hf["optimizer_steps"] == 120
+    work = _estimate(
+        _training(
+            num_samples=25, micro_batch_size=2, epochs=30, source_framework="axolotl"
+        )
+    )["workload"]
+    assert work["optimizer_steps"] == 94
+    assert work["stop_rule"] == "axolotl_epoch_steps"
+    assert work["microsteps"] == 23 * 13 + 8
+    assert work["processed_samples"] == 23 * 25 + 16
+    limited = _estimate(
+        _training(
+            num_samples=25,
+            micro_batch_size=2,
+            epochs=30,
+            max_steps=10,
+            source_framework="axolotl",
+        )
+    )["workload"]
+    assert limited["optimizer_steps"] == 10
+
+
 def test_fractional_epoch_rounds_to_complete_optimizer_update() -> None:
     report = _estimate(_training(num_samples=19, epochs=0.5))
     assert report["workload"]["optimizer_steps"] == 2

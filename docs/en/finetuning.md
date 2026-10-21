@@ -31,6 +31,9 @@ does not import the frameworks or load the weights.
 - Samples are the processed training sequences after filtering, splitting,
   and packing. Sequence length includes template tokens and padding.
 - `max_steps` overrides epochs. `--max-steps -1` clears a configured limit.
+- Unpacked Axolotl configs convert epochs as Axolotl does:
+  `ceil(samples * epochs / (micro_batch_size * gradient_accumulation_steps))`
+  updates, which Axolotl passes to Trainer as `max_steps`.
 
 ```bash
 python -m fakegpu estimate-finetune \
