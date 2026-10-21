@@ -19,6 +19,7 @@ from typing import Any
 
 from ._cli import (
     add_json_flag_argument,
+    bounded_argument,
     command_prog,
 )
 from ._smi_environment import (
@@ -985,23 +986,15 @@ def _process_name() -> str:
     return os.path.basename(sys.argv[0])
 
 
-def _positive_float(value: str) -> float:
-    try:
-        parsed = float(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("expected a number") from exc
-    if not math.isfinite(parsed) or parsed <= 0:
-        raise argparse.ArgumentTypeError(
-            "expected a finite number greater than zero"
-        )
-    return parsed
-
-
-def _positive_int(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("expected an integer") from exc
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("value must be greater than zero")
-    return parsed
+_positive_float = bounded_argument(
+    float,
+    lambda v: math.isfinite(v) and v > 0,
+    "expected a finite number greater than zero",
+    parse_message="expected a number",
+)
+_positive_int = bounded_argument(
+    int,
+    lambda v: v > 0,
+    "value must be greater than zero",
+    parse_message="expected an integer",
+)

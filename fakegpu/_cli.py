@@ -29,9 +29,9 @@ Exit codes
 from __future__ import annotations
 
 import importlib
-from argparse import ArgumentParser, _ActionsContainer
+from argparse import ArgumentParser, ArgumentTypeError, _ActionsContainer
 from dataclasses import dataclass
-from typing import Callable, NoReturn, Sequence
+from typing import Any, Callable, NoReturn, Sequence
 
 
 # ``ArgumentParser`` and the groups created by ``add_argument_group`` and
@@ -177,3 +177,24 @@ def usage_error(parser: ArgumentParser, error: object) -> NoReturn:
 
     parser.exit(EXIT_USAGE, f"{parser.prog}: {error}\n")
     raise AssertionError("parser.exit must not return")
+
+
+def bounded_argument(
+    parse: Callable[[str], Any],
+    accept: Callable[[Any], bool],
+    message: str,
+    *,
+    parse_message: str | None = None,
+) -> Callable[[str], Any]:
+    """Build an argparse ``type=`` converter that parses and range-checks."""
+
+    def convert(text: str) -> Any:
+        try:
+            value = parse(text)
+        except ValueError as exc:
+            raise ArgumentTypeError(parse_message or message) from exc
+        if not accept(value):
+            raise ArgumentTypeError(message)
+        return value
+
+    return convert

@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 from ._cli import (
     add_json_flag_argument,
+    bounded_argument,
     command_prog,
 )
 from ._smi_environment import FAULT_SEVERITY_RANK
@@ -1118,62 +1119,22 @@ def _severity_rank(value: Any) -> int:
     return FAULT_SEVERITY_RANK.get(_text(value).lower(), 0)
 
 
-def _positive_float(value: str) -> float:
-    try:
-        parsed = float(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            "expected a positive number"
-        ) from exc
-    if not math.isfinite(parsed) or parsed <= 0:
-        raise argparse.ArgumentTypeError(
-            "expected a positive number"
-        )
-    return parsed
-
-
-def _port(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            "port must be an integer from 1 to 65535"
-        ) from exc
-    if not 1 <= parsed <= 65535:
-        raise argparse.ArgumentTypeError(
-            "port must be an integer from 1 to 65535"
-        )
-    return parsed
-
-
-def _history_size(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"history size must be between 1 and {MAXIMUM_HISTORY_SIZE}"
-        ) from exc
-    if not 1 <= parsed <= MAXIMUM_HISTORY_SIZE:
-        raise argparse.ArgumentTypeError(
-            f"history size must be between 1 and {MAXIMUM_HISTORY_SIZE}"
-        )
-    return parsed
-
-
-def _process_series_limit(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            "process series limit must be between "
-            f"0 and {MAXIMUM_PROCESS_SERIES}"
-        ) from exc
-    if not 0 <= parsed <= MAXIMUM_PROCESS_SERIES:
-        raise argparse.ArgumentTypeError(
-            "process series limit must be between "
-            f"0 and {MAXIMUM_PROCESS_SERIES}"
-        )
-    return parsed
+_positive_float = bounded_argument(
+    float, lambda v: math.isfinite(v) and v > 0, "expected a positive number"
+)
+_port = bounded_argument(
+    int, lambda v: 1 <= v <= 65535, "port must be an integer from 1 to 65535"
+)
+_history_size = bounded_argument(
+    int,
+    lambda v: 1 <= v <= MAXIMUM_HISTORY_SIZE,
+    f"history size must be between 1 and {MAXIMUM_HISTORY_SIZE}",
+)
+_process_series_limit = bounded_argument(
+    int,
+    lambda v: 0 <= v <= MAXIMUM_PROCESS_SERIES,
+    f"process series limit must be between 0 and {MAXIMUM_PROCESS_SERIES}",
+)
 
 
 if __name__ == "__main__":

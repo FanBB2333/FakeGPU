@@ -10,6 +10,7 @@ from typing import Any
 
 from ._cli import (
     add_json_path_argument,
+    bounded_argument,
     command_prog,
     usage_error,
 )
@@ -712,36 +713,17 @@ def _generation_dimension(
     return configured
 
 
-def _positive_argument(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("expected a positive integer") from exc
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("expected a positive integer")
-    return parsed
-
-
-def _nonnegative_integer_argument(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("expected a non-negative integer") from exc
-    if parsed < 0:
-        raise argparse.ArgumentTypeError("expected a non-negative integer")
-    return parsed
-
-
-def _nonnegative_float_argument(value: str) -> float:
-    try:
-        parsed = float(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            "expected a finite non-negative number"
-        ) from exc
-    if not math.isfinite(parsed) or parsed < 0:
-        raise argparse.ArgumentTypeError("expected a finite non-negative number")
-    return parsed
+_positive_argument = bounded_argument(
+    int, lambda v: v > 0, "expected a positive integer"
+)
+_nonnegative_integer_argument = bounded_argument(
+    int, lambda v: v >= 0, "expected a non-negative integer"
+)
+_nonnegative_float_argument = bounded_argument(
+    float,
+    lambda v: math.isfinite(v) and v >= 0,
+    "expected a finite non-negative number",
+)
 
 
 def _format_bytes(value: int) -> str:
