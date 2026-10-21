@@ -44,8 +44,10 @@ every rank sees the values NCCL would produce:
   `BAND`, `BOR` and `BXOR` on CUDA tensors raise `ValueError` and `AVG` on
   boolean tensors raises `TypeError`, unless the group asked for gloo.
 - `DistributedDataParallel` broadcasts rank 0's parameters and buffers when it
-  is built, and rank 0's buffers again before each training forward unless
-  `broadcast_buffers=False`. When backward ends it averages the gradients
+  is built (no buffers with `broadcast_buffers=False`, nothing with
+  `init_sync=False`). Unless `broadcast_buffers=False`, it broadcasts rank 0's
+  buffers again before the first forward and before every forward that
+  follows a training forward outside `no_sync()`, as DDP does. When backward ends it averages the gradients
   across ranks; a parameter that one rank did not use counts as zeros there.
   Inside `no_sync()` gradients accumulate locally, as with real DDP.
 - Accelerate sees every process, its rank and the world size.

@@ -40,8 +40,11 @@ FP32/FP16/BF16 LoRA 与 attention 的 CPU_SIM 用例、tiny Qwen3 MoE 在 CPU �
   对整数 tensor 做 `ReduceOp.AVG` 时向零取整。与 NCCL 一致，对 CUDA tensor 使用
   `BAND`、`BOR`、`BXOR` 会抛出 `ValueError`，对 bool tensor 使用 `AVG` 会抛出
   `TypeError`，除非该组请求的是 gloo。
-- `DistributedDataParallel` 在构建时广播 rank 0 的参数和 buffer；除非设置
-  `broadcast_buffers=False`，每次训练 forward 前还会再次广播 rank 0 的 buffer。
+- `DistributedDataParallel` 在构建时广播 rank 0 的参数和 buffer（设置
+  `broadcast_buffers=False` 时不广播 buffer，设置 `init_sync=False` 时都不广播）。
+  除非设置 `broadcast_buffers=False`，它会在第一次 forward 前、以及每次紧跟在
+  `no_sync()` 之外的训练 forward 之后的 forward 前，再次广播 rank 0 的 buffer，
+  与 DDP 一致。
   backward 结束时对梯度做跨 rank 平均；某个 rank 没用到的参数在该 rank 上按零计。
   在 `no_sync()` 内梯度只在本地累积，与真实 DDP 一致。
 - Accelerate 能看到每个进程、它的 rank 和 world size。

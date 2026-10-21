@@ -182,6 +182,43 @@ def test_launched_ranks_match_gloo(tmp_path: Path) -> None:
             dist.all_reduce(flags, op=dist.ReduceOp.BAND, group=everyone)
             return flags.tolist()
         probe("gloo_band", gloo_band)
+
+        class Counter(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc = torch.nn.Linear(1, 1)
+                self.register_buffer("count", torch.full((1,), 10.0 * rank))
+            def forward(self, x):
+                self.count += rank + 1
+                return self.fc(x)
+        def counter(**options):
+            torch.manual_seed(100 + rank)
+            return torch.nn.parallel.DistributedDataParallel(Counter().cuda(), device_ids=[rank], **options)
+        def buffer_syncs():
+            model, x, counts = counter(), torch.ones(1, 1, device="cuda"), []
+            model(x).sum().backward()
+            counts.append(model.module.count.item())
+            with torch.no_grad():
+                for _ in range(2):
+                    model(x)
+                    counts.append(model.module.count.item())
+            with model.no_sync():
+                model(x).sum().backward()
+                counts.append(model.module.count.item())
+            for _ in range(2):
+                model(x).sum().backward()
+                counts.append(model.module.count.item())
+            return counts
+        probe("buffer_syncs", buffer_syncs)
+        def initial_state():
+            built = {}
+            for name, options in {"default": {}, "broadcast_buffers": {"broadcast_buffers": False},
+                                  "init_sync": {"init_sync": False},
+                                  "forward_sync_buffers": {"forward_sync_buffers": False}}.items():
+                model = counter(**options)
+                built[name] = [model.module.count.item(), model.module.fc.weight.item()]
+            return built
+        probe("initial_state", initial_state)
     """)
     for rank in range(3):
         assert ranks[rank]["barrier_timeout"] is None
@@ -206,6 +243,19 @@ def test_launched_ranks_match_gloo(tmp_path: Path) -> None:
         # NCCL refuses bitwise reductions; a gloo group computes them (1 & 2 & 3 == 0).
         assert ranks[rank]["band"] == ["ValueError", "Cannot use ReduceOp.BAND with NCCL"]
         assert ranks[rank]["gloo_band"] == [0, 7]
+    # Real DDP syncs buffers before the first forward and after a forward that synced
+    # gradients: not after no_grad or no_sync forwards, even before a training one.
+    assert [ranks[rank]["buffer_syncs"] for rank in range(3)] == [
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2.0, 3.0, 5.0, 7.0, 9.0, 7.0], [3.0, 4.0, 7.0, 10.0, 13.0, 8.0]]
+    # broadcast_buffers=False keeps each rank's buffers at construction; init_sync=False keeps everything.
+    weights = {name: ranks[0]["initial_state"][name][1] for name in ranks[0]["initial_state"]}
+    for rank in range(3):
+        built = ranks[rank]["initial_state"]
+        assert built["default"] == [0.0, weights["default"]]
+        assert built["broadcast_buffers"] == [10.0 * rank, weights["broadcast_buffers"]]
+        assert built["forward_sync_buffers"] == [0.0, weights["forward_sync_buffers"]]
+        assert built["init_sync"][0] == 10.0 * rank
+        assert (built["init_sync"][1] == weights["init_sync"]) == (rank == 0)
 
 
 def test_simulated_subgroups_report_their_own_rank_and_size(tmp_path: Path) -> None:

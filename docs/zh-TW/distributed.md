@@ -39,8 +39,11 @@ ZeRO/FSDP 與多機 collective 不在目前範圍內。重現入口為 `scripts/
   `ReduceOp.AVG` 時向零取整。與 NCCL 相同，對 CUDA tensor 使用 `BAND`、`BOR`、
   `BXOR` 會拋出 `ValueError`，對 bool tensor 使用 `AVG` 會拋出 `TypeError`，除非
   該 group 要求的是 gloo。
-- `DistributedDataParallel` 建立時會廣播 rank 0 的參數與 buffer；除非設定
-  `broadcast_buffers=False`，每次訓練 forward 前還會再廣播一次 rank 0 的 buffer。
+- `DistributedDataParallel` 建立時會廣播 rank 0 的參數與 buffer（設定
+  `broadcast_buffers=False` 時不廣播 buffer，設定 `init_sync=False` 時都不廣播）。
+  除非設定 `broadcast_buffers=False`，它會在第一次 forward 前、以及每次緊接在
+  `no_sync()` 之外的訓練 forward 之後的 forward 前，再廣播一次 rank 0 的 buffer，
+  與 DDP 相同。
   backward 結束時於各 rank 之間對梯度取平均；某個 rank 沒用到的參數在該 rank 上以零計。
   在 `no_sync()` 內梯度只在本地累積，與真實 DDP 相同。
 - Accelerate 能看到每個程序、它的 rank 與 world size。

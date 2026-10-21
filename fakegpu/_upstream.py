@@ -297,19 +297,28 @@ class _FakeDistributedDataParallel(torch.nn.Module):
         self.find_unused_parameters = bool(options.get("find_unused_parameters", False))
         self.static_graph = bool(options.get("static_graph", False))
         self.gradient_as_bucket_view = bool(options.get("gradient_as_bucket_view", False))
-        broadcast_buffers = options.get("broadcast_buffers")
-        self.broadcast_buffers = True if broadcast_buffers is None else bool(broadcast_buffers)
+        # PyTorch 2.14 adds forward_sync_buffers; broadcast_buffers=False alone
+        # also keeps each rank's buffers when DDP is built.
+        forward_sync_buffers, broadcast_buffers = options.get("forward_sync_buffers"), options.get("broadcast_buffers")
+        if forward_sync_buffers is not None:
+            self.broadcast_buffers, init_buffers = bool(forward_sync_buffers), True
+        else:
+            self.broadcast_buffers = init_buffers = True if broadcast_buffers is None else bool(broadcast_buffers)
         self.require_backward_grad_sync = True
+        # Whether the next forward starts from rank 0's buffers: the first one
+        # does, later ones when the forward before had gradients synced.
+        self.require_forward_param_sync = True
         if _DIST_REAL:
-            self._join_processes()
+            self._join_processes(options.get("init_sync", True), init_buffers)
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
-        if _DIST_REAL and self.broadcast_buffers and torch.is_grad_enabled() and self.require_backward_grad_sync:
-            # Like DDP, every training forward starts from rank 0's buffers.
+        if _DIST_REAL and self.broadcast_buffers and self.require_forward_param_sync:
             with torch.no_grad():
                 for buffer in self._buffers_to_sync():
                     _ORIG_DIST["broadcast"](unwrap_tensor(buffer).detach(), src=self._source, group=self.process_group)
-        return self.module(*inputs, **kwargs)
+        output = self.module(*inputs, **kwargs)
+        self.require_forward_param_sync = torch.is_grad_enabled() and self.require_backward_grad_sync
+        return output
 
     def _buffers_to_sync(self) -> list[torch.Tensor]:
         ignored = set(getattr(self.module, "_ddp_params_and_buffers_to_ignore", ()))
@@ -324,19 +333,22 @@ class _FakeDistributedDataParallel(torch.nn.Module):
         finally:
             self.require_backward_grad_sync = previous
 
-    def _join_processes(self) -> None:
+    def _join_processes(self, init_sync: bool, init_buffers: bool) -> None:
         """Start every rank from rank 0's weights and average gradients, like DDP.
 
-        When backward ends, every rank averages the gradients of all its
-        trainable parameters in the same order, a missing gradient counting
-        as zeros, so ranks that took different branches still combine the
-        same parameter. A parameter that no rank used keeps no gradient.
+        With ``init_sync``, every rank starts from rank 0's parameters, and
+        from its buffers too with ``init_buffers``. When backward ends, every
+        rank averages the gradients of all its trainable parameters in the
+        same order, a missing gradient counting as zeros, so ranks that took
+        different branches still combine the same parameter. A parameter that
+        no rank used keeps no gradient.
         """
 
         group = self.process_group
         self._source = 0 if group is None else torch.distributed.distributed_c10d.get_global_rank(group, 0)
+        initial = [*self._parameters_to_sync, *(self._buffers_to_sync() if init_buffers else [])] if init_sync else []
         with torch.no_grad():
-            for tensor in [*self._parameters_to_sync, *self._buffers_to_sync()]:
+            for tensor in initial:
                 _ORIG_DIST["broadcast"](unwrap_tensor(tensor).detach(), src=self._source, group=group)
         world_size = _ORIG_DIST["get_world_size"](group)
         parameters = [unwrap_tensor(parameter) for parameter in self._parameters_to_sync if parameter.requires_grad]
