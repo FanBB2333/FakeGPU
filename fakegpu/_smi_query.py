@@ -189,8 +189,16 @@ GPU_QUERY_FIELDS: dict[str, QueryField] = {
         unit="MiB",
         divisor=2**20,
     ),
+    # nvidia-smi's default power ceiling. The catalog's reference ceiling,
+    # not its typical workload power.
     "power.default_limit": QueryField(
-        "profile.typical_power_usage_mw",
+        "profile.max_power_limit_mw",
+        unit="W",
+        divisor=1000,
+        precision=1,
+    ),
+    "power.min_limit": QueryField(
+        "profile.min_power_limit_mw",
         unit="W",
         divisor=1000,
         precision=1,
@@ -627,6 +635,12 @@ def _query_value(
         return None
     value = _nested_value(record, spec.path)
     if value is None:
+        return None
+    # The profile catalog writes 0 for a specification it does not know.
+    section, _, key = spec.path.partition(".")
+    if section == "profile" and key in (
+        _nested_value(record, "profile.unavailable_fields") or ()
+    ):
         return None
     if isinstance(value, (list, tuple, set)):
         return ";".join(str(item) for item in value)

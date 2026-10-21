@@ -231,6 +231,12 @@
   blank line or clearing the terminal on every refresh. `-lms`/`--loop-ms`
   sets the interval in milliseconds, and `-l` without a value loops every
   5 seconds.
+- `fakegpu nvidia-smi --query-gpu=power.default_limit` reports the profile's
+  reference power ceiling, nvidia-smi's default power limit, instead of its
+  typical workload power, which printed `0.0 W` for the 174 profiles where
+  that is unknown, including `a100`. `power.min_limit` reports the catalog's
+  minimum, and specifications the catalog marks unknown (0), such as clocks
+  or SM count, print `[N/A]` instead of 0.
 
 ## v1.6.0 - 2026-10-17
 

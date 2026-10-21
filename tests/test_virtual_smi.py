@@ -1545,3 +1545,39 @@ def test_virtual_smi_looping_query_appends_rows_under_one_header(
     ]) == 0
     assert capsys.readouterr().out.splitlines() == ["0", "0"]
     assert sleeps == [5.0]
+
+
+def test_virtual_smi_reports_the_reference_power_ceiling_and_unknown_specs(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {
+                    "index": index,
+                    "name": profile_id,
+                    "profile_id": profile_id,
+                    "total_memory": 64 * 2**30,
+                }
+                for index, profile_id in enumerate(("a100", "h100-sxm5-64gb"))
+            ]
+        },
+    ).publish_once(running=True)
+
+    assert main([
+        "--state", str(path),
+        "--query-gpu=index,power.default_limit,power.max_limit,clocks.sm,sm_count",
+        "--format=csv,noheader,nounits",
+    ]) == 0
+    rows = [_csv_cells(line) for line in capsys.readouterr().out.splitlines()]
+    # power.default_limit is nvidia-smi's default power ceiling, equal to the
+    # maximum limit on an SXM part (an H100 SXM reports 700.00 W for both).
+    # The a100 profile's typical workload power is unknown (0); it is not the
+    # ceiling. Specifications the catalog marks unknown print [N/A], not 0.
+    assert rows == [
+        ["0", "400.0", "400.0", "1410", "108"],
+        ["1", "[N/A]", "[N/A]", "[N/A]", "[N/A]"],
+    ]
