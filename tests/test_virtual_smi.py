@@ -1477,3 +1477,29 @@ def test_virtual_smi_accepts_every_nvidia_smi_query_field_and_alias(
     with pytest.raises(SystemExit) as exc_info:
         main(["--state", str(path), "--query-gpu", "utilization.gpuu"])
     assert exc_info.value.code == 2
+
+
+def test_virtual_smi_query_timestamp_is_the_query_time_in_milliseconds(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    import datetime
+
+    import fakegpu._smi_query as smi_query
+
+    path = tmp_path / "state.json"
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+    query_ns = time.time_ns() + 123_456_789
+    monkeypatch.setattr(smi_query.time, "time_ns", lambda: query_ns)
+
+    assert main([
+        "--state", str(path),
+        "--query-gpu=timestamp,index",
+        "--format=csv,noheader",
+    ]) == 0
+    stamp = _csv_cells(capsys.readouterr().out.strip())[0]
+    # nvidia-smi --help-query-gpu: "YYYY/MM/DD HH:MM:SS.msec", the time of
+    # the query; parsed as PerfKitBenchmarker's nvidia_power collector does.
+    parsed = datetime.datetime.strptime(stamp, "%Y/%m/%d %H:%M:%S.%f")
+    assert parsed.timestamp() == pytest.approx(query_ns // 10**6 / 1e3)

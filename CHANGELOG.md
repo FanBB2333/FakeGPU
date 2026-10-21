@@ -223,6 +223,9 @@
   failing the whole query. Fields FakeGPU does not model print nvidia-smi's
   `[N/A]` (missing values printed `N/A` before), and an alias is headed by
   nvidia-smi's name, so `clocks.sm` reads `clocks.current.sm [MHz]`.
+- The `timestamp` query field is the time of the query in nvidia-smi's
+  `YYYY/MM/DD HH:MM:SS.msec` format. It was the state file's write time
+  without milliseconds, which parsers expecting nvidia-smi's format rejected.
 
 ## v1.6.0 - 2026-10-17
 

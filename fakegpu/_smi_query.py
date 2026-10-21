@@ -9,6 +9,7 @@ the query report stay in step with one schema.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
@@ -646,6 +647,15 @@ def _query_value(
         if isinstance(value, float):
             return int(round(value))
     return value
+
+
+def _query_timestamp() -> str:
+    """The time of the query as nvidia-smi prints it, YYYY/MM/DD HH:MM:SS.msec."""
+    seconds, nanoseconds = divmod(time.time_ns(), 10**9)
+    return (
+        time.strftime("%Y/%m/%d %H:%M:%S", time.localtime(seconds))
+        + f".{nanoseconds // 10**6:03d}"
+    )
 
 
 def _query_csv_header(field: str, spec: QueryField) -> str:
