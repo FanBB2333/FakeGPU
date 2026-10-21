@@ -92,6 +92,9 @@ _PIPELINE_DEFAULTS = {
         "steps": 28,
         "guidance_scale": 3.5,
         "text_tokens": 512,
+        # FluxPipeline.__init__ hard-codes default_sample_size = 128; the
+        # transformer config has no sample_size.
+        "default_sample_size": 128,
     },
 }
 
@@ -687,6 +690,11 @@ def _local_profile(
     sample_height, sample_width = _sample_dimensions(
         denoiser_config.get("sample_size")
     )
+    if "default_sample_size" in pipeline_defaults:
+        # The pipeline's own default is in latent pixels: height is
+        # default_sample_size * vae_scale_factor, without token packing.
+        sample_height = sample_width = pipeline_defaults["default_sample_size"]
+        packing_factor = 1
     default_height = (
         sample_height * latent_scale * packing_factor
         if sample_height is not None

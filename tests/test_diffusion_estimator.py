@@ -473,6 +473,8 @@ def test_local_patch_and_joint_transformers_use_distinct_shapes(
     )
     flux = estimate_diffusion_generation(
         model_dir=flux_dir,
+        height=128,
+        width=128,
         text_tokens=32,
         guidance_scale=7.0,
         offload="model",
@@ -767,6 +769,25 @@ def test_local_vae_sample_size_sets_the_default_tile(tmp_path: Path) -> None:
     assert report["activation_models"]["vae_decode"]["output_buffers"][
         "native_tiling_active"
     ] is True
+
+
+def test_flux_pipeline_default_resolution_ignores_the_transformer_config(
+    tmp_path: Path,
+) -> None:
+    # Diffusers 0.35.2 FluxPipeline: default_sample_size = 128 and
+    # height = height or default_sample_size * vae_scale_factor (1024 here).
+    model_dir = tmp_path / "local-flux"
+    _write_pipeline(model_dir, transformer=True, flux=True)
+    config_path = model_dir / "transformer" / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config.pop("sample_size")
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    profile = inspect_diffusion_pipeline(model_dir)["profile"]
+    assert profile["default_generation"]["height"] == 1024
+    assert profile["default_generation"]["width"] == 1024
+    report = estimate_diffusion_generation(model_dir=model_dir, text_tokens=32)
+    assert (report["inputs"]["height"], report["inputs"]["width"]) == (1024, 1024)
 
 
 def test_sdxl_first_level_has_no_transformer_blocks() -> None:
