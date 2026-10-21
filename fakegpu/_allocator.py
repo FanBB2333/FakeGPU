@@ -210,6 +210,8 @@ _STAT_ARRAY_NAMES = (
     "inactive_split_bytes",
     "requested_bytes",
 )
+# First synthetic segment address reported by memory_snapshot().
+_SNAPSHOT_ADDRESS_BASE = 0x7F0000000000
 # DeviceStats.max_split_size is the size_t limit cast to int64_t when
 # max_split_size_mb is not configured.
 _UNLIMITED_MAX_SPLIT_SIZE = -1
@@ -390,6 +392,9 @@ class _DeviceMemoryTracker:
         ] = {}
         self._allocation_blocks: dict[int, tuple[int, int]] = {}
         self._next_segment_id = 1
+        # Synthetic device addresses for memory_snapshot(); segments never
+        # reuse a range, as with distinct cudaMalloc results.
+        self._next_segment_address = _SNAPSHOT_ADDRESS_BASE
         if caching_allocator is None:
             caching_allocator = os.environ.get("FAKEGPU_CACHING_ALLOCATOR", "1") != "0"
         self._caching_allocator = bool(caching_allocator)
@@ -824,6 +829,10 @@ class _DeviceMemoryTracker:
         return _flatten_memory_stats(self.memory_stats_as_nested_dict(device))
 
     def allocator_snapshot(self) -> list[dict[str, Any]]:
+        """Return segments in the layout of ``torch.cuda.memory_snapshot()``.
+
+        FakeCUDA records no allocation history, so ``frames`` stay empty.
+        """
         with self._lock:
             result: list[dict[str, Any]] = []
             for device, segments in enumerate(self._segments):
@@ -844,7 +853,8 @@ class _DeviceMemoryTracker:
                             requested_size += requested
                         blocks.append(
                             {
-                                "address": int(block["offset"]),
+                                "address": int(segment["address"])
+                                + int(block["offset"]),
                                 "size": int(block["size"]),
                                 "requested_size": requested,
                                 "state": (
@@ -852,17 +862,23 @@ class _DeviceMemoryTracker:
                                     if data_ptr is not None
                                     else "inactive"
                                 ),
+                                "frames": [],
                             }
                         )
                     result.append(
                         {
                             "device": device,
+                            "address": int(segment["address"]),
                             "segment_id": int(segment["id"]),
                             "total_size": int(segment["size"]),
                             "allocated_size": allocated_size,
                             "active_size": allocated_size,
                             "requested_size": requested_size,
+                            "stream": 0,
                             "segment_type": str(segment["type"]),
+                            "segment_pool_id": (0, 0),
+                            "is_expandable": False,
+                            "frames": [],
                             "blocks": blocks,
                         }
                     )
@@ -892,6 +908,7 @@ class _DeviceMemoryTracker:
                 return None
             segment = {
                 "id": self._next_segment_id,
+                "address": self._next_segment_address,
                 "device": device,
                 "size": segment_size,
                 "type": segment_type,
@@ -906,6 +923,11 @@ class _DeviceMemoryTracker:
                 ],
             }
             self._next_segment_id += 1
+            self._next_segment_address += (
+                (segment_size + _ALLOCATOR_LARGE_ALIGNMENT_BYTES - 1)
+                // _ALLOCATOR_LARGE_ALIGNMENT_BYTES
+                * _ALLOCATOR_LARGE_ALIGNMENT_BYTES
+            )
             self._segments[device].append(segment)
             self._segments_by_id[int(segment["id"])] = segment
             stats = self._stats[device]

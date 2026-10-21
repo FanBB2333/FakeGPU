@@ -141,6 +141,33 @@ def test_allocator_keeps_large_pool_remainders_up_to_1mib_in_the_block() -> None
     assert [block["size"] for block in blocks] == [18 * MIB, 2 * MIB]
 
 
+def test_allocator_snapshot_uses_torch_memory_snapshot_layout() -> None:
+    # Segment and block keys from THCPModule_memorySnapshot (PyTorch
+    # v2.14.1); block addresses run on from the segment address.
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 1_000, 0)
+    tracker.allocate(2, 3 * MIB, 0)
+    segments = tracker.allocator_snapshot()
+    assert len(segments) == 2
+    for segment in segments:
+        assert {
+            "device", "address", "total_size", "allocated_size", "active_size",
+            "requested_size", "stream", "segment_type", "segment_pool_id",
+            "is_expandable", "frames", "blocks",
+        } <= set(segment)
+        assert segment["segment_pool_id"] == (0, 0)
+        assert segment["is_expandable"] is False
+        address = segment["address"]
+        for block in segment["blocks"]:
+            assert set(block) == {
+                "address", "size", "requested_size", "state", "frames",
+            }
+            assert block["address"] == address
+            address += block["size"]
+    first, second = sorted(segments, key=lambda item: item["address"])
+    assert first["address"] + first["total_size"] <= second["address"]
+
+
 def test_allocator_releases_cached_segments_before_retry() -> None:
     tracker = _DeviceMemoryTracker([20 * MIB], caching_allocator=True)
     tracker.allocate(1, 1_000, 0)
@@ -402,7 +429,8 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
             "nested_allocated": torch.cuda.memory_stats_as_nested_dict()[
                 "allocated_bytes"
             ]["all"]["current"],
-            "snapshot": torch.cuda.memory_snapshot(),
+            "snapshot": torch.cuda.memory_snapshot(include_traces=False),
+            "default_pool_segments": len(torch.cuda.memory_snapshot(None)),
         }
         del tensor
         gc.collect()
@@ -441,6 +469,7 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
     assert live["nested_allocated"] == live["allocated"]
     assert live["stats"]["requested_bytes.all.current"] <= live["allocated"]
     assert live["snapshot"]
+    assert live["default_pool_segments"] == len(live["snapshot"])
     assert payload["released"]["reserved_before_empty"] >= 2 * MIB
     assert (
         payload["released"]["reserved_after_empty"]

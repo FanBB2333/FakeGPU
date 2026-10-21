@@ -1515,7 +1515,10 @@ def _install_tracked_memory_api(torch_mod: Any) -> None:
     def _tracked_memory_stats(device=None):
         return _memory_tracker.memory_stats(_normalize_device_index(device))
 
-    def _tracked_memory_snapshot():
+    def _tracked_memory_snapshot(mempool_id=None, include_traces=True):
+        # Only the default pool exists, so a private pool id has no segments.
+        if mempool_id is not None and tuple(mempool_id[:2]) != (0, 0):
+            return []
         return _memory_tracker.allocator_snapshot()
 
     # Both public namespaces must expose the same tracker and aliases.
