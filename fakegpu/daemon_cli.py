@@ -110,9 +110,14 @@ def _print_status(status: dict) -> None:
             f"{device['index']:<4}{device['profile_id'] + marker:<16}{slot_label(slot):<11}"
             f"{link_label(slot):<13}{used:>18}{util:>7}{temp:>7}{power:>9}{device['process_count']:>7}"
         )
+    if any(device["telemetry"] for device in status["devices"]):
+        print("Memory is tracked; Util, Temp and Power are modeled from CPU activity, not measured.")
     print()
     if not status["processes"]:
-        print("No FakeCUDA processes. Scripts that call fakegpu.init() join this machine.")
+        print(
+            "No FakeCUDA processes. Commands started with 'fakegpu run' and scripts that call "
+            "fakegpu.init() join this machine."
+        )
     for process in status["processes"]:
         devices = ",".join(str(row["index"]) for row in process["devices"] if row["used_bytes"])
         print(

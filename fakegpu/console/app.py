@@ -120,6 +120,12 @@ def short(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 1] + "…"
 
 
+def sources_text(devices: Sequence[dict[str, Any]]) -> str:
+    """Where the charted readings come from: memory is tracked, sensors are modeled."""
+    sensors = "sensors modeled" if any(device["telemetry"] for device in devices) else "sensors N/A"
+    return f"memory tracked, {sensors}"
+
+
 def window_text(times: Sequence[float]) -> str:
     return f"last {times[-1] - times[0]:.0f} s" if len(times) > 1 else "just started"
 
@@ -764,7 +770,7 @@ class ConsoleApp(App[str]):
         panel = self.query_one("#machine-trends", Static)
         layout = [d for d in devices if d["in_layout"]]
         times = next((d.get("history", {}).get("time", []) for d in layout), [])
-        panel.border_title = f"All {len(layout)} GPUs · {window_text(times)}"
+        panel.border_title = f"All {len(layout)} GPUs · {window_text(times)} · {sources_text(layout)}"
         panel.update(chart_grid(machine_charts(devices), max(1, (self.size.width - 6) // 32)))
 
     def show_cards(self, devices: list[dict], warning: float) -> None:
@@ -934,7 +940,7 @@ class ConsoleApp(App[str]):
                             if device["telemetry"] else "N/A (sensor model off, or no activity published)"),
             ]),
             Text(),
-            Text(f"Trends, {window_text(times)}", style="bold"),
+            Text(f"Trends, {window_text(times)} · {sources_text([device])}", style="bold"),
             chart_grid(device_charts(device), 2 if self.size.width >= 100 else 1, gap=1),
             Text(),
             Text("Memory by category", style="bold"), categories,
