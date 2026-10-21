@@ -43,6 +43,18 @@
 - Reject unsupported kernel launches under every compatibility policy instead
   of returning success without computing results. macOS kernel execution
   remains unsupported.
+- Hopper data-center and L20 profiles report the names the NVIDIA driver
+  gives them, such as `NVIDIA H100 80GB HBM3`, `NVIDIA H200` and
+  `NVIDIA H20`, so tools that key on the name, like vLLM's tuned MoE
+  configs, recognize them. The RTX 3090 Ti, RTX 3050 OEM, RTX 3050 6GB laptop
+  and RTX 2050 profiles use driver names too.
+- `fakegpu nvidia-smi --query-gpu` and `--query-compute-apps` accept every
+  field and alias of nvidia-smi 590's help, headed by nvidia-smi's column
+  names. Fields FakeGPU does not model print `[N/A]`, and missing values
+  print `[N/A]` instead of `N/A`.
+- Mixed-precision training plans size Adam and momentum state in FP32 next
+  to the master copy, as DeepSpeed and PyTorch AMP keep it: 4 more bytes per
+  parameter than before.
 
 ### Fixed
 
@@ -312,6 +324,74 @@
 - `fakegpu nvidia-smi -i` matches a PCI bus ID in every form NVML accepts,
   such as `0000:02:00.0` from CUDA or `02:00.0`, not only the exact
   `00000000:02:00.0` spelling.
+- `plan-serving --runtime vllm` holds back vLLM's null block, reports a
+  startup failure when one `max_model_len` request does not fit, counts
+  whole blocks for `max_model_len` concurrency, shares only full prefix
+  blocks in a paged cache, and plans float32 checkpoints in bfloat16
+  (float16 below compute capability 8.0) as vLLM's `dtype=auto` does.
+- LLM estimates size the q/o projections by heads times `head_dim` when a
+  config overrides `head_dim`, parse Llama 4's sparse layers, dense width and
+  shared expert, and take `dtype=auto` from the checkpoint instead of float32
+  when the config names no dtype.
+- Training plans read Accelerate's `fsdp_version`,
+  `fsdp_reshard_after_forward` and HYBRID_SHARD group, and DeepSpeed's legacy
+  `bfloat16` section. Repository analysis no longer takes a relative
+  `.triton` import for Triton, and a bitsandbytes 4-bit block size of 32 is
+  accepted.
+- Diffusion estimates drop attention from SDXL's first UNet level, apply
+  attention slicing only to UNets, tile the VAE at its config's
+  `sample_size`, and give Flux its fixed 1024x1024 default.
+- Fine-tuning estimates convert Axolotl epochs with Axolotl's `max_steps`
+  rule, treat LLaMA-Factory `neat_packing` as packed training, and budget
+  both softmax tensors eager attention keeps for backward.
+- FakeCUDA `torch.distributed` accepts torch 2.14's arguments (`barrier`
+  timeouts, `weights_only`), skips collectives on ranks outside the group,
+  returns complete async work handles, reports subgroup rank and size and
+  accepts uneven exchanges and backend-named subgroups in simulated jobs,
+  rejects the reductions and tensor sizes NCCL rejects, binds DDP arguments
+  like torch, syncs DDP buffers when real DDP does, and raises DDP's error
+  for a parameter without a gradient unless `find_unused_parameters` or
+  `static_graph` is set.
+- `fakegpu nvidia-smi` stamps query rows with the query time to the
+  millisecond, prints a looping CSV query's header once, adds `-lms` and a
+  5-second default for `-l`, reports the reference power ceiling as
+  `power.default_limit` and adds `power.min_limit`, and matches `-i` PCI bus
+  IDs in every form NVML accepts.
+- NVML reports `NVML_DEVICE_ARCH_*` architecture constants, writes encoder
+  statistics as `unsigned int`, formats and looks up PCI bus IDs as
+  `nvml.h` describes, derives power limits from the catalog ceiling, reads
+  clocks per domain, returns `NOT_SUPPORTED` for the driver model on Linux
+  and macOS, returns `INSUFFICIENT_SIZE` instead of truncating strings,
+  sums NVLink throughput over all links for `UINT_MAX`, implements
+  `nvmlDeviceGetTemperatureV`, and uses `nvml.h`'s `nvmlMemory_v2` version.
+  `cuDeviceGetPCIBusId` now reports the same bus as NVML.
+- CUDA Runtime and Driver stubs follow the CUDA 12.4 headers and libraries:
+  `cudaMemoryTypeUnregistered` is 0, `cudaGetDriverEntryPoint` takes and
+  sets `driverStatus`, error names and strings match libcudart and
+  `cuGetErrorString`, the last error stays set until `cudaGetLastError`,
+  `cudaFuncGetAttributes` clears the whole struct, `cuEventElapsedTime`
+  rejects unrecorded and timing-disabled events, grid y and z are limited to
+  65535, `cudaDeviceProp` fills about 40 more fields and the legacy struct
+  has the CUDA 11.8 layout, `cuGetProcAddress` returns the ABI of the
+  requested version, pointers inside an allocation resolve to it, the `_v2`
+  names `cuda.h` maps to are exported, and zero-size managed allocations
+  fail.
+- NCCL stubs return NCCL's codes for an unbalanced `ncclGroupEnd`, a bad
+  `ncclGroupSimulateEnd` struct, a repeated `ncclCommFinalize` and invalid
+  `ncclRedOpDestroy` arguments, accept NULL communicators in Destroy and
+  Finalize, zero-count `ncclSend`/`ncclRecv`, and validate the device list
+  of `ncclCommInitAll`.
+- cuBLAS stubs report `cublasGetVersion` and `cublasGetProperty` in the
+  `cublas_api.h` encoding, handle empty level-1 inputs and `beta == 0` gemv
+  like cuBLAS, write `cublasLtMatmulHeuristicResult_t` in its real layout,
+  validate every GEMM path's dimensions and leading dimensions, and use
+  `cublas_api.h`'s `CUBLAS_GEMM_DFALT` values.
+- The native launcher preloads the library files a fallback-only directory
+  holds, warns for every SIP-protected location and for scripts whose
+  interpreter is protected, and exits 127 or 126 like `env` when the command
+  cannot run. The metrics exporter keeps label values valid UTF-8.
+- Jetson profiles use the CUDA per-SM block and thread limits, and RTX A4500,
+  A5000, A5500 and A6000 model NVLink bridges as four x4 links.
 
 ## v1.6.0 - 2026-10-17
 
