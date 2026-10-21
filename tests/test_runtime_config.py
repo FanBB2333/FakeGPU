@@ -185,6 +185,23 @@ def test_macos_warning_follows_the_script_interpreter(
         assert "interpreter" in str(caught[0].message)
 
 
+def test_launcher_exit_status_follows_env_for_commands_it_cannot_run(
+    native_directory: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    # POSIX env(1): 127 when the utility is not found, 126 when it is found
+    # but cannot be invoked.
+    from fakegpu.__main__ import main
+
+    monkeypatch.setattr(_api, "_macos_injection_warning_emitted", True)
+    assert main(["fakegpu-no-such-command-xyz"]) == 127
+    assert "fakegpu-no-such-command-xyz" in capsys.readouterr().err
+
+    script = tmp_path / "not-executable.sh"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    script.chmod(0o644)
+    assert main([str(script)]) == 126
+
+
 def test_native_init_honors_physical_visibility(native_directory: Path, monkeypatch) -> None:
     monkeypatch.setattr(_api, "_initialized", False)
     monkeypatch.setattr(_api, "_loaded_dir", None)
