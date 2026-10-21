@@ -9,6 +9,13 @@ typedef struct __half {
 } __half;
 #endif
 
+// cuBLAS shipped with CUDA 12.0, the runtime version FakeGPU reports.
+// The encoding is the one in cublas_api.h.
+#define CUBLAS_VER_MAJOR 12
+#define CUBLAS_VER_MINOR 0
+#define CUBLAS_VER_PATCH 1
+#define CUBLAS_VERSION (CUBLAS_VER_MAJOR * 10000 + CUBLAS_VER_MINOR * 100 + CUBLAS_VER_PATCH)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -92,12 +99,12 @@ typedef enum {
     CUBLAS_COMPUTE_32I_PEDANTIC = 73
 } cublasComputeType_t;
 
-// cuBLAS GEMM algorithm
+// cuBLAS GEMM algorithm; the DFALT names are aliases in cublas_api.h.
 typedef enum {
+    CUBLAS_GEMM_DFALT = -1,
     CUBLAS_GEMM_DEFAULT = -1,
     CUBLAS_GEMM_DEFAULT_TENSOR_OP = 99,
-    CUBLAS_GEMM_DFALT = 101,
-    CUBLAS_GEMM_DFALT_TENSOR_OP = 102
+    CUBLAS_GEMM_DFALT_TENSOR_OP = 99
 } cublasGemmAlgo_t;
 
 // Handle management
@@ -263,11 +270,15 @@ typedef struct cublasLtMatmulDescOpaque *cublasLtMatmulDesc_t;
 typedef struct cublasLtMatrixLayoutOpaque *cublasLtMatrixLayout_t;
 typedef struct cublasLtMatmulPreferenceOpaque *cublasLtMatmulPreference_t;
 
-// Algorithm heuristic structures
+// Algorithm heuristic structures, laid out as in cublasLt.h.
 typedef struct {
-    int algo;
+    uint64_t data[8];
+} cublasLtMatmulAlgo_t;
+
+typedef struct {
+    cublasLtMatmulAlgo_t algo;
     size_t workspaceSize;
-    int state;
+    cublasStatus_t state;
     float wavesCount;
     int reserved[4];
 } cublasLtMatmulHeuristicResult_t;

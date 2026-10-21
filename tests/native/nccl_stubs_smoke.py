@@ -17,9 +17,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BUILD_DIR = Path(os.environ.get("FAKEGPU_BUILD_DIR", REPO_ROOT / "build"))
 COORDINATOR_BIN = BUILD_DIR / "fakegpu-coordinator"
 LIBNCCL = BUILD_DIR / ("libnccl.dylib" if sys.platform == "darwin" else "libnccl.so")
+NCCL_SUCCESS = 0
 NCCL_SYSTEM_ERROR = 2
+NCCL_INVALID_ARGUMENT = 4
+NCCL_INVALID_USAGE = 5
 NCCL_FLOAT32 = 7
 NCCL_SUM = 0
+NCCL_SCALAR_HOST_IMMEDIATE = 1
+# NCCL_SIM_INFO_INITIALIZER magic from nccl.h.
+NCCL_SIM_INFO_MAGIC = 0x74685283
 SPLIT_WORLD = 3
 REDUCE_WORLD = 2
 
@@ -28,11 +34,65 @@ class UniqueId(ctypes.Structure):
     _fields_ = [("internal", ctypes.c_char * 128)]
 
 
+class SimInfo(ctypes.Structure):
+    # ncclSimInfo_v22200 from nccl.h.
+    _fields_ = [
+        ("size", ctypes.c_size_t),
+        ("magic", ctypes.c_uint),
+        ("version", ctypes.c_uint),
+        ("estimatedTime", ctypes.c_float),
+    ]
+
+
 def load_nccl() -> ctypes.CDLL:
     lib = ctypes.CDLL(str(LIBNCCL))
     lib.ncclGetLastError.restype = ctypes.c_char_p
     lib.ncclGetLastError.argtypes = [ctypes.c_void_p]
+    lib.ncclCommDestroy.argtypes = [ctypes.c_void_p]
+    lib.ncclCommFinalize.argtypes = [ctypes.c_void_p]
+    lib.ncclRedOpDestroy.argtypes = [ctypes.c_int, ctypes.c_void_p]
+    lib.ncclRedOpCreatePreMulSum.argtypes = [
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_void_p,
+    ]
     return lib
+
+
+def expect_rc(actual: int, expected: int, what: str) -> None:
+    if actual != expected:
+        raise AssertionError(f"{what} returned {actual}, expected {expected}")
+
+
+def child_lifecycle() -> int:
+    """Return codes that real NCCL gives without any communicator traffic."""
+
+    lib = load_nccl()
+    # group.cc, ncclGroupEndInternal: an unmatched end is ncclInvalidUsage.
+    expect_rc(lib.ncclGroupEnd(), NCCL_INVALID_USAGE, "unmatched ncclGroupEnd")
+    expect_rc(lib.ncclGroupSimulateEnd(None), NCCL_INVALID_USAGE, "unmatched ncclGroupSimulateEnd")
+    for _ in range(2):
+        expect_rc(lib.ncclGroupStart(), NCCL_SUCCESS, "ncclGroupStart")
+    expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, "inner ncclGroupEnd")
+    expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, "outer ncclGroupEnd")
+    expect_rc(lib.ncclGroupEnd(), NCCL_INVALID_USAGE, "third ncclGroupEnd")
+    # An uninitialized ncclSimInfo_t is rejected; an initialized one is not.
+    sim_info = SimInfo(size=ctypes.sizeof(SimInfo))
+    lib.ncclGroupStart()
+    expect_rc(lib.ncclGroupSimulateEnd(ctypes.byref(sim_info)), NCCL_INVALID_ARGUMENT, "ncclGroupSimulateEnd without magic")
+    sim_info.magic = NCCL_SIM_INFO_MAGIC
+    sim_info.estimatedTime = -1.0
+    lib.ncclGroupStart()
+    expect_rc(lib.ncclGroupSimulateEnd(ctypes.byref(sim_info)), NCCL_SUCCESS, "ncclGroupSimulateEnd")
+    # init.cc: destroying or finalizing a null communicator is a no-op.
+    expect_rc(lib.ncclCommDestroy(None), NCCL_SUCCESS, "ncclCommDestroy(NULL)")
+    expect_rc(lib.ncclCommFinalize(None), NCCL_SUCCESS, "ncclCommFinalize(NULL)")
+    # enqueue.cc, ncclRedOpDestroy: built-in operators and null communicators.
+    expect_rc(lib.ncclRedOpDestroy(NCCL_SUM, None), NCCL_INVALID_ARGUMENT, "ncclRedOpDestroy(ncclSum)")
+    expect_rc(lib.ncclRedOpDestroy(64, None), NCCL_INVALID_ARGUMENT, "ncclRedOpDestroy without a communicator")
+    return 0
 
 
 def child_partial_loader() -> int:
@@ -105,6 +165,70 @@ def child_reduce_rank(rank: int) -> int:
     if rank == 0 and list(recv) != [3.0, 5.0, 7.0]:
         print(f"rank 0: ncclReduce produced {list(recv)}", file=sys.stderr)
         return 1
+    # A preMulSum operator can be destroyed once; NCCL rejects the second
+    # destroy as unknown to the communicator.
+    op = ctypes.c_int(-1)
+    scalar = ctypes.c_float(0.5)
+    expect_rc(
+        lib.ncclRedOpCreatePreMulSum(ctypes.byref(op), ctypes.byref(scalar), NCCL_FLOAT32, NCCL_SCALAR_HOST_IMMEDIATE, comm),
+        NCCL_SUCCESS,
+        "ncclRedOpCreatePreMulSum",
+    )
+    expect_rc(lib.ncclRedOpDestroy(op.value, comm), NCCL_SUCCESS, "ncclRedOpDestroy")
+    expect_rc(lib.ncclRedOpDestroy(op.value, comm), NCCL_INVALID_ARGUMENT, "second ncclRedOpDestroy")
+    # init.cc, ncclCommFinalize: a second finalize is ncclInvalidArgument.
+    expect_rc(lib.ncclCommFinalize(comm), NCCL_SUCCESS, "ncclCommFinalize")
+    expect_rc(lib.ncclCommFinalize(comm), NCCL_INVALID_ARGUMENT, "second ncclCommFinalize")
+    expect_rc(lib.ncclCommDestroy(comm), NCCL_SUCCESS, "ncclCommDestroy after finalize")
+    return 0
+
+
+def child_empty_p2p_rank(rank: int) -> int:
+    """Zero-count send/recv are valid NCCL operations, grouped or not."""
+
+    lib = load_nccl()
+    lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, UniqueId, ctypes.c_int]
+    comm = ctypes.c_void_p()
+    unique_id = UniqueId(internal=os.environ["NCCL_SMOKE_UNIQUE_ID"].encode())
+    expect_rc(lib.ncclCommInitRank(ctypes.byref(comm), REDUCE_WORLD, unique_id, rank), NCCL_SUCCESS, "ncclCommInitRank")
+    peer = 1 - rank
+    if rank == 0:
+        expect_rc(lib.ncclSend(None, ctypes.c_size_t(0), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "empty ncclSend")
+    else:
+        expect_rc(lib.ncclRecv(None, ctypes.c_size_t(0), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "empty ncclRecv")
+    lib.ncclGroupStart()
+    expect_rc(lib.ncclSend(None, ctypes.c_size_t(0), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "grouped empty ncclSend")
+    expect_rc(lib.ncclRecv(None, ctypes.c_size_t(0), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "grouped empty ncclRecv")
+    expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, "ncclGroupEnd of empty point-to-point")
+    # The communicator stays in step: a real transfer still pairs up.
+    buf = (ctypes.c_float * 2)(rank + 1.0, rank + 2.0)
+    if rank == 0:
+        expect_rc(lib.ncclSend(buf, ctypes.c_size_t(2), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "ncclSend")
+    else:
+        expect_rc(lib.ncclRecv(buf, ctypes.c_size_t(2), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "ncclRecv")
+        if list(buf) != [1.0, 2.0]:
+            raise AssertionError(f"ncclRecv produced {list(buf)}")
+    expect_rc(lib.ncclSend(None, ctypes.c_size_t(0), 99, peer, comm, None), NCCL_INVALID_ARGUMENT, "empty ncclSend with a bad datatype")
+    return 0
+
+
+def child_init_all(_rank: int) -> int:
+    """ncclCommInitAll validates its device list like init.cc does."""
+
+    lib = load_nccl()
+    lib.ncclCommInitAll.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+    lib.ncclCommCuDevice.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+    comms = (ctypes.c_void_p * 2)()
+    expect_rc(lib.ncclCommInitAll(comms, 2, (ctypes.c_int * 2)(0, 4096)), NCCL_INVALID_ARGUMENT, "ncclCommInitAll with a missing device")
+    expect_rc(lib.ncclCommInitAll(comms, 2, (ctypes.c_int * 2)(0, 0)), NCCL_INVALID_USAGE, "ncclCommInitAll with a duplicate device")
+    expect_rc(lib.ncclCommInitAll(comms, 2, (ctypes.c_int * 2)(1, 0)), NCCL_SUCCESS, "ncclCommInitAll")
+    device = ctypes.c_int(-1)
+    for index, expected in enumerate((1, 0)):
+        expect_rc(lib.ncclCommCuDevice(comms[index], ctypes.byref(device)), NCCL_SUCCESS, "ncclCommCuDevice")
+        if device.value != expected:
+            raise AssertionError(f"rank {index} reports device {device.value}, expected {expected}")
+    for comm in comms:
+        lib.ncclCommDestroy(comm)
     return 0
 
 
@@ -154,17 +278,42 @@ def check_reduce_over_socket_payloads() -> None:
         raise AssertionError("ncclReduce failed with socket payloads")
 
 
+def check_empty_point_to_point() -> None:
+    if not run_ranks("--empty-p2p-rank", REDUCE_WORLD, 3000):
+        raise AssertionError("zero-count ncclSend/ncclRecv were not accepted")
+
+
+def check_init_all_device_list() -> None:
+    if not run_ranks("--init-all", 1, 3000):
+        raise AssertionError("ncclCommInitAll did not validate its device list")
+
+
+def check_lifecycle_contracts() -> None:
+    env = dict(os.environ, FAKEGPU_DIST_MODE="simulate")
+    if subprocess.run([sys.executable, __file__, "--lifecycle"], env=env).returncode != 0:
+        raise AssertionError("NCCL group and lifecycle return codes differ from NCCL")
+
+
 def main() -> int:
     if sys.argv[1:] == ["--partial-loader"]:
         return child_partial_loader()
+    if sys.argv[1:] == ["--lifecycle"]:
+        return child_lifecycle()
     if sys.argv[1:2] == ["--split-rank"]:
         return child_split_rank(int(sys.argv[2]))
     if sys.argv[1:2] == ["--reduce-rank"]:
         return child_reduce_rank(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--empty-p2p-rank"]:
+        return child_empty_p2p_rank(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--init-all"]:
+        return child_init_all(int(sys.argv[2]))
     if not LIBNCCL.exists():
         print(f"missing NCCL library: {LIBNCCL}", file=sys.stderr)
         return 2
     check_partial_real_nccl()
+    check_lifecycle_contracts()
+    check_empty_point_to_point()
+    check_init_all_device_list()
     check_split_timeout()
     check_reduce_over_socket_payloads()
     print("nccl stubs smoke test passed")

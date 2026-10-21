@@ -550,7 +550,9 @@ cublasStatus_t cpu_gemv(cublasOperation_t trans, int m, int n, T a, const T* A, 
                    static_cast<double>(x0[static_cast<ptrdiff_t>(input) * incx]);
         }
         T& destination = y0[static_cast<ptrdiff_t>(output) * incy];
-        destination = static_cast<T>(a * acc + b * destination);
+        // With beta == 0, y is not read, so a stale NaN does not propagate.
+        const double previous = b == 0.0 ? 0.0 : b * static_cast<double>(destination);
+        destination = static_cast<T>(a * acc + previous);
     }
     return CUBLAS_STATUS_SUCCESS;
 }
@@ -568,6 +570,24 @@ cublasStatus_t cpu_ger(int m, int n, T a, const T* x, int incx, const T* y, int 
                 a * x0[static_cast<ptrdiff_t>(row) * incx] *
                 y0[static_cast<ptrdiff_t>(col) * incy];
         }
+    }
+    return CUBLAS_STATUS_SUCCESS;
+}
+
+// The CUBLAS_STATUS_INVALID_VALUE conditions the cuBLAS reference lists for
+// gemm, gemmBatched, gemmStridedBatched and their Ex variants.
+cublasStatus_t check_gemm_arguments(cublasOperation_t transa, cublasOperation_t transb,
+                                    int m, int n, int k, int lda, int ldb, int ldc) {
+    const auto valid_op = [](cublasOperation_t op) {
+        return op == CUBLAS_OP_N || op == CUBLAS_OP_T || op == CUBLAS_OP_C;
+    };
+    if (m < 0 || n < 0 || k < 0 || !valid_op(transa) || !valid_op(transb)) {
+        return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (lda < std::max(1, transa == CUBLAS_OP_N ? m : k) ||
+        ldb < std::max(1, transb == CUBLAS_OP_N ? k : n) ||
+        ldc < std::max(1, m)) {
+        return CUBLAS_STATUS_INVALID_VALUE;
     }
     return CUBLAS_STATUS_SUCCESS;
 }
@@ -607,9 +627,8 @@ template<> constexpr int cuda_data_type<double>() { return 1; }  // CUDA_R_64F
 template<class T>
 cublasStatus_t cpu_gemm(const char* name, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k,
                         T alpha, const T* A, int lda, const T* B, int ldb, T beta, T* C, int ldc) {
-    if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     if (m == 0 || n == 0) {
         return CUBLAS_STATUS_SUCCESS;
     }
@@ -631,6 +650,8 @@ cublasStatus_t cpu_gemm_strided_batched(
     const char* name, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, T alpha,
     const T* A, int lda, long long strideA, const T* B, int ldb, long long strideB,
     T beta, T* C, int ldc, long long strideC, int batchCount) {
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     if (batchCount < 0 || strideA < 0 || strideB < 0 || strideC < 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
@@ -653,6 +674,8 @@ cublasStatus_t cpu_gemm_batched(
     const char* name, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, T alpha,
     const T* const Aarray[], int lda, const T* const Barray[], int ldb,
     T beta, T* const Carray[], int ldc, int batchCount) {
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     const double a = static_cast<double>(alpha);
     const double b = static_cast<double>(beta);
     constexpr int dtype = cuda_data_type<T>();
@@ -775,8 +798,8 @@ cublasStatus_t cublasGetVersion_v2(cublasHandle_t handle, int *version) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 
-    *version = 12000;  // cuBLAS 12.0
-    FGPU_LOG("[FakeCUBLAS] cublasGetVersion_v2 returning 12000\n");
+    *version = CUBLAS_VERSION;
+    FGPU_LOG("[FakeCUBLAS] cublasGetVersion_v2 returning %d\n", *version);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -784,9 +807,13 @@ cublasStatus_t cublasGetProperty(int type, int *value) {
     if (!value) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-
-    *value = 12000;  // Default value
-    return CUBLAS_STATUS_SUCCESS;
+    // libraryPropertyType: MAJOR_VERSION, MINOR_VERSION, PATCH_LEVEL.
+    switch (type) {
+        case 0: *value = CUBLAS_VER_MAJOR; return CUBLAS_STATUS_SUCCESS;
+        case 1: *value = CUBLAS_VER_MINOR; return CUBLAS_STATUS_SUCCESS;
+        case 2: *value = CUBLAS_VER_PATCH; return CUBLAS_STATUS_SUCCESS;
+        default: return CUBLAS_STATUS_INVALID_VALUE;
+    }
 }
 
 // ============================================================================
@@ -874,8 +901,12 @@ cublasStatus_t cublasGetAtomicsMode(cublasHandle_t handle, cublasAtomicsMode_t *
 // ============================================================================
 
 cublasStatus_t cublasIsamax_v2(cublasHandle_t handle, int n, const float *x, int incx, int *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     const cublasStatus_t status = cpu_iamax(n, x, incx, result, /*largest=*/true);
@@ -894,8 +925,12 @@ cublasStatus_t cublasIsamax_v2(cublasHandle_t handle, int n, const float *x, int
 }
 
 cublasStatus_t cublasIdamax_v2(cublasHandle_t handle, int n, const double *x, int incx, int *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_iamax(n, x, incx, result, /*largest=*/true);
@@ -909,8 +944,12 @@ cublasStatus_t cublasIdamax_v2(cublasHandle_t handle, int n, const double *x, in
 }
 
 cublasStatus_t cublasIsamin_v2(cublasHandle_t handle, int n, const float *x, int incx, int *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_iamax(n, x, incx, result, /*largest=*/false);
@@ -924,8 +963,12 @@ cublasStatus_t cublasIsamin_v2(cublasHandle_t handle, int n, const float *x, int
 }
 
 cublasStatus_t cublasIdamin_v2(cublasHandle_t handle, int n, const double *x, int incx, int *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_iamax(n, x, incx, result, /*largest=*/false);
@@ -939,8 +982,12 @@ cublasStatus_t cublasIdamin_v2(cublasHandle_t handle, int n, const double *x, in
 }
 
 cublasStatus_t cublasSasum_v2(cublasHandle_t handle, int n, const float *x, int incx, float *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_asum(n, x, incx, result);
@@ -954,8 +1001,12 @@ cublasStatus_t cublasSasum_v2(cublasHandle_t handle, int n, const float *x, int 
 }
 
 cublasStatus_t cublasDasum_v2(cublasHandle_t handle, int n, const double *x, int incx, double *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_asum(n, x, incx, result);
@@ -969,7 +1020,10 @@ cublasStatus_t cublasDasum_v2(cublasHandle_t handle, int n, const double *x, int
 }
 
 cublasStatus_t cublasSaxpy_v2(cublasHandle_t handle, int n, const float *alpha, const float *x, int incx, float *y, int incy) {
-    if (n <= 0 || !alpha || !x || !y) {
+    if (n <= 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    if (!alpha || !x || !y) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
@@ -990,7 +1044,10 @@ cublasStatus_t cublasSaxpy_v2(cublasHandle_t handle, int n, const float *alpha, 
 }
 
 cublasStatus_t cublasDaxpy_v2(cublasHandle_t handle, int n, const double *alpha, const double *x, int incx, double *y, int incy) {
-    if (n <= 0 || !alpha || !x || !y) {
+    if (n <= 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    if (!alpha || !x || !y) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
@@ -1005,7 +1062,10 @@ cublasStatus_t cublasDaxpy_v2(cublasHandle_t handle, int n, const double *alpha,
 }
 
 cublasStatus_t cublasScopy_v2(cublasHandle_t handle, int n, const float *x, int incx, float *y, int incy) {
-    if (n <= 0 || !x || !y) {
+    if (n <= 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    if (!x || !y) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
@@ -1020,7 +1080,10 @@ cublasStatus_t cublasScopy_v2(cublasHandle_t handle, int n, const float *x, int 
 }
 
 cublasStatus_t cublasDcopy_v2(cublasHandle_t handle, int n, const double *x, int incx, double *y, int incy) {
-    if (n <= 0 || !x || !y) {
+    if (n <= 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    if (!x || !y) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
@@ -1035,8 +1098,12 @@ cublasStatus_t cublasDcopy_v2(cublasHandle_t handle, int n, const double *x, int
 }
 
 cublasStatus_t cublasSdot_v2(cublasHandle_t handle, int n, const float *x, int incx, const float *y, int incy, float *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_dot(n, x, incx, y, incy, result);
@@ -1050,8 +1117,12 @@ cublasStatus_t cublasSdot_v2(cublasHandle_t handle, int n, const float *x, int i
 }
 
 cublasStatus_t cublasDdot_v2(cublasHandle_t handle, int n, const double *x, int incx, const double *y, int incy, double *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_dot(n, x, incx, y, incy, result);
@@ -1065,8 +1136,12 @@ cublasStatus_t cublasDdot_v2(cublasHandle_t handle, int n, const double *x, int 
 }
 
 cublasStatus_t cublasSnrm2_v2(cublasHandle_t handle, int n, const float *x, int incx, float *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_nrm2(n, x, incx, result);
@@ -1080,8 +1155,12 @@ cublasStatus_t cublasSnrm2_v2(cublasHandle_t handle, int n, const float *x, int 
 }
 
 cublasStatus_t cublasDnrm2_v2(cublasHandle_t handle, int n, const double *x, int incx, double *result) {
-    if (!result || n <= 0) {
+    if (!result) {
         return CUBLAS_STATUS_INVALID_VALUE;
+    }
+    if (n <= 0 || incx <= 0) {
+        *result = 0;
+        return CUBLAS_STATUS_SUCCESS;
     }
 #if FAKEGPU_CPU_SIMULATION
     return cpu_nrm2(n, x, incx, result);
@@ -1095,7 +1174,10 @@ cublasStatus_t cublasDnrm2_v2(cublasHandle_t handle, int n, const double *x, int
 }
 
 cublasStatus_t cublasSscal_v2(cublasHandle_t handle, int n, const float *alpha, float *x, int incx) {
-    if (n <= 0 || !alpha || !x) {
+    if (n <= 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    if (!alpha || !x) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
@@ -1110,7 +1192,10 @@ cublasStatus_t cublasSscal_v2(cublasHandle_t handle, int n, const float *alpha, 
 }
 
 cublasStatus_t cublasDscal_v2(cublasHandle_t handle, int n, const double *alpha, double *x, int incx) {
-    if (n <= 0 || !alpha || !x) {
+    if (n <= 0) {
+        return CUBLAS_STATUS_SUCCESS;
+    }
+    if (!alpha || !x) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
@@ -1249,9 +1334,8 @@ cublasStatus_t cublasHgemm(cublasHandle_t handle, cublasOperation_t transa, cubl
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 #if FAKEGPU_CPU_SIMULATION
-    if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     const double a = half_to_float(*alpha);
     const double b = half_to_float(*beta);
     cublasStatus_t status = gemm_col_major("cublasHgemm", transa, transb, m, n, k, a, A, 2, lda, B, 2, ldb, b, C, 2, ldc);
@@ -1326,6 +1410,8 @@ cublasStatus_t cublasHgemmStridedBatched(cublasHandle_t handle, cublasOperation_
     }
 
 #if FAKEGPU_CPU_SIMULATION
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     if (batchCount < 0 || strideA < 0 || strideB < 0 || strideC < 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
@@ -1445,9 +1531,8 @@ cublasStatus_t cublasGemmEx(cublasHandle_t handle, cublasOperation_t transa, cub
         record_gemm_typed(C, m, n, k, 1, Atype);
         return CUBLAS_STATUS_SUCCESS;
     }
-    if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     if (m == 0 || n == 0) {
         return CUBLAS_STATUS_SUCCESS;
     }
@@ -1498,6 +1583,8 @@ cublasStatus_t cublasGemmStridedBatchedEx(cublasHandle_t handle, cublasOperation
         record_gemm_typed(C, m, n, k, batchCount, Atype);
         return CUBLAS_STATUS_SUCCESS;
     }
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     if (batchCount < 0 || strideA < 0 || strideB < 0 || strideC < 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
@@ -1549,6 +1636,8 @@ cublasStatus_t cublasGemmBatchedEx(cublasHandle_t handle, cublasOperation_t tran
         record_gemm_typed(first_nonnull_ptr(reinterpret_cast<const void* const*>(Carray), batchCount), m, n, k, batchCount, Atype);
         return CUBLAS_STATUS_SUCCESS;
     }
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     const int scale_type = gemm_scale_type(computeType);
     if (scale_type < 0) {
         if (fake_gpu::record_unsupported_api("cublasGemmBatchedEx", "unsupported_compute_type")) {
@@ -2208,9 +2297,8 @@ cublasStatus_t cublasSgemmEx(cublasHandle_t handle, cublasOperation_t transa, cu
         record_gemm_typed(C, m, n, k, 1, Atype);
         return CUBLAS_STATUS_SUCCESS;
     }
-    if (m < 0 || n < 0 || k < 0 || lda <= 0 || ldb <= 0 || ldc <= 0) {
-        return CUBLAS_STATUS_INVALID_VALUE;
-    }
+    const cublasStatus_t arguments = check_gemm_arguments(transa, transb, m, n, k, lda, ldb, ldc);
+    if (arguments != CUBLAS_STATUS_SUCCESS) return arguments;
     if (m == 0 || n == 0) {
         return CUBLAS_STATUS_SUCCESS;
     }
@@ -2643,22 +2731,16 @@ cublasStatus_t cublasLtMatmulAlgoGetHeuristic(
     cublasLtMatmulHeuristicResult_t heuristicResultsArray[],
     int *returnAlgoCount
 ) {
-    if (!returnAlgoCount || !heuristicResultsArray) {
+    // cublasLt.h: INVALID_VALUE if requestedAlgoCount is less or equal to zero.
+    if (!returnAlgoCount || !heuristicResultsArray || requestedAlgoCount <= 0) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 
-    // Return at least one algorithm result
-    int algoCount = (requestedAlgoCount > 0) ? 1 : 0;
-    if (algoCount > 0) {
-        // Fill in a default algorithm
-        heuristicResultsArray[0].algo = 0;  // Default algorithm
-        heuristicResultsArray[0].workspaceSize = 0;  // No workspace needed
-        heuristicResultsArray[0].state = 0;
-        heuristicResultsArray[0].wavesCount = 1.0f;
-        for (int i = 0; i < 4; i++) {
-            heuristicResultsArray[0].reserved[i] = 0;
-        }
-    }
+    // One default algorithm that needs no workspace.
+    const int algoCount = 1;
+    heuristicResultsArray[0] = cublasLtMatmulHeuristicResult_t{};
+    heuristicResultsArray[0].state = CUBLAS_STATUS_SUCCESS;
+    heuristicResultsArray[0].wavesCount = 1.0f;
 
     *returnAlgoCount = algoCount;
 

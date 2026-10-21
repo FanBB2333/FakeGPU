@@ -48,6 +48,7 @@ struct ncclComm {
     void* real_comm = nullptr;
     bool destroyed = false;
     bool suspended = false;
+    bool finalized = false;
     bool fault_injected = false;
     ncclResult_t async_error = ncclSuccess;
     std::string last_error;
@@ -57,6 +58,8 @@ namespace {
 
 constexpr int kFakeNcclVersion = NCCL_VERSION_CODE;
 constexpr int kDefaultCoordinatorTimeoutMs = 1000;
+// Magic value of NCCL_SIM_INFO_INITIALIZER in nccl.h.
+constexpr unsigned int kSimInfoMagic = 0x74685283U;
 
 thread_local int g_group_depth = 0;
 thread_local std::string g_last_error;
@@ -1571,6 +1574,18 @@ ncclResult_t buffer_group_alltoall(
     return ncclSuccess;
 }
 
+// NCCL accepts zero-count ncclSend/ncclRecv like any other point-to-point
+// task (enqueue.cc, taskAppend, and the bytes == 0 branch of the plan).
+// They carry no data, so once the arguments pass the checks NCCL's ArgsCheck
+// makes, both sides of the pair complete without the coordinator.
+ncclResult_t accept_empty_point_to_point(ncclDataType_t datatype, ncclComm_t comm) {
+    if (static_cast<int>(datatype) < 0 || datatype >= ncclNumTypes) {
+        return fail_with(comm, ncclInvalidArgument, "invalid datatype");
+    }
+    clear_last_error(comm);
+    return ncclSuccess;
+}
+
 ncclResult_t buffer_group_send(
     const void* sendbuff,
     std::size_t count,
@@ -1578,7 +1593,7 @@ ncclResult_t buffer_group_send(
     int peer,
     ncclComm_t comm,
     cudaStream_t stream) {
-    if (!sendbuff) {
+    if (!sendbuff && count > 0) {
         return fail_with(comm, ncclInvalidArgument, "send buffer must not be null");
     }
     const ncclResult_t enqueue_result =
@@ -1590,7 +1605,7 @@ ncclResult_t buffer_group_send(
         return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
     }
     if (count == 0) {
-        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
+        return accept_empty_point_to_point(datatype, comm);
     }
 
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
@@ -1619,7 +1634,7 @@ ncclResult_t buffer_group_recv(
     int peer,
     ncclComm_t comm,
     cudaStream_t stream) {
-    if (!recvbuff) {
+    if (!recvbuff && count > 0) {
         return fail_with(comm, ncclInvalidArgument, "recv buffer must not be null");
     }
     const ncclResult_t enqueue_result =
@@ -1631,7 +1646,7 @@ ncclResult_t buffer_group_recv(
         return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
     }
     if (count == 0) {
-        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
+        return accept_empty_point_to_point(datatype, comm);
     }
 
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
@@ -1995,11 +2010,18 @@ ncclResult_t submit_point_to_point(
     if (peer < 0 || peer >= comm->world_size) {
         return fail_with(comm, ncclInvalidArgument, "peer must be within [0, world_size)");
     }
+    if (count == 0) {
+        if (!validate_stream_handle(comm, stream)) {
+            return ncclInvalidArgument;
+        }
+        const ncclResult_t empty_result = accept_empty_point_to_point(datatype, comm);
+        if (empty_result != ncclSuccess) {
+            return empty_result;
+        }
+        return mark_simulated_stream_work_complete(comm, stream);
+    }
     if (peer == comm->rank) {
         return fail_with(comm, ncclInvalidArgument, "peer must not equal rank");
-    }
-    if (count == 0) {
-        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
     }
     if (!validate_stream_handle(comm, stream)) {
         return ncclInvalidArgument;
@@ -2722,6 +2744,29 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist) {
         devices[static_cast<std::size_t>(index)] =
             devlist ? devlist[index] : index;
     }
+    if (devlist) {
+        // Same checks as NCCL's ncclCommInitAll (init.cc): every listed
+        // device must exist and appear only once.
+        fake_gpu::GlobalState::instance().initialize();
+        const int device_count = fake_gpu::GlobalState::instance().get_device_count();
+        std::vector<bool> seen(static_cast<std::size_t>(std::max(device_count, 0)), false);
+        for (int device : devices) {
+            if (device < 0 || device >= device_count) {
+                return fail_with(
+                    nullptr,
+                    ncclInvalidArgument,
+                    "invalid device " + std::to_string(device) +
+                        " (device count " + std::to_string(device_count) + ")");
+            }
+            if (seen[static_cast<std::size_t>(device)]) {
+                return fail_with(
+                    nullptr,
+                    ncclInvalidUsage,
+                    "duplicate device " + std::to_string(device) + " in device list");
+            }
+            seen[static_cast<std::size_t>(device)] = true;
+        }
+    }
 
     ncclUniqueId unique_id {};
     ncclResult_t result = ncclGetUniqueId(&unique_id);
@@ -2788,14 +2833,25 @@ ncclResult_t ncclCommInitRankScalable(
 }
 
 ncclResult_t ncclCommFinalize(ncclComm_t comm) {
+    // NCCL treats a null communicator as a no-op (init.cc, ncclCommFinalize),
+    // e.g. the NCCL_SPLIT_NOCOLOR result of ncclCommSplit.
     if (!comm) {
-        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+        return ncclSuccess;
     }
+    if (comm->finalized) {
+        return fail_with(comm, ncclInvalidArgument, "communicator is already finalized");
+    }
+    comm->finalized = true;
     clear_last_error(comm);
     return ncclSuccess;
 }
 
 ncclResult_t ncclCommDestroy(ncclComm_t comm) {
+    // As in NCCL (init.cc, ncclCommDestroy), destroying a null communicator
+    // succeeds.
+    if (!comm) {
+        return ncclSuccess;
+    }
     return do_destroy(comm, false);
 }
 
@@ -3308,9 +3364,21 @@ ncclResult_t ncclRedOpCreatePreMulSum(
 }
 
 ncclResult_t ncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm) {
+    // Argument checks follow NCCL's enqueue.cc, ncclRedOpDestroy.
+    if (static_cast<int>(op) >= 0 && static_cast<int>(op) < static_cast<int>(ncclNumOps)) {
+        return fail_with(comm, ncclInvalidArgument, "ncclRedOpDestroy: operator is a NCCL builtin");
+    }
+    if (static_cast<int>(op) < 0) {
+        return fail_with(comm, ncclInvalidArgument, "ncclRedOpDestroy: operator is garbage");
+    }
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "ncclRedOpDestroy: invalid communicator passed");
+    }
     {
         std::lock_guard<std::mutex> lock(g_premul_sum_ops_mutex);
-        g_premul_sum_ops.erase(static_cast<int>(op));
+        if (g_premul_sum_ops.erase(static_cast<int>(op)) == 0) {
+            return fail_with(comm, ncclInvalidArgument, "ncclRedOpDestroy: operator unknown to this communicator");
+        }
     }
     clear_last_error(comm);
     return ncclSuccess;
@@ -3777,23 +3845,42 @@ ncclResult_t ncclGroupStart(void) {
 }
 
 ncclResult_t ncclGroupEnd(void) {
-    if (g_group_depth > 0) {
-        --g_group_depth;
+    // NCCL rejects an unmatched ncclGroupEnd (group.cc, ncclGroupEndInternal).
+    if (g_group_depth == 0) {
+        return fail_with(nullptr, ncclInvalidUsage, "ncclGroupEnd: not in a group call");
     }
-    if (g_group_depth > 0) {
+    if (--g_group_depth > 0) {
         return ncclSuccess;
     }
     return flush_grouped_operations();
 }
 
 ncclResult_t ncclGroupSimulateEnd(ncclSimInfo_t* sim_info) {
-    if (sim_info) {
-        sim_info->estimatedTime = 0.0f;
+    if (g_group_depth == 0) {
+        return fail_with(nullptr, ncclInvalidUsage, "ncclGroupSimulateEnd: not in a group call");
     }
-    if (g_group_depth > 0) {
-        --g_group_depth;
+    if (--g_group_depth > 0) {
+        return ncclSuccess;
     }
+    // The simulated group is never launched, whatever the outcome below.
     g_group_operations.clear();
+    if (sim_info) {
+        // Like NCCL, read only the caller's declared size and require the
+        // NCCL_SIM_INFO_INITIALIZER magic.
+        std::size_t real_size = 0;
+        std::memcpy(&real_size, &sim_info->size, sizeof(real_size));
+        real_size = std::min(real_size, sizeof(ncclSimInfo_t));
+        ncclSimInfo_t internal {};
+        std::memcpy(&internal, sim_info, real_size);
+        if (internal.magic != kSimInfoMagic) {
+            return fail_with(
+                nullptr,
+                ncclInvalidArgument,
+                "ncclSimInfo_t argument not initialized via NCCL_SIM_INFO_INITIALIZER");
+        }
+        internal.estimatedTime = 0.0f;
+        std::memcpy(sim_info, &internal, real_size);
+    }
     g_last_error.clear();
     return ncclSuccess;
 }
