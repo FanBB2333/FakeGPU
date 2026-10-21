@@ -1539,6 +1539,14 @@ def _install_tracked_memory_api(torch_mod: Any) -> None:
         for name, function in memory_api.items():
             setattr(namespace, name, function)
 
+    # torch.cuda.memory_stats_as_nested_dict() reads this binding directly.
+    def _tracked_cuda_memory_stats(device):
+        return _memory_tracker.memory_stats_as_nested_dict(
+            _normalize_device_index(device)
+        )
+
+    torch_mod._C._cuda_memoryStats = _tracked_cuda_memory_stats
+
 
 def _install_fake_grad_scaler(torch_mod: Any) -> None:
     class _FakeGradScaler(torch_mod.amp.GradScaler):

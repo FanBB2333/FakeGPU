@@ -50,7 +50,9 @@ def test_saved_tensor_unpack_detaches_stale_finalizer() -> None:
     del holder
     gc.collect()
 
-    assert tracker.memory_allocated(0) == 1_000
+    # memory_allocated() counts the 512-byte-rounded block (round_size()).
+    assert tracker.memory_allocated(0) == 1_024
+    assert tracker.memory_stats(0)["requested_bytes.all.current"] == 1_000
 
 
 def test_small_allocations_share_and_release_cached_segment() -> None:
@@ -58,12 +60,12 @@ def test_small_allocations_share_and_release_cached_segment() -> None:
 
     assert tracker.allocate(101, 1_000, 0)
     assert tracker.allocate(102, 1_000, 0)
-    assert tracker.memory_allocated(0) == 2_000
+    assert tracker.memory_allocated(0) == 2_048
     assert tracker.memory_reserved(0) == 2 * MIB
     assert tracker.max_memory_reserved(0) == 2 * MIB
 
     tracker.release(101)
-    assert tracker.memory_allocated(0) == 1_000
+    assert tracker.memory_allocated(0) == 1_024
     assert tracker.memory_reserved(0) == 2 * MIB
     tracker.empty_cache()
     assert tracker.memory_reserved(0) == 2 * MIB
@@ -163,8 +165,91 @@ def test_allocator_oom_reports_reserved_state_and_counter() -> None:
 
     stats = tracker.memory_stats(0)
     assert stats["num_ooms"] == 1
+    # malloc() always retries once after release_cached_blocks(), which
+    # synchronizes first, even when no cached segment could be freed.
+    assert stats["num_alloc_retries"] == 1
+    assert stats["num_sync_all_streams"] == 1
     assert stats["reserved_bytes.all.current"] == 2 * MIB
     assert stats["allocated_bytes.all.current"] == 2 * MIB
+
+
+def test_allocator_memory_stats_follow_cuda_caching_allocator() -> None:
+    # Expected values follow DeviceStats updates in CUDACachingAllocator.cpp
+    # and the key layout of torch.cuda.memory_stats() (PyTorch v2.14.1).
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 4, 0)
+    tracker.allocate(2, 19 * MIB + MIB // 2, 0)
+
+    stats = tracker.memory_stats(0)
+    arrays = (
+        "active", "active_bytes", "allocated_bytes", "allocation",
+        "inactive_split", "inactive_split_bytes", "requested_bytes",
+        "reserved_bytes", "segment",
+    )
+    expected_keys = {
+        f"{name}.{pool}.{metric}"
+        for name in arrays
+        for pool in ("all", "large_pool", "small_pool")
+        for metric in ("allocated", "current", "freed", "peak")
+    } | {
+        f"{name}.{metric}"
+        for name in ("oversize_allocations", "oversize_segments")
+        for metric in ("allocated", "current", "freed", "peak")
+    } | {
+        "max_split_size", "num_alloc_retries", "num_device_alloc",
+        "num_device_free", "num_oom_rejections", "num_ooms",
+        "num_sync_all_streams",
+    }
+    assert set(stats) == expected_keys
+    assert list(stats) == sorted(stats)
+    assert stats["max_split_size"] == -1
+
+    # Allocated and active bytes count whole blocks; requested bytes do not.
+    assert tracker.memory_allocated(0) == 512 + 20 * MIB
+    assert stats["allocated_bytes.small_pool.current"] == 512
+    assert stats["allocated_bytes.large_pool.current"] == 20 * MIB
+    assert stats["active_bytes.all.current"] == 512 + 20 * MIB
+    assert stats["requested_bytes.all.current"] == 4 + 19 * MIB + MIB // 2
+    assert stats["allocation.all.current"] == 2
+    assert stats["active.all.current"] == 2
+    assert stats["segment.small_pool.current"] == 1
+    assert stats["reserved_bytes.large_pool.current"] == 20 * MIB
+    assert stats["inactive_split.small_pool.current"] == 1
+    assert stats["inactive_split_bytes.small_pool.current"] == 2 * MIB - 512
+    assert stats["inactive_split_bytes.large_pool.current"] == 0
+    assert stats["num_device_alloc"] == 2
+
+    tracker.release(1)
+    tracker.empty_cache()
+    stats = tracker.memory_stats(0)
+    assert stats["inactive_split.small_pool.current"] == 0
+    assert stats["inactive_split_bytes.small_pool.freed"] == 2 * MIB - 512
+    assert stats["allocated_bytes.all.freed"] == 512
+    assert stats["reserved_bytes.all.freed"] == 2 * MIB
+    assert stats["segment.all.current"] == 1
+    assert stats["num_device_free"] == 1
+    assert stats["num_sync_all_streams"] == 1
+
+    # reset_accumulated() zeroes the allocated/freed totals and counters,
+    # even for memory that is still allocated.
+    tracker.reset_accumulated(0)
+    stats = tracker.memory_stats(0)
+    assert stats["allocated_bytes.all.allocated"] == 0
+    assert stats["allocated_bytes.all.freed"] == 0
+    assert stats["reserved_bytes.all.allocated"] == 0
+    assert stats["num_device_alloc"] == 0
+    assert stats["num_sync_all_streams"] == 0
+    assert stats["allocated_bytes.all.current"] == 20 * MIB
+    assert stats["allocated_bytes.all.peak"] == 512 + 20 * MIB
+
+    tracker.reset_peak(0)
+    assert tracker.max_memory_allocated(0) == 20 * MIB
+    assert tracker.memory_stats_as_nested_dict(0)["allocated_bytes"]["all"] == {
+        "current": 20 * MIB,
+        "peak": 20 * MIB,
+        "allocated": 0,
+        "freed": 0,
+    }
 
 
 def test_allocator_category_totals_follow_allocate_reclassify_and_release() -> None:
@@ -217,6 +302,9 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
             "reserved": torch.cuda.memory_reserved(),
             "max_reserved": torch.cuda.max_memory_reserved(),
             "stats": torch.cuda.memory_stats(),
+            "nested_allocated": torch.cuda.memory_stats_as_nested_dict()[
+                "allocated_bytes"
+            ]["all"]["current"],
             "snapshot": torch.cuda.memory_snapshot(),
         }
         del tensor
@@ -252,7 +340,9 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
     assert live["reserved"] >= 2 * MIB
     assert live["max_reserved"] >= live["reserved"]
     assert live["stats"]["reserved_bytes.all.current"] == live["reserved"]
-    assert live["stats"]["requested_bytes.all.current"] == live["allocated"]
+    assert live["stats"]["allocated_bytes.all.current"] == live["allocated"]
+    assert live["nested_allocated"] == live["allocated"]
+    assert live["stats"]["requested_bytes.all.current"] <= live["allocated"]
     assert live["snapshot"]
     assert payload["released"]["reserved_before_empty"] >= 2 * MIB
     assert (
