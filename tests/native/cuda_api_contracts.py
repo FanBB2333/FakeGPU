@@ -309,6 +309,33 @@ def check_device_properties_match_attributes(runtime: ctypes.CDLL, driver: ctype
     _check(not wrong, f"device properties differ from attributes: {wrong}")
 
 
+def check_get_proc_address_versioned_abi(driver: ctypes.CDLL) -> None:
+    # cuda.h (cuGetProcAddress) returns the newest ABI introduced at or before
+    # cudaVersion; cudaTypedefs.h: PFN_cuGetProcAddress_v12000 takes five
+    # arguments and PFN_cuCtxCreate_v11040 takes (pctx, params, numParams, flags, dev).
+    driver.cuGetProcAddress.argtypes = [ctypes.c_char_p, ctypes.POINTER(c_void_p), ctypes.c_int, ctypes.c_ulonglong]
+    legacy = ctypes.cast(driver.cuGetProcAddress, c_void_p).value
+    versioned = ctypes.cast(driver.cuGetProcAddress_v2, c_void_p).value
+    found = []
+    for version in (11030, 12040):
+        function = c_void_p()
+        _check(driver.cuGetProcAddress(b"cuGetProcAddress", ctypes.byref(function), version, 0) == 0, "lookup failed")
+        found.append(function.value)
+    _check(found == [legacy, versioned], f"cuGetProcAddress lookups returned {found}, expected {[legacy, versioned]}")
+
+    function = c_void_p()
+    _check(driver.cuGetProcAddress(b"cuCtxCreate", ctypes.byref(function), 12040, 0) == 0, "lookup failed")
+    create = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(c_void_p), c_void_p, ctypes.c_int, ctypes.c_uint, ctypes.c_int)(
+        function.value
+    )
+    context = c_void_p()
+    result = create(ctypes.byref(context), None, 0, 0, 1)
+    # Simulated contexts encode device ordinal + 1.
+    _check(result == 0 and context.value == 2, f"cuCtxCreate(v11040 ABI, device 1) returned {result}, {context.value}")
+    driver.cuCtxSetCurrent.argtypes = [c_void_p]
+    driver.cuCtxSetCurrent(c_void_p(1))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -341,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
     check_event_elapsed_time_errors(runtime)
     check_grid_dimension_limits(driver)
     check_device_properties_match_attributes(runtime, driver)
+    check_get_proc_address_versioned_abi(driver)
     print("CUDA API contract validation passed")
     return 0
 

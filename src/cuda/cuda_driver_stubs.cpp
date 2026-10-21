@@ -1778,6 +1778,14 @@ CUresult cuCtxCreate_v2(CUcontext *pctx, unsigned int flags, CUdevice dev) {
     return cuCtxCreate(pctx, flags, dev);
 }
 
+// CUDA 11.4 ABI that cuGetProcAddress("cuCtxCreate") returns for newer callers.
+// Execution-affinity parameters only partition SMs under MPS and are ignored.
+CUresult cuCtxCreate_v3(CUcontext *pctx, void *paramsArray, int numParams, unsigned int flags, CUdevice dev) {
+    (void)paramsArray;
+    (void)numParams;
+    return cuCtxCreate(pctx, flags, dev);
+}
+
 CUresult cuCtxDestroy_v2(CUcontext ctx) {
     return cuCtxDestroy(ctx);
 }
@@ -3077,6 +3085,14 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
 
     // Map of function names to their addresses
     #define MAP_FUNC(name) if (strcmp(symbol, #name) == 0) { *pfn = (void*)name; return CUDA_SUCCESS; }
+    // A base name resolves to the newest ABI introduced at or before cudaVersion
+    // (cuda.h, cuGetProcAddress; signatures in cudaTypedefs.h).
+    #define MAP_VERSIONED(name, since, versioned) \
+        if (strcmp(symbol, #name) == 0 && cudaVersion >= (since)) { *pfn = (void*)versioned; return CUDA_SUCCESS; }
+    MAP_VERSIONED(cuGetProcAddress, 12000, cuGetProcAddress_v2)
+    MAP_VERSIONED(cuCtxCreate, 11040, cuCtxCreate_v3)
+    MAP_VERSIONED(cuStreamBeginCapture, 10010, cuStreamBeginCapture_v2)
+    #undef MAP_VERSIONED
 
     // Core functions
     MAP_FUNC(cuInit)

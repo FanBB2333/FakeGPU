@@ -272,6 +272,7 @@ CUresult cuDeviceTotalMem_v2(size_t *bytes, CUdevice dev);
 
 // Additional context functions
 CUresult cuCtxCreate_v2(CUcontext *pctx, unsigned int flags, CUdevice dev);
+CUresult cuCtxCreate_v3(CUcontext *pctx, void *paramsArray, int numParams, unsigned int flags, CUdevice dev);
 CUresult cuCtxDestroy_v2(CUcontext ctx);
 CUresult cuCtxPushCurrent_v2(CUcontext ctx);
 CUresult cuCtxPopCurrent_v2(CUcontext *pctx);
