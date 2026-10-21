@@ -989,7 +989,16 @@ class _FakeDeviceProperties:
         self.regs_per_block = prof["regs_per_block"]
         self.regs_per_multiprocessor = prof["regs_per_multiprocessor"]
         self.warp_size = 32
-        self.gcnArchName = ""
+        # Fields of torch._C._CudaDeviceProperties; the clocks are in kHz.
+        self.shared_memory_per_block = prof["shared_mem_per_block"]
+        self.shared_memory_per_block_optin = prof["shared_mem_per_block_optin"]
+        self.shared_memory_per_multiprocessor = prof["shared_mem_per_sm"]
+        self.L2_cache_size = prof["l2_cache_bytes"]
+        self.memory_bus_width = prof["memory_bus_width_bits"]
+        self.clock_rate = prof["core_clock_mhz"] * 1000
+        self.memory_clock_rate = prof["memory_clock_mhz"] * 1000
+        # CUDA builds of PyTorch bind gcnArchName to the device name.
+        self.gcnArchName = self.name
 
     def __repr__(self) -> str:
         return (
