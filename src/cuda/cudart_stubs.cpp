@@ -14,8 +14,24 @@
 #include <unordered_map>
 #include <vector>
 
-// Thread-local error tracking
-static __thread cudaError_t last_error = cudaSuccess;
+// Thread-local error tracking. Assigning stores the status of the current call;
+// only errors overwrite the value cudaGetLastError/cudaPeekAtLastError report
+// (CUDA C++ Programming Guide 12.4, section 3.2.12 "Error Checking").
+namespace {
+struct LastError {
+    cudaError_t result = cudaSuccess;
+    cudaError_t recorded = cudaSuccess;
+
+    LastError& operator=(cudaError_t error) {
+        result = error;
+        if (error != cudaSuccess) recorded = error;
+        return *this;
+    }
+    operator cudaError_t() const { return result; }
+};
+}  // namespace
+
+static thread_local LastError last_error;
 
 namespace {
 
@@ -743,15 +759,15 @@ cudaError_t cudaEventRecordWithFlags(cudaEvent_t event, cudaStream_t stream, uns
 // ============================================================================
 
 cudaError_t cudaGetLastError(void) {
-    cudaError_t err = last_error;
-    last_error = cudaSuccess;  // Clear error
+    const cudaError_t err = last_error.recorded;
+    last_error.recorded = cudaSuccess;  // Clear error
     FGPU_LOG("[FakeCUDART] cudaGetLastError returning %d\n", err);
     return err;
 }
 
 cudaError_t cudaPeekAtLastError(void) {
-    FGPU_LOG("[FakeCUDART] cudaPeekAtLastError returning %d\n", last_error);
-    return last_error;
+    FGPU_LOG("[FakeCUDART] cudaPeekAtLastError returning %d\n", last_error.recorded);
+    return last_error.recorded;
 }
 
 const char* cudaGetErrorString(cudaError_t error) {
@@ -944,7 +960,7 @@ cudaError_t cudaDeviceEnablePeerAccess(int peerDevice, unsigned int flags) {
     const int device = fake_gpu::GlobalState::instance().get_current_device();
     const bool allowed = modeled_peer_access(device, peerDevice, error);
     last_error = error != cudaSuccess ? error : allowed ? cudaSuccess : cudaErrorPeerAccessUnsupported;
-    FGPU_LOG("[FakeCUDART] cudaDeviceEnablePeerAccess(%d -> %d) = %d\n", device, peerDevice, last_error);
+    FGPU_LOG("[FakeCUDART] cudaDeviceEnablePeerAccess(%d -> %d) = %d\n", device, peerDevice, last_error.result);
     return last_error;
 }
 

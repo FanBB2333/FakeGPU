@@ -204,6 +204,19 @@ def check_driver_error_text(driver: ctypes.CDLL) -> None:
         _check(actual == (status, name, status, text), f"cuGetErrorName/String({code}) returned {actual}")
 
 
+def check_last_error_survives_successful_calls(runtime: ctypes.CDLL) -> None:
+    # CUDA C++ Programming Guide 12.4, 3.2.12: the per-thread error variable is
+    # overwritten only when an error occurs; cudaGetLastError resets it.
+    runtime.cudaGetLastError()
+    failed = runtime.cudaSetDevice(9999)
+    synchronized = runtime.cudaDeviceSynchronize()
+    peeked = runtime.cudaPeekAtLastError()
+    taken = runtime.cudaGetLastError()
+    cleared = runtime.cudaGetLastError()
+    actual = (failed, synchronized, peeked, taken, cleared)
+    _check(actual == (101, 0, 101, 101, 0), f"last-error sequence returned {actual}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -231,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     check_pointer_attribute_memory_types(runtime)
     check_runtime_error_text(runtime)
     check_driver_error_text(driver)
+    check_last_error_survives_successful_calls(runtime)
     print("CUDA API contract validation passed")
     return 0
 
