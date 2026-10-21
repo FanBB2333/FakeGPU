@@ -2256,10 +2256,10 @@ ncclResult_t flush_grouped_alltoallv(
     if (sends[self] == nullptr && recvs[self] == nullptr) {
         return ncclSuccess;
     }
+    handled = true;
 
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
     if (!map_dtype(first->datatype, mapped_dtype)) {
-        handled = true;
         return fail_with(
             comm,
             ncclInvalidArgument,
@@ -2287,7 +2287,6 @@ ncclResult_t flush_grouped_alltoallv(
     if (input_count == 0 || output_count == 0 ||
         input_count > std::numeric_limits<std::size_t>::max() / dtype_size ||
         output_count > std::numeric_limits<std::size_t>::max() / dtype_size) {
-        handled = true;
         return fail_with(
             comm,
             ncclInvalidArgument,
@@ -2313,7 +2312,6 @@ ncclResult_t flush_grouped_alltoallv(
                 peer_input,
                 error,
                 send->stream)) {
-            handled = true;
             return fail_with(comm, ncclSystemError, error);
         }
         std::memcpy(
@@ -2325,7 +2323,6 @@ ncclResult_t flush_grouped_alltoallv(
 
     fake_gpu::distributed::DistributedConfig config;
     if (!validate_runtime_config(comm, config, error)) {
-        handled = true;
         return ncclInvalidUsage;
     }
 
@@ -2347,13 +2344,12 @@ ncclResult_t flush_grouped_alltoallv(
             handle,
             buffer_transport,
             error)) {
-        handled = true;
         return fail_with(comm, ncclSystemError, error);
     }
     std::vector<char> request_payload;
     if (buffer_transport ==
         fake_gpu::distributed::BufferTransport::SocketPayload) {
-        request_payload = host_input;
+        request_payload = std::move(host_input);
     } else {
         std::memcpy(handle.data(), host_input.data(), input_bytes);
     }
@@ -2388,27 +2384,22 @@ ncclResult_t flush_grouped_alltoallv(
             request_payload,
             response,
             error)) {
-        handled = true;
         return fail_with(comm, ncclSystemError, error);
     }
     if (!response.ok) {
-        handled = true;
         return fail_with_response(comm, response);
     }
 
-    std::vector<char> host_output(output_bytes, '\0');
+    const char* host_output = static_cast<const char*>(handle.data());
     if (buffer_transport ==
         fake_gpu::distributed::BufferTransport::SocketPayload) {
         if (response.payload.size() != output_bytes) {
-            handled = true;
             return fail_with(
                 comm,
                 ncclInternalError,
                 "all-to-all response payload size mismatch");
         }
-        host_output = std::move(response.payload);
-    } else {
-        std::memcpy(host_output.data(), handle.data(), output_bytes);
+        host_output = response.payload.data();
     }
 
     std::size_t output_offset = 0;
@@ -2420,11 +2411,10 @@ ncclResult_t flush_grouped_alltoallv(
         const std::size_t peer_bytes = recv->count * dtype_size;
         if (!fake_gpu::nccl::copy_host_to_buffer(
                 recv->recvbuff,
-                host_output.data() + output_offset,
+                host_output + output_offset,
                 peer_bytes,
                 error,
                 recv->stream)) {
-            handled = true;
             return fail_with(comm, ncclSystemError, error);
         }
         output_offset += peer_bytes;
@@ -2433,13 +2423,11 @@ ncclResult_t flush_grouped_alltoallv(
     const ncclResult_t stream_result =
         mark_simulated_stream_work_complete(comm, first->stream);
     if (stream_result != ncclSuccess) {
-        handled = true;
         return stream_result;
     }
 
     comm->next_seqno++;
     clear_last_error(comm);
-    handled = true;
     return ncclSuccess;
 }
 
