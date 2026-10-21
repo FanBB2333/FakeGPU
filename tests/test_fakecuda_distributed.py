@@ -198,6 +198,24 @@ def test_launched_ranks_match_gloo(tmp_path: Path) -> None:
         ]
 
 
+def test_simulated_subgroups_report_their_own_rank_and_size(tmp_path: Path) -> None:
+    # Expected values: the same calls on torch's single-process "fake" backend at rank 5 of 8.
+    results = _simulate(tmp_path, """
+        tensor_parallel = dist.new_group([4, 5, 6, 7])
+        other = dist.new_group([0, 1])
+        results["world"] = [dist.get_rank(), dist.get_world_size()]
+        results["tensor_parallel"] = [dist.get_rank(tensor_parallel), dist.get_world_size(tensor_parallel)]
+        results["other"] = [dist.get_rank(other), dist.get_world_size(other)]
+        current, _ = dist.new_subgroups(group_size=2)
+        results["subgroup"] = [dist.get_rank(current), dist.get_world_size(current)]
+        from torch.distributed.device_mesh import init_device_mesh
+        mesh = init_device_mesh("cuda", (2, 4), mesh_dim_names=("dp", "tp"))
+        results["mesh_tp"] = [dist.get_rank(mesh.get_group("tp")), dist.get_world_size(mesh.get_group("tp"))]
+    """)
+    assert results == {"world": [5, 8], "tensor_parallel": [1, 4], "other": [-1, -1], "subgroup": [1, 2],
+                       "mesh_tp": [1, 4]}
+
+
 def test_simulated_async_work_completes_with_its_outputs(tmp_path: Path) -> None:
     results = _simulate(tmp_path, """
         x = torch.ones(2, device="cuda")

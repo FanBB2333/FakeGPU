@@ -611,14 +611,24 @@ def _dist_get_backend(group: Any = None) -> str | None:
     return _DIST_BACKEND if _DIST_INITIALIZED else None
 
 
+def _torch_knows(group: Any) -> bool:
+    """Whether torch's own process groups can answer for ``group``.
+
+    A simulated job's subgroups live in torch's ``fake`` backend, which
+    knows each one's ranks.
+    """
+
+    return _DIST_REAL or (group is not None and torch.distributed.distributed_c10d.is_initialized())
+
+
 def _dist_get_world_size(group: Any = None) -> int:
-    if _DIST_REAL:
+    if _torch_knows(group):
         return _ORIG_DIST["get_world_size"](group)
     return _DIST_WORLD_SIZE if _DIST_INITIALIZED else 1
 
 
 def _dist_get_rank(group: Any = None) -> int:
-    if _DIST_REAL:
+    if _torch_knows(group):
         return _ORIG_DIST["get_rank"](group)
     return _DIST_RANK if _DIST_INITIALIZED else 0
 
