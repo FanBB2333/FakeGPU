@@ -289,12 +289,21 @@ bool GlobalState::get_allocation_info(void* ptr, size_t& size, int& device) cons
 
 bool GlobalState::get_allocation_info_ex(void* ptr, size_t& size, int& device, AllocationKind& kind) const {
     std::lock_guard<std::mutex> lock(mutex);
-    auto it = allocations.find(ptr);
+    auto it = find_allocation_nolock(ptr);
     if (it == allocations.end()) return false;
 
     size = it->second.size;
     device = it->second.device;
     kind = it->second.kind;
+    return true;
+}
+
+bool GlobalState::get_allocation_range(const void* ptr, void*& base, size_t& size) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = find_allocation_nolock(ptr);
+    if (it == allocations.end()) return false;
+    base = it->first;
+    size = it->second.size;
     return true;
 }
 
@@ -631,9 +640,19 @@ void GlobalState::stop_native_smi_publisher() {
     }
 }
 
+std::map<void*, GlobalState::AllocationRecord>::const_iterator GlobalState::find_allocation_nolock(
+    const void* ptr) const {
+    // The last allocation starting at or below ptr, if ptr lies inside it.
+    auto it = allocations.upper_bound(const_cast<void*>(ptr));
+    if (it == allocations.begin()) return allocations.end();
+    --it;
+    const auto offset = reinterpret_cast<std::uintptr_t>(ptr) - reinterpret_cast<std::uintptr_t>(it->first);
+    return offset == 0 || offset < it->second.size ? it : allocations.end();
+}
+
 int GlobalState::resolve_device_for_ptr_nolock(const void* ptr, int fallback_device) const {
     if (!ptr) return fallback_device;
-    auto it = allocations.find(const_cast<void*>(ptr));
+    auto it = find_allocation_nolock(ptr);
     if (it == allocations.end()) return fallback_device;
     if (it->second.kind == AllocationKind::Host) return fallback_device;
     return it->second.device;

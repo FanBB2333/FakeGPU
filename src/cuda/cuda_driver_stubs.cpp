@@ -2655,9 +2655,19 @@ CUresult cuCtxResetPersistingL2Cache(void) {
 }
 
 CUresult cuMemGetAddressRange(CUdeviceptr *pbase, size_t *psize, CUdeviceptr dptr) {
-    FORWARD_TO_REAL(cuMemGetAddressRange, pbase, psize, dptr);
-    if (pbase) *pbase = dptr;
-    if (psize) *psize = 0;
+    if (real_driver_available()) {
+        // The unversioned symbol takes 32-bit pointers and sizes.
+        static const auto real_fn = real_entry_v2<decltype(&cuMemGetAddressRange)>("cuMemGetAddressRange");
+        if (real_fn) return real_fn(pbase, psize, dptr);
+    }
+    // cuda.h: base and size of the allocation that contains dptr.
+    void* base = nullptr;
+    size_t size = 0;
+    if (!GlobalState::instance().get_allocation_range(reinterpret_cast<void*>(dptr), base, size)) {
+        return CUDA_ERROR_NOT_FOUND;
+    }
+    if (pbase) *pbase = reinterpret_cast<CUdeviceptr>(base);
+    if (psize) *psize = size;
     return CUDA_SUCCESS;
 }
 

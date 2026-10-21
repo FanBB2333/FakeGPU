@@ -336,6 +336,36 @@ def check_get_proc_address_versioned_abi(driver: ctypes.CDLL) -> None:
     driver.cuCtxSetCurrent(c_void_p(1))
 
 
+def check_interior_pointers_resolve_to_allocation(runtime: ctypes.CDLL, driver: ctypes.CDLL) -> None:
+    # cuda.h (cuMemGetAddressRange): base and size of the allocation that
+    # contains dptr, CUDA_ERROR_NOT_FOUND (500) otherwise. Pointer attributes
+    # describe any address inside an allocation, e.g. a sub-allocated tensor.
+    runtime.cudaMalloc.argtypes = [ctypes.POINTER(c_void_p), ctypes.c_size_t]
+    runtime.cudaFree.argtypes = [c_void_p]
+    runtime.cudaPointerGetAttributes.argtypes = [ctypes.POINTER(PointerAttributes), c_void_p]
+    driver.cuMemGetAddressRange.argtypes = [
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.c_uint64,
+    ]
+    device = c_void_p()
+    _check(runtime.cudaMalloc(ctypes.byref(device), 1 << 20) == 0, "cudaMalloc failed")
+    interior = device.value + 4096
+    attributes = PointerAttributes()
+    result = runtime.cudaPointerGetAttributes(ctypes.byref(attributes), c_void_p(interior))
+    _check(result == 0 and attributes.type == 2, f"interior pointer: result {result}, type {attributes.type}")
+    base, size = ctypes.c_uint64(), ctypes.c_size_t()
+    result = driver.cuMemGetAddressRange(ctypes.byref(base), ctypes.byref(size), interior)
+    _check(
+        result == 0 and base.value == device.value and size.value == 1 << 20,
+        f"cuMemGetAddressRange(interior) returned {result}, base {base.value:#x}, size {size.value}",
+    )
+    host = ctypes.create_string_buffer(64)
+    result = driver.cuMemGetAddressRange(ctypes.byref(base), ctypes.byref(size), ctypes.addressof(host))
+    _check(result == 500, f"cuMemGetAddressRange(host memory) returned {result}")
+    runtime.cudaFree(device)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -369,6 +399,7 @@ def main(argv: list[str] | None = None) -> int:
     check_grid_dimension_limits(driver)
     check_device_properties_match_attributes(runtime, driver)
     check_get_proc_address_versioned_abi(driver)
+    check_interior_pointers_resolve_to_allocation(runtime, driver)
     print("CUDA API contract validation passed")
     return 0
 

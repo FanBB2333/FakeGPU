@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -100,7 +101,9 @@ public:
     bool release_allocation(void* ptr, size_t& size, int& device);
     bool release_host_allocation(void* ptr, size_t& size, int& device);
     bool get_allocation_info(void* ptr, size_t& size, int& device) const;
+    // Matches any address inside a tracked allocation, like the CUDA pointer queries.
     bool get_allocation_info_ex(void* ptr, size_t& size, int& device, AllocationKind& kind) const;
+    bool get_allocation_range(const void* ptr, void*& base, size_t& size) const;
     std::vector<std::pair<void*, size_t>> snapshot_allocations() const;
 
     int resolve_device_for_ptr(const void* ptr, int fallback_device) const;
@@ -190,8 +193,10 @@ private:
         AllocationKind kind = AllocationKind::Device;
     };
 
-    std::unordered_map<void*, AllocationRecord> allocations;
+    // Ordered by base address so interior pointers resolve to their allocation.
+    std::map<void*, AllocationRecord> allocations;
 
+    std::map<void*, AllocationRecord>::const_iterator find_allocation_nolock(const void* ptr) const;
     int resolve_device_for_ptr_nolock(const void* ptr, int fallback_device) const;
     DeviceRuntimeStats* stats_for_device_nolock(int device);
     const DeviceRuntimeStats* stats_for_device_nolock(int device) const;
