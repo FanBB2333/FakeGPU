@@ -852,16 +852,6 @@ ncclResult_t maybe_inject_collective_failure(
             std::to_string(seqno));
 }
 
-bool collective_transfer_sizes(
-    fake_gpu::distributed::CollectiveType type,
-    std::size_t element_count,
-    fake_gpu::distributed::CollectiveDataType dtype,
-    int world_size,
-    std::size_t& input_bytes,
-    std::size_t& staging_bytes,
-    std::size_t& output_bytes,
-    std::string& error);
-
 ncclResult_t submit_proxy_collective_record(
     const fake_gpu::distributed::DistributedConfig& config,
     const char* command,
@@ -877,20 +867,18 @@ ncclResult_t submit_proxy_collective_record(
     }
 
     std::string error;
-    std::size_t input_bytes = 0;
-    std::size_t staging_bytes = 0;
-    std::size_t output_bytes = 0;
-    if (!collective_transfer_sizes(
+    fake_gpu::distributed::StagingChunkPlan plan;
+    if (!fake_gpu::distributed::build_staging_chunk_plan(
             collective_type,
             count,
             mapped_dtype,
             comm->world_size,
-            input_bytes,
-            staging_bytes,
-            output_bytes,
+            0,
+            plan,
             error)) {
         return fail_with(comm, ncclInvalidArgument, error);
     }
+    const std::size_t staging_bytes = plan.chunks.front().staging_bytes;
 
     const ncclResult_t fault_result = maybe_inject_collective_failure(
         config,
@@ -1020,89 +1008,6 @@ ncclResult_t submit_real_collective(
 
     clear_last_error(comm);
     return ncclSuccess;
-}
-
-bool collective_transfer_sizes(
-    fake_gpu::distributed::CollectiveType type,
-    std::size_t element_count,
-    fake_gpu::distributed::CollectiveDataType dtype,
-    int world_size,
-    std::size_t& input_bytes,
-    std::size_t& staging_bytes,
-    std::size_t& output_bytes,
-    std::string& error) {
-    error.clear();
-    if (world_size <= 0) {
-        error = "world_size must be > 0";
-        return false;
-    }
-    const std::size_t dtype_size = fake_gpu::distributed::collective_data_type_size(dtype);
-    if (dtype_size == 0) {
-        error = "unsupported dtype";
-        return false;
-    }
-    if (element_count == 0) {
-        error = "count must be > 0";
-        return false;
-    }
-
-    const std::size_t chunk_bytes = element_count * dtype_size;
-    switch (type) {
-        case fake_gpu::distributed::CollectiveType::AllReduce:
-        case fake_gpu::distributed::CollectiveType::Reduce:
-        case fake_gpu::distributed::CollectiveType::Broadcast:
-            input_bytes = chunk_bytes;
-            staging_bytes = chunk_bytes;
-            output_bytes = chunk_bytes;
-            return true;
-        case fake_gpu::distributed::CollectiveType::AllGather:
-            input_bytes = chunk_bytes;
-            staging_bytes = chunk_bytes * static_cast<std::size_t>(world_size);
-            output_bytes = staging_bytes;
-            return true;
-        case fake_gpu::distributed::CollectiveType::AllToAll:
-            input_bytes = chunk_bytes * static_cast<std::size_t>(world_size);
-            staging_bytes = input_bytes;
-            output_bytes = input_bytes;
-            return true;
-        case fake_gpu::distributed::CollectiveType::ReduceScatter:
-            input_bytes = chunk_bytes * static_cast<std::size_t>(world_size);
-            staging_bytes = input_bytes;
-            output_bytes = chunk_bytes;
-            return true;
-    }
-
-    error = "unsupported collective";
-    return false;
-}
-
-bool build_transfer_chunk_plan(
-    fake_gpu::distributed::CollectiveType type,
-    std::size_t element_count,
-    fake_gpu::distributed::CollectiveDataType dtype,
-    int world_size,
-    std::size_t chunk_threshold_bytes,
-    fake_gpu::distributed::StagingChunkPlan& out,
-    std::string& error) {
-    if (!fake_gpu::distributed::build_staging_chunk_plan(
-            type,
-            element_count,
-            dtype,
-            world_size,
-            chunk_threshold_bytes,
-            out,
-            error)) {
-        return false;
-    }
-    if (out.chunks.empty()) {
-        error = "chunk plan must contain at least one chunk";
-        return false;
-    }
-    return true;
-}
-
-std::size_t byte_offset_for_elements(std::size_t element_offset, std::size_t dtype_size) {
-    return element_offset * dtype_size;
 }
 
 const char* collective_command(fake_gpu::distributed::CollectiveType type) {
@@ -1323,7 +1228,7 @@ ncclResult_t prepare_group_batch(
         }
 
         fake_gpu::distributed::StagingChunkPlan chunk_plan;
-        if (!build_transfer_chunk_plan(
+        if (!fake_gpu::distributed::build_staging_chunk_plan(
                 operation.type,
                 operation.count,
                 mapped_dtype,
@@ -1753,57 +1658,26 @@ ncclResult_t submit_collective_chunk(
     const fake_gpu::distributed::DistributedConfig& config,
     const char* command,
     fake_gpu::distributed::CollectiveType collective_type,
+    const fake_gpu::distributed::StagingChunkPlanEntry& chunk,
+    fake_gpu::distributed::CollectiveDataType mapped_dtype,
     const void* local_input,
     void* recvbuff,
-    std::size_t count,
-    ncclDataType_t datatype,
     fake_gpu::distributed::CollectiveReduceOp reduce_op,
     int root,
     ncclComm_t comm) {
-    if (!comm) {
-        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
-    }
-    if (comm->destroyed) {
-        return fail_with(comm, ncclInvalidUsage, "communicator is already destroyed");
-    }
     const ncclResult_t pending_error = surface_async_error(comm);
     if (pending_error != ncclSuccess) {
         return pending_error;
     }
-    if (!local_input || !recvbuff) {
-        return fail_with(comm, ncclInvalidArgument, "send/recv buffer must not be null");
-    }
-    if (count == 0) {
-        return fail_with(comm, ncclInvalidArgument, "count must be > 0");
-    }
-
-    fake_gpu::distributed::CollectiveDataType mapped_dtype;
-    if (!map_dtype(datatype, mapped_dtype)) {
-        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
-    }
 
     std::string error;
-    std::size_t input_bytes = 0;
-    std::size_t staging_bytes = 0;
-    std::size_t output_bytes = 0;
-    if (!collective_transfer_sizes(
-            collective_type,
-            count,
-            mapped_dtype,
-            comm->world_size,
-            input_bytes,
-            staging_bytes,
-            output_bytes,
-            error)) {
-        return fail_with(comm, ncclInvalidArgument, error);
-    }
-
+    const std::size_t count = chunk.element_count;
     const std::uint64_t seqno = comm->next_seqno;
     const ncclResult_t fault_result = maybe_inject_collective_failure(
         config,
         command,
         seqno,
-        static_cast<std::uint64_t>(staging_bytes),
+        static_cast<std::uint64_t>(chunk.staging_bytes),
         comm);
     if (fault_result != ncclSuccess) {
         return fault_result;
@@ -1821,7 +1695,7 @@ ncclResult_t submit_collective_chunk(
             seqno,
             staging_name,
             mapped_dtype,
-            staging_bytes,
+            chunk.staging_bytes,
             per_rank_shape
                 ? std::vector<std::size_t>{static_cast<std::size_t>(comm->world_size), count}
                 : std::vector<std::size_t>{count},
@@ -1834,9 +1708,9 @@ ncclResult_t submit_collective_chunk(
     if (buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload) {
         request_payload.assign(
             static_cast<const char*>(local_input),
-            static_cast<const char*>(local_input) + input_bytes);
+            static_cast<const char*>(local_input) + chunk.input_bytes);
     } else {
-        std::memcpy(handle.data(), local_input, input_bytes);
+        std::memcpy(handle.data(), local_input, chunk.input_bytes);
     }
 
     std::ostringstream request;
@@ -1846,7 +1720,7 @@ ncclResult_t submit_collective_chunk(
             << " seqno=" << seqno
             << " dtype=" << fake_gpu::distributed::collective_data_type_name(mapped_dtype)
             << " count=" << count
-            << " bytes=" << staging_bytes
+            << " bytes=" << chunk.staging_bytes
             << " root=" << root
             << " reduce_op=" << fake_gpu::distributed::collective_reduce_op_name(reduce_op)
             << " buffer_transport="
@@ -1871,12 +1745,12 @@ ncclResult_t submit_collective_chunk(
     }
 
     if (buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload) {
-        if (response.payload.size() != output_bytes) {
+        if (response.payload.size() != chunk.output_bytes) {
             return fail_with(comm, ncclInternalError, "coordinator returned an inconsistent socket payload");
         }
-        std::memcpy(recvbuff, response.payload.data(), output_bytes);
+        std::memcpy(recvbuff, response.payload.data(), chunk.output_bytes);
     } else {
-        std::memcpy(recvbuff, handle.data(), output_bytes);
+        std::memcpy(recvbuff, handle.data(), chunk.output_bytes);
     }
     comm->next_seqno++;
     clear_last_error(comm);
@@ -1970,7 +1844,7 @@ ncclResult_t submit_collective(
     }
 
     fake_gpu::distributed::StagingChunkPlan chunk_plan;
-    if (!build_transfer_chunk_plan(
+    if (!fake_gpu::distributed::build_staging_chunk_plan(
             collective_type,
             count,
             mapped_dtype,
@@ -1985,240 +1859,82 @@ ncclResult_t submit_collective(
     const char* input_bytes = static_cast<const char*>(local_input);
     char* output_bytes = static_cast<char*>(recvbuff);
 
+    // All-to-all and reduce-scatter inputs, and all-gather and all-to-all
+    // outputs, hold one slice per rank at a stride of count elements.
+    const bool strided_input =
+        collective_type == fake_gpu::distributed::CollectiveType::AllToAll ||
+        collective_type == fake_gpu::distributed::CollectiveType::ReduceScatter;
+    const bool strided_output =
+        collective_type == fake_gpu::distributed::CollectiveType::AllGather ||
+        collective_type == fake_gpu::distributed::CollectiveType::AllToAll;
+    const bool apply_premul_sum =
+        has_premul_sum &&
+        (collective_type == fake_gpu::distributed::CollectiveType::AllReduce ||
+         collective_type == fake_gpu::distributed::CollectiveType::Reduce ||
+         collective_type == fake_gpu::distributed::CollectiveType::ReduceScatter);
+
     for (const fake_gpu::distributed::StagingChunkPlanEntry& chunk : chunk_plan.chunks) {
-        const std::size_t chunk_offset_bytes =
-            byte_offset_for_elements(chunk.offset_elements, dtype_size);
+        const std::size_t chunk_offset_bytes = chunk.offset_elements * dtype_size;
+        const std::size_t slice_bytes = chunk.element_count * dtype_size;
 
-        if (collective_type == fake_gpu::distributed::CollectiveType::AllReduce ||
-            collective_type == fake_gpu::distributed::CollectiveType::Reduce) {
-            std::vector<char> chunk_input;
-            if (!fake_gpu::nccl::copy_buffer_to_host(
-                    byte_pointer(input_bytes, chunk_offset_bytes),
-                    chunk.input_bytes,
-                    chunk_input,
-                    error,
-                    stream)) {
-                return fail_with(comm, ncclSystemError, error);
-            }
-            if (has_premul_sum &&
-                !apply_premul_sum_inplace(
-                    chunk_input.data(),
-                    chunk.element_count,
-                    datatype,
-                    real_reduce_op,
-                    error)) {
-                return fail_with(comm, ncclInvalidArgument, error);
-            }
-            std::vector<char> chunk_output(chunk.output_bytes, 0);
-            ncclResult_t result = submit_collective_chunk(
-                config,
-                command,
-                collective_type,
-                chunk_input.data(),
-                chunk_output.data(),
-                chunk.element_count,
-                datatype,
-                reduce_op,
-                root,
-                comm);
-            if (result != ncclSuccess) {
-                return result;
-            }
-            if (!fake_gpu::nccl::copy_host_to_buffer(
-                    byte_pointer(output_bytes, chunk_offset_bytes),
-                    chunk_output.data(),
-                    chunk.output_bytes,
-                    error,
-                    stream)) {
-                return fail_with(comm, ncclSystemError, error);
-            }
-            continue;
-        }
-
-        if (collective_type == fake_gpu::distributed::CollectiveType::Broadcast) {
-            std::vector<char> chunk_input(chunk.input_bytes, 0);
-            if (comm->rank == root) {
-                if (!fake_gpu::nccl::copy_buffer_to_host(
-                        byte_pointer(input_bytes, chunk_offset_bytes),
-                        chunk.input_bytes,
-                        chunk_input,
-                        error,
-                        stream)) {
-                    return fail_with(comm, ncclSystemError, error);
-                }
-            }
-            std::vector<char> chunk_output(chunk.output_bytes, 0);
-            ncclResult_t result = submit_collective_chunk(
-                config,
-                command,
-                collective_type,
-                chunk_input.data(),
-                chunk_output.data(),
-                chunk.element_count,
-                datatype,
-                reduce_op,
-                root,
-                comm);
-            if (result != ncclSuccess) {
-                return result;
-            }
-            if (!fake_gpu::nccl::copy_host_to_buffer(
-                    byte_pointer(output_bytes, chunk_offset_bytes),
-                    chunk_output.data(),
-                    chunk.output_bytes,
-                    error,
-                    stream)) {
-                return fail_with(comm, ncclSystemError, error);
-            }
-            continue;
-        }
-
-        if (collective_type == fake_gpu::distributed::CollectiveType::AllGather) {
-            std::vector<char> chunk_input;
-            if (!fake_gpu::nccl::copy_buffer_to_host(
-                    byte_pointer(input_bytes, chunk_offset_bytes),
-                    chunk.input_bytes,
-                    chunk_input,
-                    error,
-                    stream)) {
-                return fail_with(comm, ncclSystemError, error);
-            }
-            std::vector<char> chunk_output(chunk.output_bytes, 0);
-            ncclResult_t result = submit_collective_chunk(
-                config,
-                command,
-                collective_type,
-                chunk_input.data(),
-                chunk_output.data(),
-                chunk.element_count,
-                datatype,
-                reduce_op,
-                root,
-                comm);
-            if (result != ncclSuccess) {
-                return result;
-            }
-
+        std::vector<char> chunk_input;
+        if (strided_input) {
+            chunk_input.assign(chunk.input_bytes, 0);
             for (int rank = 0; rank < comm->world_size; ++rank) {
                 const std::size_t src_offset =
-                    static_cast<std::size_t>(rank) * chunk.input_bytes;
-                const std::size_t dst_offset =
-                    byte_offset_for_elements(
-                        static_cast<std::size_t>(rank) * count + chunk.offset_elements,
-                        dtype_size);
-                if (!fake_gpu::nccl::copy_host_to_buffer(
-                    byte_pointer(output_bytes, dst_offset),
-                    chunk_output.data() + src_offset,
-                    chunk.input_bytes,
-                    error,
-                    stream)) {
-                    return fail_with(comm, ncclSystemError, error);
-                }
-            }
-            continue;
-        }
-
-        if (collective_type == fake_gpu::distributed::CollectiveType::AllToAll) {
-            std::vector<char> chunk_input(chunk.input_bytes, 0);
-            for (int peer = 0; peer < comm->world_size; ++peer) {
-                const std::size_t src_offset =
-                    byte_offset_for_elements(
-                        static_cast<std::size_t>(peer) * count + chunk.offset_elements,
-                        dtype_size);
-                const std::size_t dst_offset =
-                    static_cast<std::size_t>(peer) * (chunk.element_count * dtype_size);
-                std::vector<char> peer_slice;
-                if (!fake_gpu::nccl::copy_buffer_to_host(
-                        byte_pointer(input_bytes, src_offset),
-                        chunk.element_count * dtype_size,
-                        peer_slice,
-                        error,
-                        stream)) {
-                    return fail_with(comm, ncclSystemError, error);
-                }
-                std::memcpy(chunk_input.data() + dst_offset, peer_slice.data(), peer_slice.size());
-            }
-
-            std::vector<char> chunk_output(chunk.output_bytes, 0);
-            ncclResult_t result = submit_collective_chunk(
-                config,
-                command,
-                collective_type,
-                chunk_input.data(),
-                chunk_output.data(),
-                chunk.element_count,
-                datatype,
-                reduce_op,
-                root,
-                comm);
-            if (result != ncclSuccess) {
-                return result;
-            }
-
-            for (int peer = 0; peer < comm->world_size; ++peer) {
-                const std::size_t src_offset =
-                    static_cast<std::size_t>(peer) * (chunk.element_count * dtype_size);
-                const std::size_t dst_offset =
-                    byte_offset_for_elements(
-                        static_cast<std::size_t>(peer) * count + chunk.offset_elements,
-                        dtype_size);
-                if (!fake_gpu::nccl::copy_host_to_buffer(
-                        byte_pointer(output_bytes, dst_offset),
-                        chunk_output.data() + src_offset,
-                        chunk.element_count * dtype_size,
-                        error,
-                        stream)) {
-                    return fail_with(comm, ncclSystemError, error);
-                }
-            }
-            continue;
-        }
-
-        if (collective_type == fake_gpu::distributed::CollectiveType::ReduceScatter) {
-            std::vector<char> chunk_input(chunk.input_bytes, 0);
-            for (int rank = 0; rank < comm->world_size; ++rank) {
-                const std::size_t src_offset =
-                    byte_offset_for_elements(
-                        static_cast<std::size_t>(rank) * count + chunk.offset_elements,
-                        dtype_size);
-                const std::size_t dst_offset =
-                    static_cast<std::size_t>(rank) * chunk.output_bytes;
+                    (static_cast<std::size_t>(rank) * count + chunk.offset_elements) * dtype_size;
                 std::vector<char> rank_slice;
                 if (!fake_gpu::nccl::copy_buffer_to_host(
                         byte_pointer(input_bytes, src_offset),
-                        chunk.output_bytes,
+                        slice_bytes,
                         rank_slice,
                         error,
                         stream)) {
                     return fail_with(comm, ncclSystemError, error);
                 }
-                std::memcpy(chunk_input.data() + dst_offset, rank_slice.data(), chunk.output_bytes);
+                std::memcpy(
+                    chunk_input.data() + static_cast<std::size_t>(rank) * slice_bytes,
+                    rank_slice.data(),
+                    slice_bytes);
             }
-            if (has_premul_sum &&
-                !apply_premul_sum_inplace(
-                    chunk_input.data(),
-                    chunk.input_bytes / dtype_size,
-                    datatype,
-                    real_reduce_op,
-                    error)) {
-                return fail_with(comm, ncclInvalidArgument, error);
-            }
-
-            std::vector<char> chunk_output(chunk.output_bytes, 0);
-            ncclResult_t result = submit_collective_chunk(
-                config,
-                command,
-                collective_type,
+        } else if (collective_type == fake_gpu::distributed::CollectiveType::Broadcast &&
+                   comm->rank != root) {
+            chunk_input.assign(chunk.input_bytes, 0);
+        } else if (!fake_gpu::nccl::copy_buffer_to_host(
+                       byte_pointer(input_bytes, chunk_offset_bytes),
+                       chunk.input_bytes,
+                       chunk_input,
+                       error,
+                       stream)) {
+            return fail_with(comm, ncclSystemError, error);
+        }
+        if (apply_premul_sum &&
+            !apply_premul_sum_inplace(
                 chunk_input.data(),
-                chunk_output.data(),
-                chunk.element_count,
+                chunk.input_bytes / dtype_size,
                 datatype,
-                reduce_op,
-                root,
-                comm);
-            if (result != ncclSuccess) {
-                return result;
-            }
+                real_reduce_op,
+                error)) {
+            return fail_with(comm, ncclInvalidArgument, error);
+        }
+
+        std::vector<char> chunk_output(chunk.output_bytes, 0);
+        const ncclResult_t result = submit_collective_chunk(
+            config,
+            command,
+            collective_type,
+            chunk,
+            mapped_dtype,
+            chunk_input.data(),
+            chunk_output.data(),
+            reduce_op,
+            root,
+            comm);
+        if (result != ncclSuccess) {
+            return result;
+        }
+
+        if (!strided_output) {
             if (!fake_gpu::nccl::copy_host_to_buffer(
                     byte_pointer(output_bytes, chunk_offset_bytes),
                     chunk_output.data(),
@@ -2229,8 +1945,18 @@ ncclResult_t submit_collective(
             }
             continue;
         }
-
-        return fail_with(comm, ncclInvalidUsage, "unsupported chunked collective");
+        for (int rank = 0; rank < comm->world_size; ++rank) {
+            const std::size_t dst_offset =
+                (static_cast<std::size_t>(rank) * count + chunk.offset_elements) * dtype_size;
+            if (!fake_gpu::nccl::copy_host_to_buffer(
+                    byte_pointer(output_bytes, dst_offset),
+                    chunk_output.data() + static_cast<std::size_t>(rank) * slice_bytes,
+                    slice_bytes,
+                    error,
+                    stream)) {
+                return fail_with(comm, ncclSystemError, error);
+            }
+        }
     }
 
     const ncclResult_t stream_result = mark_simulated_stream_work_complete(comm, stream);
