@@ -40,7 +40,9 @@ def _write_safetensors(
 ) -> None:
     offset = 0
     normalized: dict[str, object] = {}
-    dtype_bytes = {"BF16": 2, "F16": 2, "F32": 4, "I8": 1, "U8": 1}
+    dtype_bytes = {
+        "BF16": 2, "F16": 2, "F32": 4, "I8": 1, "U8": 1, "F8_E4M3": 1,
+    }
     for name, raw in header.items():
         metadata = dict(raw)
         shape = metadata["shape"]
@@ -267,6 +269,46 @@ def test_c11_qwen2vl_last_token_logits_match_recorded_matrix_work(tmp_path: Path
     # Profiler mm/addmm + analytical dense-equivalent QK/AV. Excludes RoPE bmm.
     assert trailing["compute"]["total_flops"] == 816_235_413_504 + 15_750_389_760
     assert trailing["compute"]["decode_flops_total"] == full["compute"]["decode_flops_total"]
+
+
+@pytest.mark.parametrize(
+    ("tensors", "expected"),
+    [
+        ({"model.embed.weight": "F16", "model.proj.weight": "F16"}, "float16"),
+        # Sorted key order decides; FP8 and integer tensors are skipped.
+        (
+            {
+                "a.weight": "F8_E4M3",
+                "b.weight_scale": "I8",
+                "c.norm.weight": "F32",
+                "d.weight": "BF16",
+            },
+            "float32",
+        ),
+    ],
+)
+def test_auto_dtype_without_config_dtype_follows_checkpoint(
+    tmp_path: Path,
+    tensors: dict[str, str],
+    expected: str,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir, config_overrides={"torch_dtype": None})
+    (model_dir / "model.safetensors").unlink()
+    _write_safetensors(
+        model_dir,
+        filename="model.safetensors",
+        header={
+            name: {"dtype": dtype, "shape": [8, 8]}
+            for name, dtype in tensors.items()
+        },
+    )
+    # transformers 5 from_pretrained defaults to dtype="auto"; without a
+    # config dtype it loads in the first floating, non-FP8 tensor's dtype
+    # of the first shard (safetensors keys iterate in sorted order).
+    report = estimate_decoder_inference(model_dir, prompt_tokens=1)
+
+    assert report["inputs"]["dtype"] == expected
 
 
 def test_query_and_output_projection_flops_follow_head_dim_override(

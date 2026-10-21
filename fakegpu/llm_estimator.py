@@ -480,7 +480,17 @@ def estimate_decoder_inference(
         if any(decoder_config.get(key) is not None for key in ("dtype", "torch_dtype"))
         else config
     )
-    selected_dtype = _normalize_dtype(dtype, config=dtype_config)
+    auto_fallback = "float32"
+    if dtype == "auto" and not any(
+        dtype_config.get(key) for key in ("dtype", "torch_dtype")
+    ):
+        # transformers' dtype="auto" falls back to the checkpoint's weights.
+        auto_fallback = _first_floating_checkpoint_dtype(root) or auto_fallback
+    selected_dtype = _normalize_dtype(
+        dtype,
+        config=dtype_config,
+        auto_fallback=auto_fallback,
+    )
     element_bytes = _TORCH_DTYPE_TO_BYTES[selected_dtype]
     quantization = _quantization_summary(config, checkpoint)
     base_parameter_bytes = (
@@ -1276,9 +1286,35 @@ def _moe_layer_count(
     )
 
 
-def _normalize_dtype(dtype: str, *, config: dict[str, Any]) -> str:
+def _first_floating_checkpoint_dtype(root: Path) -> str | None:
+    """Mirror transformers' dtype="auto" fallback for configs without dtype.
+
+    transformers reads the first shard and returns the dtype of the first
+    floating, non-FP8 tensor in safetensors' sorted key order.
+    """
+    index_path = root / "model.safetensors.index.json"
+    if index_path.is_file():
+        weight_map = json.loads(index_path.read_text(encoding="utf-8"))["weight_map"]
+        first_shard = root / sorted({str(name) for name in weight_map.values()})[0]
+    else:
+        first_shard = sorted(root.glob("*.safetensors"))[0]
+    floating = {"F16": "float16", "BF16": "bfloat16", "F32": "float32", "F64": "float64"}
+    header = _read_safetensors_header(first_shard)
+    for name in sorted(header):
+        metadata = header[name]
+        if name != "__metadata__" and metadata.get("dtype") in floating:
+            return floating[metadata["dtype"]]
+    return None
+
+
+def _normalize_dtype(
+    dtype: str,
+    *,
+    config: dict[str, Any],
+    auto_fallback: str = "float32",
+) -> str:
     value = (
-        str(config.get("dtype") or config.get("torch_dtype") or "float32")
+        str(config.get("dtype") or config.get("torch_dtype") or auto_fallback)
         if dtype == "auto"
         else str(dtype)
     )
