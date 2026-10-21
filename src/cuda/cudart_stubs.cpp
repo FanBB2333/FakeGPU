@@ -469,6 +469,53 @@ static cudaError_t getDeviceProperties(Properties *prop, int device) {
     cuDeviceGetAttribute(&prop->pciDeviceID, CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID, device);
     cuDeviceGetAttribute(&prop->pciDomainID, CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID, device);
 
+    // The remaining fields mirror the cudaDevAttr values of the same name
+    // (cuda_runtime_api.h, cudaGetDeviceProperties and cudaDeviceGetAttribute).
+    auto attribute = [device](CUdevice_attribute attrib) {
+        int value = 0;
+        cuDeviceGetAttribute(&value, attrib, device);
+        return value;
+    };
+    CUuuid uuid{};
+    if (cuDeviceGetUuid(&uuid, device) == CUDA_SUCCESS) memcpy(prop->uuid, uuid.bytes, sizeof(prop->uuid));
+    prop->totalConstMem = attribute(CU_DEVICE_ATTRIBUTE_TOTAL_CONSTANT_MEMORY);
+    prop->memPitch = attribute(CU_DEVICE_ATTRIBUTE_MAX_PITCH);
+    prop->textureAlignment = attribute(CU_DEVICE_ATTRIBUTE_TEXTURE_ALIGNMENT);
+    prop->deviceOverlap = attribute(CU_DEVICE_ATTRIBUTE_GPU_OVERLAP);
+    prop->kernelExecTimeoutEnabled = attribute(CU_DEVICE_ATTRIBUTE_KERNEL_EXEC_TIMEOUT);
+    prop->integrated = attribute(CU_DEVICE_ATTRIBUTE_INTEGRATED);
+    prop->canMapHostMemory = attribute(CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY);
+    prop->computeMode = attribute(CU_DEVICE_ATTRIBUTE_COMPUTE_MODE);
+    prop->concurrentKernels = attribute(CU_DEVICE_ATTRIBUTE_CONCURRENT_KERNELS);
+    prop->ECCEnabled = attribute(CU_DEVICE_ATTRIBUTE_ECC_ENABLED);
+    prop->tccDriver = attribute(CU_DEVICE_ATTRIBUTE_TCC_DRIVER);
+    prop->asyncEngineCount = attribute(CU_DEVICE_ATTRIBUTE_ASYNC_ENGINE_COUNT);
+    prop->unifiedAddressing = attribute(CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING);
+    prop->persistingL2CacheMaxSize = attribute(CU_DEVICE_ATTRIBUTE_MAX_PERSISTING_L2_CACHE_SIZE);
+    prop->streamPrioritiesSupported = attribute(CU_DEVICE_ATTRIBUTE_STREAM_PRIORITIES_SUPPORTED);
+    prop->globalL1CacheSupported = attribute(CU_DEVICE_ATTRIBUTE_GLOBAL_L1_CACHE_SUPPORTED);
+    prop->localL1CacheSupported = attribute(CU_DEVICE_ATTRIBUTE_LOCAL_L1_CACHE_SUPPORTED);
+    prop->sharedMemPerMultiprocessor = attribute(CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR);
+    prop->regsPerMultiprocessor = attribute(CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR);
+    prop->managedMemory = attribute(CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY);
+    prop->isMultiGpuBoard = attribute(CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD);
+    prop->multiGpuBoardGroupID = attribute(CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD_GROUP_ID);
+    prop->hostNativeAtomicSupported = attribute(CU_DEVICE_ATTRIBUTE_HOST_NATIVE_ATOMIC_SUPPORTED);
+    prop->singleToDoublePrecisionPerfRatio = attribute(CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO);
+    prop->pageableMemoryAccess = attribute(CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS);
+    prop->concurrentManagedAccess = attribute(CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS);
+    prop->computePreemptionSupported = attribute(CU_DEVICE_ATTRIBUTE_COMPUTE_PREEMPTION_SUPPORTED);
+    prop->canUseHostPointerForRegisteredMem = attribute(CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM);
+    prop->cooperativeLaunch = attribute(CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH);
+    prop->cooperativeMultiDeviceLaunch = attribute(CU_DEVICE_ATTRIBUTE_COOPERATIVE_MULTI_DEVICE_LAUNCH);
+    prop->sharedMemPerBlockOptin = attribute(CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN);
+    prop->pageableMemoryAccessUsesHostPageTables =
+        attribute(CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS_USES_HOST_PAGE_TABLES);
+    prop->directManagedMemAccessFromHost = attribute(CU_DEVICE_ATTRIBUTE_DIRECT_MANAGED_MEM_ACCESS_FROM_HOST);
+    prop->maxBlocksPerMultiProcessor = attribute(CU_DEVICE_ATTRIBUTE_MAX_BLOCKS_PER_MULTIPROCESSOR);
+    prop->accessPolicyMaxWindowSize = attribute(CU_DEVICE_ATTRIBUTE_MAX_ACCESS_POLICY_WINDOW_SIZE);
+    prop->reservedSharedMemPerBlock = attribute(CU_DEVICE_ATTRIBUTE_RESERVED_SHARED_MEMORY_PER_BLOCK);
+
     last_error = cudaSuccess;
     FGPU_LOG("[FakeCUDART] cudaGetDeviceProperties(%d)\n", device);
     return last_error;
@@ -531,11 +578,24 @@ cudaError_t cudaGetDeviceProperties(cudaDeviceProp *prop, int device) {
 cudaError_t cudaGetDeviceProperties_v2(cudaDevicePropV2 *prop, int device) {
     const cudaError_t result = getDeviceProperties(prop, device);
     if (result != cudaSuccess) return result;
-    int shared_mem = 0;
-    cuDeviceGetAttribute(&shared_mem, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device);
-    prop->sharedMemPerBlockOptin = shared_mem;
-    cuDeviceGetAttribute(&prop->hostRegisterSupported, CU_DEVICE_ATTRIBUTE_HOST_REGISTER_SUPPORTED, device);
-    cuDeviceGetAttribute(&prop->memoryPoolsSupported, CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED, device);
+    auto attribute = [device](CUdevice_attribute attrib) {
+        int value = 0;
+        cuDeviceGetAttribute(&value, attrib, device);
+        return value;
+    };
+    prop->hostRegisterSupported = attribute(CU_DEVICE_ATTRIBUTE_HOST_REGISTER_SUPPORTED);
+    prop->sparseCudaArraySupported = attribute(CU_DEVICE_ATTRIBUTE_SPARSE_CUDA_ARRAY_SUPPORTED);
+    prop->hostRegisterReadOnlySupported = attribute(CU_DEVICE_ATTRIBUTE_READ_ONLY_HOST_REGISTER_SUPPORTED);
+    prop->timelineSemaphoreInteropSupported = attribute(CU_DEVICE_ATTRIBUTE_TIMELINE_SEMAPHORE_INTEROP_SUPPORTED);
+    prop->memoryPoolsSupported = attribute(CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED);
+    prop->gpuDirectRDMASupported = attribute(CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_SUPPORTED);
+    prop->gpuDirectRDMAFlushWritesOptions = attribute(CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_FLUSH_WRITES_OPTIONS);
+    prop->gpuDirectRDMAWritesOrdering = attribute(CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WRITES_ORDERING);
+    prop->memoryPoolSupportedHandleTypes = attribute(CU_DEVICE_ATTRIBUTE_MEMPOOL_SUPPORTED_HANDLE_TYPES);
+    prop->deferredMappingCudaArraySupported = attribute(CU_DEVICE_ATTRIBUTE_DEFERRED_MAPPING_CUDA_ARRAY_SUPPORTED);
+    prop->ipcEventSupported = attribute(CU_DEVICE_ATTRIBUTE_IPC_EVENT_SUPPORTED);
+    prop->clusterLaunch = attribute(CU_DEVICE_ATTRIBUTE_CLUSTER_LAUNCH);
+    prop->unifiedFunctionPointers = attribute(CU_DEVICE_ATTRIBUTE_UNIFIED_FUNCTION_POINTERS);
     return cudaSuccess;
 }
 

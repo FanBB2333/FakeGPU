@@ -49,7 +49,7 @@ typedef struct CUstream_st *cudaStream_t;
 // Event type
 typedef struct CUevent_st *cudaEvent_t;
 
-// Device properties
+// Device properties (CUDA 11.8 layout, used by the unversioned symbol)
 typedef struct cudaDeviceProp {
     char name[256];
     char uuid[16];
@@ -117,6 +117,7 @@ typedef struct cudaDeviceProp {
     int managedMemory;
     int isMultiGpuBoard;
     int multiGpuBoardGroupID;
+    int hostNativeAtomicSupported;
     int singleToDoublePrecisionPerfRatio;
     int pageableMemoryAccess;
     int concurrentManagedAccess;

@@ -269,6 +269,46 @@ def check_grid_dimension_limits(driver: ctypes.CDLL) -> None:
     _check(limits == [2147483647, 65535, 65535], f"grid dimension limits {limits}")
 
 
+def check_device_properties_match_attributes(runtime: ctypes.CDLL, driver: ctypes.CDLL) -> None:
+    # Field offsets from CUDA 12.4 (cudaGetDeviceProperties_v2, 1032 bytes) and
+    # CUDA 11.8 (unversioned cudaGetDeviceProperties, 728 bytes) driver_types.h.
+    # Each field equals the device attribute with the same meaning.
+    driver.cuDeviceGetAttribute.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_int]
+    driver.cuDeviceGetUuid.argtypes = [ctypes.c_char_p, ctypes.c_int]
+
+    def attribute(number: int) -> int:
+        value = ctypes.c_int()
+        _check(driver.cuDeviceGetAttribute(ctypes.byref(value), number, 0) == 0, f"attribute {number} failed")
+        return value.value
+
+    def read(raw: bytes, offset: int, size: int) -> int:
+        return int.from_bytes(raw[offset:offset + size], "little", signed=size == 4)
+
+    v2 = (ctypes.c_ubyte * 1032)()
+    legacy = (ctypes.c_ubyte * 728)()
+    _check(runtime.cudaGetDeviceProperties_v2(v2, 0) == 0, "cudaGetDeviceProperties_v2 failed")
+    _check(runtime.cudaGetDeviceProperties(legacy, 0) == 0, "cudaGetDeviceProperties failed")
+    uuid = ctypes.create_string_buffer(16)
+    other = (ctypes.c_ubyte * 1032)()
+    _check(driver.cuDeviceGetUuid(uuid, 1) == 0, "cuDeviceGetUuid failed")
+    _check(runtime.cudaGetDeviceProperties_v2(other, 1) == 0, "cudaGetDeviceProperties_v2(1) failed")
+    raw = bytes(v2)
+    fields = {
+        "totalConstMem": (read(raw, 352, 8), attribute(9)),
+        "sharedMemPerMultiprocessor": (read(raw, 640, 8), attribute(81)),
+        "regsPerMultiprocessor": (read(raw, 648, 4), attribute(82)),
+        "singleToDoublePrecisionPerfRatio": (read(raw, 668, 4), attribute(87)),
+        "cooperativeLaunch": (read(raw, 688, 4), attribute(95)),
+        "maxBlocksPerMultiProcessor": (read(raw, 712, 4), attribute(106)),
+        "legacy.regsPerMultiprocessor": (read(bytes(legacy), 648, 4), attribute(82)),
+        "legacy.singleToDoublePrecisionPerfRatio": (read(bytes(legacy), 668, 4), attribute(87)),
+        "legacy.cooperativeLaunch": (read(bytes(legacy), 688, 4), attribute(95)),
+        "uuid": (bytes(other)[256:272], uuid.raw),
+    }
+    wrong = {name: pair for name, pair in fields.items() if pair[0] != pair[1] or not pair[1]}
+    _check(not wrong, f"device properties differ from attributes: {wrong}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -300,6 +340,7 @@ def main(argv: list[str] | None = None) -> int:
     check_func_attributes_size(runtime)
     check_event_elapsed_time_errors(runtime)
     check_grid_dimension_limits(driver)
+    check_device_properties_match_attributes(runtime, driver)
     print("CUDA API contract validation passed")
     return 0
 
