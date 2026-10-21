@@ -134,3 +134,43 @@ else:
 print("torch.autocast passed")
 """
     )
+
+
+def test_bf16_probe_follows_torch_cuda_is_bf16_supported() -> None:
+    # torch/cuda/__init__.py (2.14): native bf16 from compute capability 8.0
+    # of the current device; otherwise True unless including_emulation=False.
+    # is_tf32_supported() is is_bf16_supported(including_emulation=False).
+    _run(
+        """
+import inspect
+
+import torch
+
+real_signature = inspect.signature(torch.cuda.is_bf16_supported)
+fakegpu.init(runtime="fakecuda", devices="a100,v100")
+assert inspect.signature(torch.cuda.is_bf16_supported).parameters.keys() == (
+    real_signature.parameters.keys()
+)
+
+expected = {0: (True, True, True), 1: (True, False, False)}
+for index, (emulated, native, tf32) in expected.items():
+    torch.cuda.set_device(index)
+    assert torch.cuda.is_bf16_supported() is emulated, index
+    assert torch.cuda.is_bf16_supported(including_emulation=False) is native, index
+    assert torch.cuda.is_tf32_supported() is tf32, index
+
+# torch.amp.autocast only rejects bfloat16 when it is enabled and
+# is_bf16_supported() is false.
+torch.cuda.set_device(1)
+for spelling in (torch.autocast, torch.amp.autocast):
+    with spelling("cuda", dtype=torch.bfloat16):
+        assert (torch.ones(2, 2, device="cuda") @ torch.ones(2, 2, device="cuda")).dtype == torch.bfloat16
+    with spelling("cuda", dtype=torch.bfloat16, enabled=False):
+        pass
+
+import accelerate.utils
+
+assert accelerate.utils.is_bf16_available(True) is True
+print("bf16 probe passed")
+"""
+    )

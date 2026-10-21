@@ -935,8 +935,23 @@ class _FakeDeviceProperties:
 # ---------------------------------------------------------------------------
 # torch.cuda module‑level stubs
 # ---------------------------------------------------------------------------
-def _stub_is_bf16_supported(device: Any = None) -> bool:
-    return _COMPUTE_MAJOR >= 8
+def _current_compute_major() -> int:
+    index = int(_upstream_mod._CURRENT_DEVICE) if _upstream_mod is not None else 0
+    if 0 <= index < len(_DEVICE_PROFILES):
+        return int(_DEVICE_PROFILES[index]["compute_major"])
+    return int(_COMPUTE_MAJOR)
+
+
+def _stub_is_bf16_supported(including_emulation: bool = True) -> bool:
+    """``torch.cuda.is_bf16_supported`` for the current fake device.
+
+    PyTorch reports native support from compute capability 8.0. Below that,
+    with emulation included (the default), it returns whether a bfloat16
+    tensor can be created on the device, which CUDA devices allow.
+    """
+    return _current_compute_major() >= 8 or bool(including_emulation)
+
+
 def _cpu_rng_state():
     import torch
 
@@ -1042,10 +1057,13 @@ def _patch_transformers_utils() -> None:
     if not getattr(_tu, "is_torch_cuda_available", lambda: False)():
         _tu.is_torch_cuda_available = lambda: True
 
-    _tu.is_torch_bf16_gpu_available = lambda: _COMPUTE_MAJOR >= 8
-    # Transformers caches this probe. Replacing it avoids retaining a false
-    # result from imports that happened before FakeGPU enabled CUDA semantics.
-    _tu.is_torch_tf32_available = lambda: _COMPUTE_MAJOR >= 8
+    # Transformers caches these probes in some releases. Replacing them avoids
+    # retaining a false result from imports that happened before FakeGPU
+    # enabled CUDA semantics. Current releases answer bf16 with
+    # torch.cuda.is_bf16_supported() and TF32 with the current device's
+    # compute capability.
+    _tu.is_torch_bf16_gpu_available = lambda: _stub_is_bf16_supported()
+    _tu.is_torch_tf32_available = lambda: _current_compute_major() >= 8
 
     # Also patch the top-level re-exports if they exist
     try:
@@ -1116,6 +1134,17 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
             # CPU autocast defaults to bfloat16; keep the CUDA default.
             if device_type == "cuda" and dtype is None:
                 dtype = torch_mod.get_autocast_dtype("cuda")
+            # The check torch.amp.autocast runs for an enabled CUDA autocast.
+            if (
+                device_type == "cuda"
+                and enabled
+                and dtype == torch_mod.bfloat16
+                and not torch_mod.cuda.is_bf16_supported()
+            ):
+                raise RuntimeError(
+                    "Current CUDA Device does not support bfloat16. "
+                    "Please switch dtype to float16."
+                )
             super().__init__(
                 actual_device,
                 dtype=dtype,
@@ -1125,13 +1154,6 @@ def _install_fakegpu_autocast(torch_mod: Any) -> None:
 
         def __enter__(self):
             if self._fakegpu_requested_device_type == "cuda":
-                if self.fast_dtype == torch_mod.bfloat16 and _COMPUTE_MAJOR < 8:
-                    raise RuntimeError(
-                        f"Current CUDA Device does not support bfloat16. "
-                        f"Please switch dtype to float16 "
-                        f"(compute capability {_COMPUTE_MAJOR}.{_COMPUTE_MINOR}, "
-                        f"need >= 8.0 for bf16)."
-                    )
                 # Track the CUDA dtype as CUDA autocast does, so a nested
                 # autocast("cuda") without a dtype inherits this one.
                 self._fakegpu_prev_cuda_dtype = torch_mod.get_autocast_dtype("cuda")
