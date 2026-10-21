@@ -1124,6 +1124,7 @@ def test_readmes_report_reproducible_research_scenario_effects() -> None:
         height=2048,
         width=2048,
         vae_tiling=True,
+        vae_tile_size=512,
     )
     pixart_eager = estimate_diffusion_generation(
         "pixart-sigma-xl-2-1024-ms",

@@ -112,7 +112,7 @@ GitHub CI 在 Python 3.10–3.12 上执行 Python 测试，并在 Linux 和 macO
 | LLM 训练 | 8B BF16 参数、AdamW、4 张 GPU、activation checkpointing，replicated → full shard | **104.31 → 26.54 GiB**/rank（减少 74.6%） | 训练计划阶段模型 |
 | Stable Diffusion v1.5 生成 | 512²、batch 1、FP16、CFG，全部权重常驻 → model offload | **2.61 → 1.72 GiB**（减少 34.3%） | 组件与阶段模型 |
 | SDXL 批量生成 | 1024²、batch 4、FP16、CFG，普通 VAE decode → VAE slicing | **26.64 → 11.64 GiB**（减少 56.3%） | 顺序 VAE batch shape 模型 |
-| SDXL 高分辨率生成 | 2048²、batch 1、FP16、CFG，整图 VAE → 512² VAE tile | **26.64 → 8.28 GiB**（减少 68.9%） | 顺序 VAE tile shape 模型 |
+| SDXL 高分辨率生成 | 2048²、batch 1、FP16、CFG，整图 VAE → 512² VAE tile | **26.64 → 7.92 GiB**（减少 70.3%） | 顺序 VAE tile shape 模型 |
 | PixArt-Sigma DiT 生成 | 1024²、batch 1、FP16、CFG、model offload，denoise 阶段 eager → SDPA | **2.32 → 1.28 GiB**（减少 44.7%） | patch token、交叉注意力与阶段模型 |
 
 - Diffusion profile 的组件参数量来自 [Stable Diffusion v1.5][diffusion-sd15]、
