@@ -49,6 +49,7 @@ _DIST_WORLD_SIZE = 1
 _DIST_RANK = 0
 _ORIG_DIST_INIT: Any = None
 _ORIG_DIST_DESTROY: Any = None
+_ORIG_DDP: Any = None
 # True while a real gloo process group joins the processes of a
 # multi-process launch; see _real_launch().
 _DIST_REAL = False
@@ -254,27 +255,50 @@ def _fake_data_parallel(
     return module(*inputs, **module_kwargs)
 
 
+def _ddp_arguments(module: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """DDP's arguments, bound the way the installed torch binds them.
+
+    A misspelled keyword then fails, and a positional argument lands in the
+    same parameter, as on real GPUs.
+    """
+
+    if _ORIG_DDP is None:
+        return {**dict(zip(("device_ids", "output_device", "dim"), args)), **kwargs}
+    return dict(inspect.signature(_ORIG_DDP.__init__).bind(None, module, *args, **kwargs).arguments)
+
+
 class _FakeDistributedDataParallel(torch.nn.Module):
-    def __init__(
-        self,
-        module: torch.nn.Module,
-        device_ids: Any = None,
-        output_device: Any = None,
-        dim: int = 0,
-        process_group: Any = None,
-        **kwargs: Any,
-    ) -> None:
+    def __init__(self, module: torch.nn.Module, *args: Any, **kwargs: Any) -> None:
         super().__init__()
+        options = _ddp_arguments(module, args, kwargs)
+        ignored = set(getattr(module, "_ddp_params_and_buffers_to_ignore", ()))
+        self._parameters_to_sync = [
+            parameter for name, parameter in module.named_parameters() if name not in ignored
+        ]
+        if not any(parameter.requires_grad for parameter in self._parameters_to_sync) and not options.get(
+            "delay_all_reduce_named_params"
+        ):
+            raise RuntimeError(
+                "DistributedDataParallel is not needed when a module "
+                "doesn't have any parameter that requires a gradient."
+            )
+        device_ids, output_device = options.get("device_ids"), options.get("output_device")
+        if device_ids is not None and len(device_ids) > 1:
+            raise ValueError("device_ids can only be None or contain a single element.")
         self.module = module
-        self.dim = dim
+        self.dim = options.get("dim", 0)
         self.device_ids = (
             None if device_ids is None else [_normalize_device_index(d) for d in device_ids]
         )
         self.output_device = (
             None if output_device is None else _normalize_device_index(output_device)
         )
-        self.process_group = process_group
-        self.broadcast_buffers = bool(kwargs.get("broadcast_buffers", True))
+        self.process_group = options.get("process_group")
+        self.find_unused_parameters = bool(options.get("find_unused_parameters", False))
+        self.static_graph = bool(options.get("static_graph", False))
+        self.gradient_as_bucket_view = bool(options.get("gradient_as_bucket_view", False))
+        broadcast_buffers = options.get("broadcast_buffers")
+        self.broadcast_buffers = True if broadcast_buffers is None else bool(broadcast_buffers)
         self.require_backward_grad_sync = True
         if _DIST_REAL:
             self._join_processes()
@@ -283,9 +307,13 @@ class _FakeDistributedDataParallel(torch.nn.Module):
         if _DIST_REAL and self.broadcast_buffers and torch.is_grad_enabled() and self.require_backward_grad_sync:
             # Like DDP, every training forward starts from rank 0's buffers.
             with torch.no_grad():
-                for buffer in self.module.buffers():
+                for buffer in self._buffers_to_sync():
                     _ORIG_DIST["broadcast"](unwrap_tensor(buffer).detach(), src=self._source, group=self.process_group)
         return self.module(*inputs, **kwargs)
+
+    def _buffers_to_sync(self) -> list[torch.Tensor]:
+        ignored = set(getattr(self.module, "_ddp_params_and_buffers_to_ignore", ()))
+        return [buffer for name, buffer in self.module.named_buffers() if name not in ignored]
 
     @contextlib.contextmanager
     def no_sync(self) -> Any:
@@ -308,10 +336,10 @@ class _FakeDistributedDataParallel(torch.nn.Module):
         group = self.process_group
         self._source = 0 if group is None else torch.distributed.distributed_c10d.get_global_rank(group, 0)
         with torch.no_grad():
-            for tensor in [*self.module.parameters(), *self.module.buffers()]:
+            for tensor in [*self._parameters_to_sync, *self._buffers_to_sync()]:
                 _ORIG_DIST["broadcast"](unwrap_tensor(tensor).detach(), src=self._source, group=group)
         world_size = _ORIG_DIST["get_world_size"](group)
-        parameters = [unwrap_tensor(parameter) for parameter in self.module.parameters() if parameter.requires_grad]
+        parameters = [unwrap_tensor(parameter) for parameter in self._parameters_to_sync if parameter.requires_grad]
         queued = False
 
         def average() -> None:
@@ -1596,9 +1624,10 @@ def enable() -> None:
 
     # Save original dist functions before patching — needed for fake backend
     # delegation so FSDP gets a real ProcessGroup.
-    global _ORIG_DIST_INIT, _ORIG_DIST_DESTROY
+    global _ORIG_DIST_INIT, _ORIG_DIST_DESTROY, _ORIG_DDP
     _ORIG_DIST_INIT = torch.distributed.init_process_group
     _ORIG_DIST_DESTROY = torch.distributed.destroy_process_group
+    _ORIG_DDP = torch.nn.parallel.distributed.DistributedDataParallel
     _ORIG_DIST.update(
         (name, getattr(torch.distributed, name))
         for name in _REAL_COLLECTIVES

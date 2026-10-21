@@ -279,6 +279,35 @@ def test_nccl_rejects_the_reductions_it_lacks(tmp_path: Path) -> None:
     assert results["gloo_group/BAND"] == ["gloo", None]
 
 
+def test_ddp_validates_its_arguments_like_torch(tmp_path: Path) -> None:
+    # Expected values: real DDP over gloo with the same arguments.
+    results = _simulate(tmp_path, """
+        from torch.nn.parallel import DistributedDataParallel as DDP
+        def build(*args, **kwargs):
+            def run():
+                model = DDP(torch.nn.Linear(2, 2).cuda(), *args, **kwargs)
+                return [model.broadcast_buffers, model.find_unused_parameters, model.static_graph,
+                        model.gradient_as_bucket_view]
+            return run
+        probe("typo", build(find_unused_parameter=True))
+        probe("positional", build([5], None, 0, False))
+        probe("keywords", build(device_ids=[5], find_unused_parameters=True, static_graph=True,
+                                gradient_as_bucket_view=True))
+        probe("two_devices", build(device_ids=[4, 5]))
+        frozen = torch.nn.Linear(2, 2).cuda().requires_grad_(False)
+        probe("frozen", lambda: DDP(frozen) and None)
+    """)
+    assert results["typo"][0] == "TypeError"
+    assert "find_unused_parameter" in results["typo"][1]
+    assert results["positional"] == [False, False, False, False]
+    assert results["keywords"] == [True, True, True, True]
+    assert results["two_devices"] == ["ValueError", "device_ids can only be None or contain a single element."]
+    assert results["frozen"] == [
+        "RuntimeError",
+        "DistributedDataParallel is not needed when a module doesn't have any parameter that requires a gradient.",
+    ]
+
+
 def test_simulated_async_work_completes_with_its_outputs(tmp_path: Path) -> None:
     results = _simulate(tmp_path, """
         x = torch.ones(2, device="cuda")
