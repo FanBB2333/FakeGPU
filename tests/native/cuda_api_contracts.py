@@ -366,6 +366,31 @@ def check_interior_pointers_resolve_to_allocation(runtime: ctypes.CDLL, driver: 
     runtime.cudaFree(device)
 
 
+def check_versioned_driver_exports(driver: ctypes.CDLL) -> None:
+    # CUDA 12.4 cuda.h defines each of these base names to the listed symbol,
+    # so programs compiled against it import that name from libcuda.
+    imported = (
+        "cuMemAllocPitch_v2",
+        "cuMemGetAddressRange_v2",
+        "cuMemAllocHost_v2",
+        "cuMemHostGetDevicePointer_v2",
+        "cuMemHostRegister_v2",
+        "cuDevicePrimaryCtxRelease_v2",
+        "cuDevicePrimaryCtxReset_v2",
+        "cuStreamWaitValue32_v2",
+        "cuStreamBatchMemOp_v2",
+        "cuGraphKernelNodeGetParams_v2",
+        "cuGraphExecKernelNodeSetParams_v2",
+    )
+    missing = [name for name in imported if not hasattr(driver, name)]
+    _check(not missing, f"libcuda lacks symbols that cuda.h callers import: {missing}")
+    driver.cuMemAllocHost_v2.argtypes = [ctypes.POINTER(c_void_p), ctypes.c_size_t]
+    driver.cuMemFreeHost.argtypes = [c_void_p]
+    host = c_void_p()
+    _check(driver.cuMemAllocHost_v2(ctypes.byref(host), 256) == 0 and host.value, "cuMemAllocHost_v2 failed")
+    driver.cuMemFreeHost(host)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -400,6 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     check_device_properties_match_attributes(runtime, driver)
     check_get_proc_address_versioned_abi(driver)
     check_interior_pointers_resolve_to_allocation(runtime, driver)
+    check_versioned_driver_exports(driver)
     print("CUDA API contract validation passed")
     return 0
 

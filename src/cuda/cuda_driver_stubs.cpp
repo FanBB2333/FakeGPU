@@ -2914,6 +2914,57 @@ CUresult cuMemsetD32_v2(CUdeviceptr dstDevice, unsigned int value, size_t count)
     return cuMemsetD32(dstDevice, value, count);
 }
 
+// cuda.h (CUDA 12) maps these names to their _v2 symbols, so compiled callers
+// import the _v2 name.
+CUresult cuMemAllocPitch_v2(CUdeviceptr *dptr, size_t *pPitch, size_t WidthInBytes, size_t Height, unsigned int ElementSizeBytes) {
+    return cuMemAllocPitch(dptr, pPitch, WidthInBytes, Height, ElementSizeBytes);
+}
+
+CUresult cuMemGetAddressRange_v2(CUdeviceptr *pbase, size_t *psize, CUdeviceptr dptr) {
+    return cuMemGetAddressRange(pbase, psize, dptr);
+}
+
+CUresult cuMemAllocHost_v2(void **pp, size_t bytesize) {
+    return cuMemAllocHost(pp, bytesize);
+}
+
+CUresult cuMemHostGetDevicePointer_v2(CUdeviceptr *pdptr, void *p, unsigned int Flags) {
+    return cuMemHostGetDevicePointer(pdptr, p, Flags);
+}
+
+CUresult cuMemHostRegister_v2(void *p, size_t bytesize, unsigned int Flags) {
+    FORWARD_TO_REAL(cuMemHostRegister_v2, p, bytesize, Flags);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuDevicePrimaryCtxRelease_v2(CUdevice dev) {
+    return cuDevicePrimaryCtxRelease(dev);
+}
+
+CUresult cuDevicePrimaryCtxReset_v2(CUdevice dev) {
+    return cuDevicePrimaryCtxReset(dev);
+}
+
+CUresult cuStreamWaitValue32_v2(CUstream stream, CUdeviceptr addr, uint32_t value, unsigned int flags) {
+    FORWARD_TO_REAL(cuStreamWaitValue32_v2, stream, addr, value, flags);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuStreamBatchMemOp_v2(CUstream stream, unsigned int count, void *params, unsigned int flags) {
+    FORWARD_TO_REAL(cuStreamBatchMemOp_v2, stream, count, params, flags);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuGraphKernelNodeGetParams_v2(void *node, void *params) {
+    FORWARD_TO_REAL(cuGraphKernelNodeGetParams_v2, node, params);
+    return CUDA_SUCCESS;
+}
+
+CUresult cuGraphExecKernelNodeSetParams_v2(void *graphExec, void *node, const void *params) {
+    FORWARD_TO_REAL(cuGraphExecKernelNodeSetParams_v2, graphExec, node, params);
+    return CUDA_SUCCESS;
+}
+
 CUresult cuMemPrefetchAsync(CUdeviceptr ptr, size_t count, CUdevice dstDevice, CUstream stream) {
     FORWARD_TO_REAL(cuMemPrefetchAsync, ptr, count, real_device(dstDevice), stream);
     return CUDA_SUCCESS;
