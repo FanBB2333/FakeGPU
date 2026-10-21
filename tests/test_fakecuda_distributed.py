@@ -216,6 +216,15 @@ def test_simulated_subgroups_report_their_own_rank_and_size(tmp_path: Path) -> N
                        "mesh_tp": [1, 4]}
 
 
+def test_simulated_subgroups_may_name_a_backend(tmp_path: Path) -> None:
+    # Megatron-style setup code names NCCL or gloo for its groups; a real 8-rank job creates them.
+    results = _simulate(tmp_path, """
+        for backend in ("nccl", "gloo", None):
+            probe(str(backend), lambda: dist.get_world_size(dist.new_group([4, 5, 6, 7], backend=backend)))
+    """)
+    assert results == {"nccl": 4, "gloo": 4, "None": 4}
+
+
 def test_simulated_uneven_exchanges_keep_their_shapes(tmp_path: Path) -> None:
     # NCCL and torch's fake backend accept splits whose totals differ, as in MoE token dispatch.
     results = _simulate(tmp_path, """

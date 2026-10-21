@@ -634,13 +634,11 @@ def _dist_get_rank(group: Any = None) -> int:
 
 
 def _dist_new_group(*args: Any, **kwargs: Any) -> Any:
-    if _DIST_REAL:
-        # Subgroups use the default group's gloo backend; NCCL is not there.
-        kwargs.pop("backend", None)
-        kwargs.pop("pg_options", None)
-        if len(args) > 2:
-            args = args[:2]
-    return _ORIG_DIST["new_group"](*args, **kwargs)
+    # Subgroups use the default group's backend, gloo across launched
+    # processes or torch's fake backend in a simulated job; NCCL is not there.
+    kwargs.pop("backend", None)
+    kwargs.pop("pg_options", None)
+    return _ORIG_DIST["new_group"](*args[:2], **kwargs)
 
 
 def _sum_op() -> Any:
