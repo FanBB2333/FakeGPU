@@ -99,6 +99,46 @@ def test_allocator_best_fit_splits_and_coalesces_blocks() -> None:
     assert snapshot[0]["blocks"][0]["size"] == 2 * MIB
 
 
+def test_allocator_keeps_small_and_large_pools_apart() -> None:
+    # CUDACachingAllocator get_pool()/get_free_block() (PyTorch v2.14.1):
+    # requests up to 1 MiB only reuse small-pool blocks and larger requests
+    # only reuse large-pool blocks, so each pool reserves its own segment.
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 5 * MIB, 0)
+    tracker.allocate(2, 4, 0)
+    assert tracker.memory_reserved(0) == 22 * MIB
+    assert sorted(
+        (segment["segment_type"], segment["total_size"])
+        for segment in tracker.allocator_snapshot()
+    ) == [("large", 20 * MIB), ("small", 2 * MIB)]
+
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 512, 0)
+    tracker.release(1)
+    tracker.allocate(2, 3 * MIB // 2, 0)
+    assert tracker.memory_reserved(0) == 22 * MIB
+
+
+def test_allocator_keeps_large_pool_remainders_up_to_1mib_in_the_block() -> None:
+    # should_split(): a large-pool block is split only when more than
+    # kSmallSize (1 MiB) would remain; otherwise the whole block is used.
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 19 * MIB + MIB // 2, 0)
+    snapshot = tracker.allocator_snapshot()
+    assert [block["size"] for block in snapshot[0]["blocks"]] == [20 * MIB]
+    assert tracker.memory_stats(0)["active_bytes.all.current"] == 20 * MIB
+    assert tracker.memory_stats(0)["inactive_split_bytes.all.current"] == 0
+
+    tracker.release(1)
+    tracker.allocate(2, 19 * MIB, 0)
+    blocks = tracker.allocator_snapshot()[0]["blocks"]
+    assert [block["size"] for block in blocks] == [20 * MIB]
+    tracker.release(2)
+    tracker.allocate(3, 18 * MIB, 0)
+    blocks = tracker.allocator_snapshot()[0]["blocks"]
+    assert [block["size"] for block in blocks] == [18 * MIB, 2 * MIB]
+
+
 def test_allocator_releases_cached_segments_before_retry() -> None:
     tracker = _DeviceMemoryTracker([20 * MIB], caching_allocator=True)
     tracker.allocate(1, 1_000, 0)

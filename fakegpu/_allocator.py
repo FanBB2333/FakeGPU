@@ -121,6 +121,12 @@ def _round_allocator_bytes(nbytes: int) -> int:
     )
 
 
+def _allocator_pool(block_size: int) -> str:
+    # CUDACachingAllocator get_pool(): requests up to kSmallSize (1 MiB)
+    # come from the small pool, everything else from the large pool.
+    return "small" if block_size <= _ALLOCATOR_SMALL_REQUEST_LIMIT else "large"
+
+
 def _allocator_segment_size(block_size: int) -> tuple[int, str]:
     if block_size <= _ALLOCATOR_SMALL_REQUEST_LIMIT:
         return _ALLOCATOR_SMALL_SEGMENT_BYTES, "small"
@@ -132,6 +138,16 @@ def _allocator_segment_size(block_size: int) -> tuple[int, str]:
         * _ALLOCATOR_LARGE_ALIGNMENT_BYTES
     )
     return size, "large"
+
+
+def _allocator_should_split(pool: str, remaining: int) -> bool:
+    # CUDACachingAllocator should_split(): a small-pool block keeps any
+    # remainder of at least kMinBlockSize as a separate free block; a
+    # large-pool block is split only when more than kSmallSize remains, so
+    # smaller remainders stay inside the allocated block.
+    if pool == "small":
+        return remaining >= _ALLOCATOR_ALIGNMENT_BYTES
+    return remaining > _ALLOCATOR_SMALL_REQUEST_LIMIT
 
 
 def _coalesce_allocator_blocks(
@@ -263,12 +279,12 @@ class _DeviceMemoryTracker:
         # reuse, splitting, coalescing, fragmentation, and empty_cache().
         self._segments: list[list[dict[str, Any]]] = [[] for _ in per_device_bytes]
         self._segments_by_id: dict[int, dict[str, Any]] = {}
-        self._free_block_sizes: list[list[int]] = [
-            [] for _ in per_device_bytes
-        ]
-        self._free_block_keys: list[
-            dict[int, list[tuple[int, int]]]
-        ] = [{} for _ in per_device_bytes]
+        # Free blocks are indexed per (device, pool): like PyTorch, a request
+        # only reuses blocks from its own small or large pool.
+        self._free_block_sizes: dict[tuple[int, str], list[int]] = {}
+        self._free_block_keys: dict[
+            tuple[int, str], dict[int, list[tuple[int, int]]]
+        ] = {}
         self._free_blocks_by_key: dict[
             tuple[int, int], dict[str, Any]
         ] = {}
@@ -334,6 +350,8 @@ class _DeviceMemoryTracker:
             )
             meta["stage"] = stage
 
+            # An unsplit large-pool block can be bigger than the rounded request.
+            block_size = int(block["size"])
             self._allocs[data_ptr] = {
                 "device": device,
                 "bytes": nbytes,
@@ -716,7 +734,8 @@ class _DeviceMemoryTracker:
         block_size: int,
         device: int,
     ) -> dict[str, Any] | None:
-        selected = self._take_free_allocator_block(device, block_size)
+        pool = _allocator_pool(block_size)
+        selected = self._take_free_allocator_block(device, pool, block_size)
         if selected is None:
             segment_size, segment_type = _allocator_segment_size(block_size)
             segment_size = max(
@@ -756,6 +775,9 @@ class _DeviceMemoryTracker:
         )
         inactive_before = _segment_inactive_split_bytes(segment)
         remainder = block["size"] - block_size
+        split = _allocator_should_split(segment["type"], remainder)
+        if not split:
+            block_size = block["size"]
         allocated = {
             "offset": block["offset"],
             "size": block_size,
@@ -763,7 +785,7 @@ class _DeviceMemoryTracker:
             "segment_id": segment["id"],
         }
         replacement = [allocated]
-        if remainder > 0:
+        if split:
             free_block = {
                 "offset": block["offset"] + block_size,
                 "size": remainder,
@@ -771,7 +793,7 @@ class _DeviceMemoryTracker:
             }
             replacement.append(free_block)
         segment["blocks"][block_index : block_index + 1] = replacement
-        if remainder > 0:
+        if split:
             self._register_free_allocator_block(segment, free_block)
         segment["active_count"] += 1
         segment["free_bytes"] = max(0, segment["free_bytes"] - block_size)
@@ -859,15 +881,15 @@ class _DeviceMemoryTracker:
         segment: dict[str, Any],
         block: dict[str, Any],
     ) -> None:
-        device = segment["device"]
+        pool_key = (segment["device"], segment["type"])
         size = block["size"]
         key = (segment["id"], block["offset"])
-        size_buckets = self._free_block_keys[device]
+        size_buckets = self._free_block_keys.setdefault(pool_key, {})
         bucket = size_buckets.get(size)
         if bucket is None:
             bucket = []
             size_buckets[size] = bucket
-            insort(self._free_block_sizes[device], size)
+            insort(self._free_block_sizes.setdefault(pool_key, []), size)
         insort(bucket, key)
         self._free_blocks_by_key[key] = block
 
@@ -876,11 +898,11 @@ class _DeviceMemoryTracker:
         segment: dict[str, Any],
         block: dict[str, Any],
     ) -> None:
-        device = segment["device"]
+        pool_key = (segment["device"], segment["type"])
         size = block["size"]
         key = (segment["id"], block["offset"])
         self._free_blocks_by_key.pop(key, None)
-        size_buckets = self._free_block_keys[device]
+        size_buckets = self._free_block_keys.get(pool_key, {})
         bucket = size_buckets.get(size)
         if not bucket:
             return
@@ -890,7 +912,7 @@ class _DeviceMemoryTracker:
         if bucket:
             return
         size_buckets.pop(size, None)
-        sizes = self._free_block_sizes[device]
+        sizes = self._free_block_sizes.get(pool_key, [])
         size_index = bisect_left(sizes, size)
         if size_index < len(sizes) and sizes[size_index] == size:
             sizes.pop(size_index)
@@ -898,17 +920,19 @@ class _DeviceMemoryTracker:
     def _take_free_allocator_block(
         self,
         device: int,
+        pool: str,
         minimum_size: int,
     ) -> tuple[dict[str, Any], dict[str, Any]] | None:
-        sizes = self._free_block_sizes[device]
+        pool_key = (device, pool)
+        sizes = self._free_block_sizes.get(pool_key, [])
         size_index = bisect_left(sizes, minimum_size)
         if size_index >= len(sizes):
             return None
         size = sizes[size_index]
-        bucket = self._free_block_keys[device][size]
+        bucket = self._free_block_keys[pool_key][size]
         key = bucket.pop(0)
         if not bucket:
-            self._free_block_keys[device].pop(size, None)
+            self._free_block_keys[pool_key].pop(size, None)
             sizes.pop(size_index)
         block = self._free_blocks_by_key.pop(key)
         segment = self._segments_by_id[key[0]]
