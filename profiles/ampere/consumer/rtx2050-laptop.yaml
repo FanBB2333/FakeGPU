@@ -1,6 +1,6 @@
 id: rtx2050-laptop
 name: Fake NVIDIA GeForce RTX 2050 Laptop GPU
-torch_name: NVIDIA GeForce RTX 2050 Laptop GPU
+torch_name: NVIDIA GeForce RTX 2050
 official_model: GeForce RTX 2050
 architecture: ampere
 compute_major: 8

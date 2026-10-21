@@ -81,13 +81,19 @@ def test_researched_variants_keep_product_specific_resources(
         ("l20-lc", 0x26BA, "NVIDIA L20"),
         ("l40s", 0x26B9, "NVIDIA L40S"),
         ("t4", 0x1EB8, "Tesla T4"),
+        ("rtx3090ti-reference", 0x2203, "NVIDIA GeForce RTX 3090 Ti"),
+        ("rtx3050-oem", 0x2508, "NVIDIA GeForce RTX 3050 OEM"),
+        # Every device ID the list gives these products carries this one name.
+        ("rtx3050-laptop-6gb", None, "NVIDIA GeForce RTX 3050 6GB Laptop GPU"),
+        ("rtx2050-laptop", None, "NVIDIA GeForce RTX 2050"),
     ],
 )
 def test_device_names_follow_the_driver_supported_chips_list(
-    profile_id: str, device_id: int, driver_name: str
+    profile_id: str, device_id: int | None, driver_name: str
 ) -> None:
     profile = get_profile(profile_id)
-    assert profile.pci_device_id >> 16 == device_id
+    if device_id is not None:
+        assert profile.pci_device_id >> 16 == device_id
     assert profile.torch_name == driver_name
 
 
