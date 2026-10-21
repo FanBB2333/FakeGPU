@@ -30,6 +30,9 @@ QLoRA 的显存与**训练循环**耗时。它不导入训练框架，也不加�
 
 - 样本数指过滤、切分及 packing 后的训练序列数。序列长度包括模板 token 与 padding。
 - `max_steps` 优先于 epochs。`--max-steps -1` 可清除配置中的步数限制。
+- 未打包的 Axolotl 配置按 Axolotl 自己的规则换算 epochs：
+  `ceil(samples * epochs / (micro_batch_size * gradient_accumulation_steps))`
+  次更新，Axolotl 会把它作为 `max_steps` 传给 Trainer。
 
 ```bash
 python -m fakegpu estimate-finetune \

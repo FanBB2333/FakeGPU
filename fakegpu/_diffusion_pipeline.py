@@ -92,6 +92,9 @@ _PIPELINE_DEFAULTS = {
         "steps": 28,
         "guidance_scale": 3.5,
         "text_tokens": 512,
+        # FluxPipeline.__init__ hard-codes default_sample_size = 128; the
+        # transformer config has no sample_size.
+        "default_sample_size": 128,
     },
 }
 
@@ -687,6 +690,11 @@ def _local_profile(
     sample_height, sample_width = _sample_dimensions(
         denoiser_config.get("sample_size")
     )
+    if "default_sample_size" in pipeline_defaults:
+        # The pipeline's own default is in latent pixels: height is
+        # default_sample_size * vae_scale_factor, without token packing.
+        sample_height = sample_width = pipeline_defaults["default_sample_size"]
+        packing_factor = 1
     default_height = (
         sample_height * latent_scale * packing_factor
         if sample_height is not None
@@ -737,6 +745,13 @@ def _local_profile(
             "checkpoint_dtype_bytes": vae_stats["dtype_bytes"],
             "block_out_channels": vae_channels,
             "layers_per_block": _layers_per_block(vae_config),
+            # AutoencoderKL.enable_tiling() tiles at config.sample_size.
+            **(
+                {"sample_size": vae_config["sample_size"]}
+                if type(vae_config.get("sample_size")) is int
+                and vae_config["sample_size"] > 0
+                else {}
+            ),
             "model_class": str(
                 vae_config.get("_class_name")
                 or vae_component["class_name"]
@@ -795,6 +810,8 @@ def _validate_profile(
     vae = _mapping(profile["vae"])
     if "force_upcast" in vae and not isinstance(vae["force_upcast"], bool):
         raise DiffusionEstimateError("vae.force_upcast must be a boolean")
+    if "sample_size" in vae:
+        _positive_integer(vae["sample_size"], "vae.sample_size")
     if "sdpa_low_precision_parameter_count" in vae:
         retained_parameters = _nonnegative_integer(
             vae["sdpa_low_precision_parameter_count"],

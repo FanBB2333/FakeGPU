@@ -118,6 +118,49 @@ def test_max_steps_overrides_epochs_and_handles_short_last_update() -> None:
     assert report["workload"]["stop_rule"] == "max_steps"
 
 
+def test_axolotl_epochs_follow_its_max_steps_conversion() -> None:
+    # Axolotl 0.18.0 passes TrainingArguments(max_steps=ceil(rows * num_epochs
+    # / batch_size)) for unpacked data, here ceil(25 * 30 / 8) = 94; Trainer
+    # then wraps epochs of 4 updates (4, 4, 4 and 1 microsteps). Hugging Face
+    # Trainer on its own would run 30 * 4 = 120 updates.
+    hf = _estimate(
+        _training(num_samples=25, micro_batch_size=2, epochs=30)
+    )["workload"]
+    assert hf["optimizer_steps"] == 120
+    work = _estimate(
+        _training(
+            num_samples=25, micro_batch_size=2, epochs=30, source_framework="axolotl"
+        )
+    )["workload"]
+    assert work["optimizer_steps"] == 94
+    assert work["stop_rule"] == "axolotl_epoch_steps"
+    assert work["microsteps"] == 23 * 13 + 8
+    assert work["processed_samples"] == 23 * 25 + 16
+    limited = _estimate(
+        _training(
+            num_samples=25,
+            micro_batch_size=2,
+            epochs=30,
+            max_steps=10,
+            source_framework="axolotl",
+        )
+    )["workload"]
+    assert limited["optimizer_steps"] == 10
+
+
+@pytest.mark.parametrize("dtype,score_bytes", [("bf16", 6), ("fp32", 4)])
+def test_eager_attention_retains_fp32_softmax_and_cast_probabilities(
+    dtype, score_bytes
+) -> None:
+    # Transformers 5.6.0 eager_attention_forward runs
+    # softmax(dtype=float32).to(query.dtype); autograd keeps the FP32 softmax
+    # output and the 16-bit copy (6 bytes per score in BF16, measured with
+    # saved_tensors_hooks on CPU), but only the FP32 tensor in FP32.
+    training = _training(dtype=dtype, attention_implementation="eager")
+    memory = _estimate(training)["memory"]
+    assert memory["attention_score_bytes"] == 2 * 4 * 32**2 * score_bytes * 4
+
+
 def test_fractional_epoch_rounds_to_complete_optimizer_update() -> None:
     report = _estimate(_training(num_samples=19, epochs=0.5))
     assert report["workload"]["optimizer_steps"] == 2

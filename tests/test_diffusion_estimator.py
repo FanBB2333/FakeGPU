@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fakegpu._diffusion_activation import _vae_decode_activation
+from fakegpu._diffusion_pipeline import _local_unet_profile
 
 
 
@@ -472,6 +473,8 @@ def test_local_patch_and_joint_transformers_use_distinct_shapes(
     )
     flux = estimate_diffusion_generation(
         model_dir=flux_dir,
+        height=128,
+        width=128,
         text_tokens=32,
         guidance_scale=7.0,
         offload="model",
@@ -650,3 +653,148 @@ def test_sdxl_pipeline_attention_slicing_preserves_vae_precision() -> None:
     assert sliced["vae_precision"] == baseline["vae_precision"]
     assert _phase(sliced, "vae_decode") == _phase(baseline, "vae_decode")
     assert _phase(sliced, "denoise") != _phase(baseline, "denoise")
+
+
+# Fields copied from the pinned upstream unet/config.json files; the reference
+# profiles must describe the same attention levels as a local inspection.
+_UPSTREAM_UNET_CONFIGS = {
+    # stable-diffusion-v1-5/stable-diffusion-v1-5@451f4fe16113bff5a5d2269ed5ad43b0592e9a14
+    SD15: {
+        "attention_head_dim": 8,
+        "block_out_channels": [320, 640, 1280, 1280],
+        "cross_attention_dim": 768,
+        "down_block_types": [
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+            "DownBlock2D",
+        ],
+        "layers_per_block": 2,
+        "up_block_types": [
+            "UpBlock2D",
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+        ],
+    },
+    # stabilityai/stable-diffusion-xl-base-1.0@462165984030d82259a11f4367a4eed129e94a7b
+    SDXL: {
+        "attention_head_dim": [5, 10, 20],
+        "block_out_channels": [320, 640, 1280],
+        "cross_attention_dim": 2048,
+        "down_block_types": [
+            "DownBlock2D",
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+        ],
+        "layers_per_block": 2,
+        "num_attention_heads": None,
+        "transformer_layers_per_block": [1, 2, 10],
+        "up_block_types": [
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+            "UpBlock2D",
+        ],
+    },
+}
+
+
+@pytest.mark.parametrize("profile_id", sorted(_UPSTREAM_UNET_CONFIGS))
+def test_reference_unet_attention_levels_match_upstream_config(profile_id: str) -> None:
+    config = _UPSTREAM_UNET_CONFIGS[profile_id]
+    local = _local_unet_profile(
+        config=config,
+        model_class="UNet2DConditionModel",
+        stats={"parameter_count": 1, "checkpoint_bytes": 2, "dtype_bytes": {}},
+        conditioning_width=config["cross_attention_dim"],
+    )
+    reference = load_diffusion_profiles()[profile_id]["denoiser"]
+    for field in ("attention_heads", "transformer_layers_per_block"):
+        assert reference[field] == local[field]
+
+
+@pytest.mark.parametrize("backend", ["eager", "sdpa"])
+def test_pipeline_attention_slicing_leaves_transformer_denoisers_unchanged(
+    backend: str,
+) -> None:
+    # Diffusers 0.35.2 DiffusionPipeline.set_attention_slice only calls
+    # components that define set_attention_slice (UNet2DConditionModel), not
+    # Transformer2DModel, SD3Transformer2DModel or FluxTransformer2DModel.
+    plain = estimate_diffusion_generation(PIXART, attention_backend=backend)
+    sliced = estimate_diffusion_generation(
+        PIXART, attention_backend=backend, attention_slicing=True
+    )
+    denoiser = sliced["activation_models"]["denoiser"]
+    assert denoiser["attention_slicing_applied"] is False
+    assert denoiser["attention_workspace_bytes"] == (
+        plain["activation_models"]["denoiser"]["attention_workspace_bytes"]
+    )
+    assert _phase(sliced, "denoise") == _phase(plain, "denoise")
+
+
+def test_vae_tiling_defaults_to_the_vae_config_sample_size() -> None:
+    # Diffusers 0.35.2 AutoencoderKL.__init__ sets tile_sample_min_size to
+    # config.sample_size (SDXL VAE: 1024) and _decode tiles only when the
+    # latent exceeds tile_latent_min_size, so enable_vae_tiling() does not tile
+    # a 1024x1024 SDXL decode.
+    assert load_diffusion_profiles()[SDXL]["vae"]["sample_size"] == 1024
+    untiled = estimate_diffusion_generation(SDXL)
+    tiled = estimate_diffusion_generation(SDXL, vae_tiling=True)
+    assert tiled["inputs"]["vae_tile_size"] == 1024
+    buffers = tiled["activation_models"]["vae_decode"]["output_buffers"]
+    assert buffers["native_tiling_active"] is False
+    assert _phase(tiled, "vae_decode")["peak_bytes"] == (
+        _phase(untiled, "vae_decode")["peak_bytes"]
+    )
+    # The SD 1.5 VAE config uses sample_size 512, so 1024x1024 decodes tile.
+    sd15 = estimate_diffusion_generation(SD15, height=1024, width=1024, vae_tiling=True)
+    assert sd15["inputs"]["vae_tile_size"] == 512
+    assert sd15["activation_models"]["vae_decode"]["output_buffers"][
+        "native_tiling_active"
+    ] is True
+
+
+def test_local_vae_sample_size_sets_the_default_tile(tmp_path: Path) -> None:
+    model_dir = tmp_path / "local-unet"
+    _write_pipeline(model_dir, transformer=False)
+    vae_config_path = model_dir / "vae" / "config.json"
+    vae_config = json.loads(vae_config_path.read_text(encoding="utf-8"))
+    vae_config["sample_size"] = 128
+    vae_config_path.write_text(json.dumps(vae_config), encoding="utf-8")
+
+    report = estimate_diffusion_generation(
+        model_dir=model_dir, height=256, width=256, text_tokens=32, vae_tiling=True
+    )
+    assert report["inputs"]["vae_tile_size"] == 128
+    assert report["activation_models"]["vae_decode"]["output_buffers"][
+        "native_tiling_active"
+    ] is True
+
+
+def test_flux_pipeline_default_resolution_ignores_the_transformer_config(
+    tmp_path: Path,
+) -> None:
+    # Diffusers 0.35.2 FluxPipeline: default_sample_size = 128 and
+    # height = height or default_sample_size * vae_scale_factor (1024 here).
+    model_dir = tmp_path / "local-flux"
+    _write_pipeline(model_dir, transformer=True, flux=True)
+    config_path = model_dir / "transformer" / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config.pop("sample_size")
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    profile = inspect_diffusion_pipeline(model_dir)["profile"]
+    assert profile["default_generation"]["height"] == 1024
+    assert profile["default_generation"]["width"] == 1024
+    report = estimate_diffusion_generation(model_dir=model_dir, text_tokens=32)
+    assert (report["inputs"]["height"], report["inputs"]["width"]) == (1024, 1024)
+
+
+def test_sdxl_first_level_has_no_transformer_blocks() -> None:
+    # SDXL's first down/up blocks are DownBlock2D/UpBlock2D: at 1024x1024 the
+    # 128x128 level has no attention or GEGLU feed-forward.
+    report = estimate_diffusion_generation(SDXL, attention_backend="eager")
+    level = report["activation_models"]["denoiser"]["levels"][0]
+    assert (level["attention_heads"], level["transformer_layers"]) == (0, 0)
+    assert level["attention_workspace_bytes"] == 0
+    assert level["feed_forward_working_bytes"] == 0

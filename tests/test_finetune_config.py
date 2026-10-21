@@ -102,6 +102,18 @@ def test_llamafactory_pretraining_and_default_all_targets() -> None:
     assert result["lora_target_modules"] == ["all-linear"]
 
 
+@pytest.mark.parametrize("packing", [None, False])
+def test_llamafactory_neat_packing_enables_packing(packing) -> None:
+    # LLaMA-Factory 0.9.5 DataArguments.__post_init__: neat_packing sets
+    # packing = True, even over an explicit packing: false.
+    options = {"finetuning_type": "lora", "neat_packing": True}
+    if packing is not None:
+        options["packing"] = packing
+    result = normalize_finetune_config(hf_config(**options))
+    assert result["packing"] is True
+    assert any("packed training sequences" in item for item in result["assumptions"])
+
+
 def test_llamafactory_checkpoint_flag_matches_framework_behavior() -> None:
     config = hf_config(finetuning_type="full", gradient_checkpointing=False)
     with pytest.raises(

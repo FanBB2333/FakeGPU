@@ -116,6 +116,11 @@ How the diffusion estimator works:
   `--vae-tiling` model common Diffusers trade-offs. Without a matching
   real-GPU comparison, reports stay `Modeled` and `uncalibrated`, with no error
   percentage or prediction interval.
+- As in Diffusers, `--attention-slicing` changes only UNet denoisers.
+  Transformer denoisers (PixArt, SD3, Flux) ignore pipeline attention slicing.
+- `--vae-tile-size` defaults to the VAE config's `sample_size`, the tile that
+  `enable_vae_tiling()` uses (1024 for SDXL, so a 1024x1024 decode is not
+  tiled). It falls back to 512 when the config has none.
 
 To train diffusion models, see [Diffusion training](diffusion-training.md).
 

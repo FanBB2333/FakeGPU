@@ -113,7 +113,7 @@ def estimate_diffusion_generation(
     attention_slicing: bool = False,
     vae_slicing: bool = False,
     vae_tiling: bool = False,
-    vae_tile_size: int = 512,
+    vae_tile_size: int | None = None,
     offload: str = "none",
     runtime_overhead_bytes: int = 0,
     target_profile: str | None = None,
@@ -187,6 +187,10 @@ def estimate_diffusion_generation(
         raise DiffusionEstimateError("vae_slicing must be a boolean")
     if not isinstance(vae_tiling, bool):
         raise DiffusionEstimateError("vae_tiling must be a boolean")
+    if vae_tile_size is None:
+        # AutoencoderKL.enable_tiling() keeps tile_sample_min_size at the VAE
+        # config's sample_size; profiles without one keep the former 512.
+        vae_tile_size = profile["vae"].get("sample_size", 512)
     tile_size = _positive_integer(vae_tile_size, "vae_tile_size")
     overhead_bytes = _nonnegative_integer(
         runtime_overhead_bytes,
@@ -637,7 +641,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--vae-tile-size",
         type=_positive_argument,
-        default=512,
+        help=(
+            "Tile edge in pixels. Defaults to the VAE config sample_size, as "
+            "Diffusers enable_vae_tiling() uses (512 when unknown)."
+        ),
     )
     parser.add_argument(
         "--offload",

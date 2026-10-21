@@ -404,6 +404,13 @@ def _workload(config: Mapping[str, Any]) -> dict[str, Any]:
     if max_steps is not None:
         optimizer_steps = _positive_int(max_steps, "max_steps")
         stop_rule = "max_steps"
+    elif config.get("source_framework") == "axolotl" and not config.get("packing"):
+        # Axolotl 0.18.0 always hands Trainer max_steps. Without packing it is
+        # ceil(rows * num_epochs / batch_size), which ignores each epoch's
+        # shorter final accumulation window (utils/trainer.py,
+        # calculate_total_num_steps; core/builders/base.py).
+        optimizer_steps = math.ceil(samples * float(epochs) / (batch * accumulation))
+        stop_rule = "axolotl_epoch_steps"
     else:
         # Finish optimizer updates rather than stopping halfway through an
         # accumulation window; the last update of each epoch can be shorter.
@@ -898,11 +905,14 @@ def _memory(
         )
     attention_scores = 0
     if attention == "eager":
+        # Transformers eager_attention_forward saves the FP32 softmax output
+        # and, for 16-bit compute, its .to(query.dtype) copy for the value matmul.
+        score_element = 4 + (element if element < 4 else 0)
         attention_scores = (
             workload["micro_batch_size"]
             * dimensions["num_attention_heads"]
             * sequence**2
-            * 4
+            * score_element
             * model["full_attention_layers"]
         )
     recurrent_bytes = 0

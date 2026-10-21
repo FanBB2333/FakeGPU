@@ -218,6 +218,13 @@ def normalize_finetune_config(
         ),
         "packing",
     )
+    # LLaMA-Factory DataArguments.__post_init__ turns packing on for neat_packing.
+    if (
+        source == "llamafactory"
+        and values.get("neat_packing") is not None
+        and _boolean(values["neat_packing"], "neat_packing")
+    ):
+        packing = True
     if packing:
         assumptions.append(
             "With packing, sample count must describe packed training sequences."
