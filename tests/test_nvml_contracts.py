@@ -170,6 +170,25 @@ def test_clock_queries_answer_the_requested_clock_domain(tmp_path: Path) -> None
     assert result[2:] == [memory, memory, memory, memory, graphics, [memory], [graphics], 6]
 
 
+def test_driver_model_is_not_supported_off_windows(tmp_path: Path) -> None:
+    # nvml.h nvmlDeviceGetDriverModel_v2: NVML_ERROR_NOT_SUPPORTED if the platform
+    # is not windows. Reporting 0 would read as NVML_DRIVER_WDDM.
+    result = _nvml(
+        tmp_path,
+        """
+        h = N.nvmlDeviceGetHandleByIndex(0)
+        result = []
+        for fn in (N.nvmlDeviceGetDriverModel, N.nvmlDeviceGetDriverModel_v1):
+            try:
+                result.append(fn(h))
+            except N.NVMLError as exc:
+                result.append(exc.value)
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    assert result == [3, 3]
+
+
 def test_bridge_power_fields_follow_power_queries(tmp_path: Path) -> None:
     # docs/en/fakegpu-smi.md: without reference telemetry the bridge reports
     # power draw as unavailable; the field-value path must agree.

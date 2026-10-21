@@ -725,11 +725,10 @@ nvmlReturn_t nvmlDeviceGetMigMode(nvmlDevice_t device, unsigned int *currentMode
 }
 
 nvmlReturn_t nvmlDeviceGetDriverModel(nvmlDevice_t device, unsigned int *current, unsigned int *pending) {
-    if (!device) return NVML_ERROR_INVALID_ARGUMENT;
-    // WDDM (Windows) = 0, TCC = 1, Linux doesn't use this
-    if (current) *current = 0;
-    if (pending) *pending = 0;
-    return NVML_SUCCESS;
+    if (!device || (!current && !pending)) return NVML_ERROR_INVALID_ARGUMENT;
+    // Windows only (WDDM = 0, WDM/TCC = 1); nvml.h returns NOT_SUPPORTED on
+    // other platforms, and this library is built for Linux and macOS.
+    return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceGetDriverModel_v2(nvmlDevice_t device, unsigned int *current, unsigned int *pending) {
