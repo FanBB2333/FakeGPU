@@ -1744,10 +1744,15 @@ ncclResult_t submit_collective_chunk(
     }
 
     if (buffer_transport == fake_gpu::distributed::BufferTransport::SocketPayload) {
-        if (response.payload.size() != chunk.output_bytes) {
+        // Only the reduce root receives an output payload.
+        const bool receives_output =
+            collective_type != fake_gpu::distributed::CollectiveType::Reduce || comm->rank == root;
+        if (response.payload.size() != (receives_output ? chunk.output_bytes : 0)) {
             return fail_with(comm, ncclInternalError, "coordinator returned an inconsistent socket payload");
         }
-        std::memcpy(recvbuff, response.payload.data(), chunk.output_bytes);
+        if (receives_output) {
+            std::memcpy(recvbuff, response.payload.data(), chunk.output_bytes);
+        }
     } else {
         std::memcpy(recvbuff, handle.data(), chunk.output_bytes);
     }

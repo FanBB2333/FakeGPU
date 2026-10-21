@@ -18,7 +18,10 @@ BUILD_DIR = Path(os.environ.get("FAKEGPU_BUILD_DIR", REPO_ROOT / "build"))
 COORDINATOR_BIN = BUILD_DIR / "fakegpu-coordinator"
 LIBNCCL = BUILD_DIR / ("libnccl.dylib" if sys.platform == "darwin" else "libnccl.so")
 NCCL_SYSTEM_ERROR = 2
+NCCL_FLOAT32 = 7
+NCCL_SUM = 0
 SPLIT_WORLD = 3
+REDUCE_WORLD = 2
 
 
 class UniqueId(ctypes.Structure):
@@ -81,7 +84,33 @@ def child_split_rank(rank: int) -> int:
     return 0
 
 
-def check_split_timeout() -> None:
+def child_reduce_rank(rank: int) -> int:
+    lib = load_nccl()
+    lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, UniqueId, ctypes.c_int]
+    comm = ctypes.c_void_p()
+    unique_id = UniqueId(internal=os.environ["NCCL_SMOKE_UNIQUE_ID"].encode())
+    rc = lib.ncclCommInitRank(ctypes.byref(comm), REDUCE_WORLD, unique_id, rank)
+    if rc != 0:
+        print(f"rank {rank}: ncclCommInitRank returned {rc}", file=sys.stderr)
+        return 1
+    send = (ctypes.c_float * 3)(rank + 1.0, rank + 2.0, rank + 3.0)
+    recv = (ctypes.c_float * 3)()
+    # The second reduce checks that the communicator is still in step.
+    for _ in range(2):
+        rc = lib.ncclReduce(send, recv, ctypes.c_size_t(3), NCCL_FLOAT32, NCCL_SUM, 0, comm, None)
+        if rc != 0:
+            message = lib.ncclGetLastError(comm).decode()
+            print(f"rank {rank}: ncclReduce returned {rc} ({message})", file=sys.stderr)
+            return 1
+    if rank == 0 and list(recv) != [3.0, 5.0, 7.0]:
+        print(f"rank 0: ncclReduce produced {list(recv)}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def run_ranks(child: str, world: int, timeout_ms: int, extra_env: dict[str, str] | None = None) -> bool:
+    """Run ``world`` rank processes against a fresh coordinator; True if all succeed."""
+
     with tempfile.TemporaryDirectory(prefix="fgpu-nccl-", dir="/tmp") as tmpdir:
         socket_path = os.path.join(tmpdir, "coordinator.sock")
         env = dict(os.environ, FAKEGPU_CLUSTER_REPORT_PATH=os.path.join(tmpdir, "cluster-report.json"))
@@ -101,18 +130,28 @@ def check_split_timeout() -> None:
                 FAKEGPU_DIST_MODE="simulate",
                 FAKEGPU_COORDINATOR_TRANSPORT="unix",
                 FAKEGPU_COORDINATOR_ADDR=socket_path,
-                FAKEGPU_COORDINATOR_TIMEOUT_MS="300",
-                NCCL_SMOKE_UNIQUE_ID=f"nccl-smoke-split-{os.getpid()}",
+                FAKEGPU_COORDINATOR_TIMEOUT_MS=str(timeout_ms),
+                NCCL_SMOKE_UNIQUE_ID=f"nccl-smoke{child}-{os.getpid()}",
+                **(extra_env or {}),
             )
             ranks = [
-                subprocess.Popen([sys.executable, __file__, "--split-rank", str(rank)], env=env)
-                for rank in range(SPLIT_WORLD)
+                subprocess.Popen([sys.executable, __file__, child, str(rank)], env=env)
+                for rank in range(world)
             ]
-            if any([rank.wait(timeout=30) != 0 for rank in ranks]):
-                raise AssertionError("ncclCommSplit timeout was not reported as ncclSystemError")
+            return all([rank.wait(timeout=30) == 0 for rank in ranks])
         finally:
             coordinator.kill()
             coordinator.wait()
+
+
+def check_split_timeout() -> None:
+    if not run_ranks("--split-rank", SPLIT_WORLD, 300):
+        raise AssertionError("ncclCommSplit timeout was not reported as ncclSystemError")
+
+
+def check_reduce_over_socket_payloads() -> None:
+    if not run_ranks("--reduce-rank", REDUCE_WORLD, 3000, {"FAKEGPU_STAGING_FORCE_SOCKET": "1"}):
+        raise AssertionError("ncclReduce failed with socket payloads")
 
 
 def main() -> int:
@@ -120,11 +159,14 @@ def main() -> int:
         return child_partial_loader()
     if sys.argv[1:2] == ["--split-rank"]:
         return child_split_rank(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--reduce-rank"]:
+        return child_reduce_rank(int(sys.argv[2]))
     if not LIBNCCL.exists():
         print(f"missing NCCL library: {LIBNCCL}", file=sys.stderr)
         return 2
     check_partial_real_nccl()
     check_split_timeout()
+    check_reduce_over_socket_payloads()
     print("nccl stubs smoke test passed")
     return 0
 

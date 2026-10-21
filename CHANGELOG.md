@@ -140,6 +140,10 @@
 - Complete `ncclSend`/`ncclRecv` pairs over the TCP coordinator. The receiver
   no longer declares a socket payload it never sends, so the coordinator stops
   waiting for it and the sender no longer times out.
+- `ncclReduce` over the TCP coordinator, or when shared-memory staging is
+  unavailable, no longer fails on non-root ranks with `ncclInternalError`
+  (`coordinator returned an inconsistent socket payload`), which also left
+  their communicator unusable for later operations.
 - Release each finished coordinator connection thread instead of keeping
   every handler until shutdown, so coordinator memory no longer grows with
   the number of requests.
