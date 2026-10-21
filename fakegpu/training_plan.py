@@ -590,9 +590,22 @@ def _normalize_accelerate(config: Mapping[str, Any]) -> dict[str, Any]:
             if key in config:
                 merged.setdefault(key, config[key])
         merged.setdefault("world_size", world_size)
+        # Accelerate keeps distributed_type FSDP for both versions and records
+        # the version in fsdp_config.fsdp_version.
+        version = str(merged.get("fsdp_version", 1)).strip()
+        # num_processes counts every machine; accelerate launches
+        # num_processes // num_machines per node, the HYBRID_SHARD group.
+        machines = _positive_int(config.get("num_machines", 1), "num_machines")
         normalized = _normalize_fsdp(
             merged,
-            framework="fsdp2" if "2" in distributed_type else "fsdp",
+            framework=(
+                "fsdp2"
+                if "2" in distributed_type or version == "2"
+                else "fsdp"
+            ),
+            hybrid_shard_group_size=(
+                world_size // machines if world_size % machines == 0 else 1
+            ),
         )
     else:
         normalized = {
@@ -619,12 +632,29 @@ def _normalize_fsdp(
     config: Mapping[str, Any],
     *,
     framework: str,
+    hybrid_shard_group_size: int = 1,
 ) -> dict[str, Any]:
-    raw_strategy = str(
-        config.get("sharding_strategy")
-        or config.get("fsdp_sharding_strategy")
-        or "FULL_SHARD"
-    ).upper()
+    raw_strategy = config.get("sharding_strategy") or config.get(
+        "fsdp_sharding_strategy"
+    )
+    if raw_strategy is None:
+        # Accelerate writes fsdp_reshard_after_forward instead: a strategy
+        # name for FSDP1 and a bool for FSDP2, where False keeps unsharded
+        # parameters from forward to backward like SHARD_GRAD_OP.
+        reshard = config.get(
+            "reshard_after_forward",
+            config.get("fsdp_reshard_after_forward"),
+        )
+        if reshard is None:
+            raw_strategy = "FULL_SHARD"
+        elif framework == "fsdp2" or isinstance(reshard, bool):
+            raw_strategy = (
+                "FULL_SHARD" if _bool_value(reshard) else "SHARD_GRAD_OP"
+            )
+        else:
+            raw_strategy = reshard
+    raw_strategy = str(raw_strategy).upper()
+    # Digits are torch.distributed.fsdp.ShardingStrategy values.
     strategy = {
         "1": "full_shard",
         "FULL_SHARD": "full_shard",
@@ -634,8 +664,9 @@ def _normalize_fsdp(
         "NO_SHARD": "no_shard",
         "4": "hybrid_shard",
         "HYBRID_SHARD": "hybrid_shard",
-        "5": "hybrid_shard",
+        "5": "shard_grad_op",
         "_HYBRID_SHARD_ZERO2": "shard_grad_op",
+        "HYBRID_SHARD_ZERO2": "shard_grad_op",
     }.get(raw_strategy)
     if strategy is None:
         raise TrainingPlanError(
@@ -658,7 +689,11 @@ def _normalize_fsdp(
         config.get("world_size", config.get("num_processes", 1)),
         "world_size",
     )
-    default_shard_group_size = 1 if strategy == "hybrid_shard" else world_size
+    default_shard_group_size = (
+        min(hybrid_shard_group_size, world_size)
+        if strategy == "hybrid_shard"
+        else world_size
+    )
     shard_group_size = _positive_int(
         config.get(
             "shard_group_size",

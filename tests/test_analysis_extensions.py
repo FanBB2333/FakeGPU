@@ -1224,6 +1224,55 @@ def test_training_plan_maps_hybrid_shard_zero2_to_shard_grad_op() -> None:
     assert report["rank_local_storage"]["gradient_bytes"] == 1_000
 
 
+@pytest.mark.parametrize(
+    ("fsdp_config", "framework", "strategy"),
+    [
+        # `accelerate config` (FSDP1) stores the strategy name in
+        # fsdp_reshard_after_forward, using accelerate's FSDP_SHARDING_STRATEGY.
+        ({"fsdp_version": 1, "fsdp_reshard_after_forward": "NO_SHARD"}, "fsdp", "no_shard"),
+        ({"fsdp_version": 1, "fsdp_reshard_after_forward": "SHARD_GRAD_OP"}, "fsdp", "shard_grad_op"),
+        ({"fsdp_sharding_strategy": "HYBRID_SHARD_ZERO2"}, "fsdp", "shard_grad_op"),
+        # torch ShardingStrategy enum values: 2 SHARD_GRAD_OP, 5 _HYBRID_SHARD_ZERO2.
+        ({"fsdp_sharding_strategy": 2}, "fsdp", "shard_grad_op"),
+        ({"fsdp_sharding_strategy": 5}, "fsdp", "shard_grad_op"),
+        # FSDP2 takes a bool; False keeps unsharded parameters after forward.
+        ({"fsdp_version": 2, "fsdp_reshard_after_forward": False}, "fsdp2", "shard_grad_op"),
+        ({"fsdp_version": 2, "fsdp_reshard_after_forward": True}, "fsdp2", "full_shard"),
+        ({"fsdp_version": 2}, "fsdp2", "full_shard"),
+    ],
+)
+def test_training_plan_reads_accelerate_fsdp_version_and_reshard_settings(
+    fsdp_config: dict[str, object],
+    framework: str,
+    strategy: str,
+) -> None:
+    normalized = normalize_training_config(
+        {"distributed_type": "FSDP", "num_processes": 8, "fsdp_config": fsdp_config}
+    )
+
+    assert normalized["framework"] == framework
+    assert normalized["sharding_strategy"] == strategy
+
+
+def test_training_plan_hybrid_shard_defaults_to_accelerate_processes_per_machine() -> None:
+    # accelerate launches num_processes // num_machines per node, and FSDP
+    # HYBRID_SHARD without a process group shards over the intra-node group.
+    normalized = normalize_training_config(
+        {
+            "distributed_type": "FSDP",
+            "num_machines": 2,
+            "num_processes": 16,
+            "fsdp_config": {"fsdp_sharding_strategy": "HYBRID_SHARD"},
+        }
+    )
+    report = estimate_training_plan(
+        normalized, parameter_bytes=16_000, activation_bytes=0
+    )
+
+    assert normalized["shard_group_size"] == 8
+    assert report["rank_local_storage"]["parameter_bytes"] == 2_000
+
+
 def test_hierarchical_topology_routes_across_racks_and_reports_links() -> None:
     topology = Topology.from_mapping(_topology_config())
     report = simulate_collective(
