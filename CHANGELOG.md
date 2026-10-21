@@ -237,6 +237,9 @@
   that is unknown, including `a100`. `power.min_limit` reports the catalog's
   minimum, and specifications the catalog marks unknown (0), such as clocks
   or SM count, print `[N/A]` instead of 0.
+- `fakegpu nvidia-smi -i` matches a PCI bus ID in every form NVML accepts,
+  such as `0000:02:00.0` from CUDA or `02:00.0`, not only the exact
+  `00000000:02:00.0` spelling.
 
 ## v1.6.0 - 2026-10-17
 

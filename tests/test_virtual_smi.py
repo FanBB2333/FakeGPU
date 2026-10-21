@@ -1581,3 +1581,38 @@ def test_virtual_smi_reports_the_reference_power_ceiling_and_unknown_specs(
         ["0", "400.0", "400.0", "1410", "108"],
         ["1", "[N/A]", "[N/A]", "[N/A]", "[N/A]"],
     ]
+
+
+def test_virtual_smi_selects_pci_bus_ids_in_every_nvml_form(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {
+                    "index": index,
+                    "name": "Fake NVIDIA Test GPU",
+                    "profile_id": "test",
+                    "total_memory": 8 * 2**30,
+                }
+                for index in range(3)
+            ]
+        },
+    ).publish_once(running=True)
+
+    # nvidia-smi -i takes a PCI bus ID as domain:bus:device.function in hex;
+    # nvmlDeviceGetHandleByPciBusId also accepts domain:bus:device and
+    # bus:device.function (nvml.h).
+    for selector in (
+        "00000000:02:00.0", "0000:02:00.0", "02:00.0", "0:2:0", "0:2:0.0",
+    ):
+        assert main([
+            "--state", str(path), "-i", selector,
+            "--query-gpu=index,pci.bus_id", "--format=csv,noheader",
+        ]) == 0
+        assert _csv_cells(capsys.readouterr().out.strip()) == [
+            "1", "00000000:02:00.0",
+        ], selector
