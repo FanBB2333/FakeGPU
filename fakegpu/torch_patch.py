@@ -1368,6 +1368,75 @@ def _install_to_overloads(upstream: Any, torch_mod: Any) -> None:
     upstream._module_to = _module_to_any_overload
 
 
+def _install_module_moves_in_place(upstream: Any, torch_mod: Any) -> None:
+    """Keep each ``Parameter`` object when a module moves to a fake device.
+
+    ``nn.Module._apply`` moves a parameter by assigning ``param.data``, so an
+    optimizer built before ``model.cuda()`` (as Accelerate's ``prepare``
+    expects) keeps updating the model, and a module already on the target
+    device is left as is. The upstream conversion created new parameters.
+    """
+    from torch.utils import swap_tensors
+
+    fake_cls = upstream.FakeCudaTensor
+
+    def _module_cuda_impl(module: Any, device: Any = None, _memo: Any = None) -> Any:
+        target = upstream._normalize_module_device(device)
+        index = target.index or 0
+        if _memo is None:
+            _memo = {"parameters": {}, "buffers": {}}
+
+        for child in module.children():
+            _module_cuda_impl(child, target, _memo)
+
+        for name, param in list(module._parameters.items()):
+            if param is None:
+                continue
+            moved = _memo["parameters"].get(id(param))
+            if moved is None:
+                if isinstance(param, fake_cls) and param.device_index == index:
+                    moved = param
+                else:
+                    converted = param.detach().clone().requires_grad_(param.requires_grad)
+                    moved = torch_mod.nn.Parameter(
+                        upstream.wrap_tensor(converted, device_index=index),
+                        requires_grad=param.requires_grad,
+                    )
+                    moved.raw_data = converted
+                    moved.device_index = index
+                    if param.grad is not None:
+                        moved.grad = upstream.wrap_tensor(
+                            param.grad.detach(), device_index=index
+                        )
+                    try:
+                        # ``param`` becomes the moved parameter in place.
+                        swap_tensors(param, moved)
+                        moved = param
+                    except RuntimeError:
+                        pass  # e.g. weak references: fall back to a new object
+                    upstream.register_parameter(moved)
+                _memo["parameters"][id(param)] = moved
+            module._parameters[name] = moved
+
+        for name, buf in list(module._buffers.items()):
+            if buf is None:
+                continue
+            converted = _memo["buffers"].get(id(buf))
+            if converted is None:
+                if isinstance(buf, fake_cls) and buf.device_index == index:
+                    converted = buf
+                else:
+                    converted = upstream.wrap_tensor(buf.detach().clone(), device_index=index)
+                    converted.raw_data = buf.detach().clone()
+                    converted.device_index = index
+                _memo["buffers"][id(buf)] = converted
+            module._buffers[name] = converted
+
+        return module
+
+    upstream._module_cuda_impl = _module_cuda_impl
+
+
 def _install_stream_event_semantics(upstream: Any, torch_mod: Any) -> None:
     """Give fake streams and events the attributes and checks torch has.
 
@@ -1487,16 +1556,27 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
             return None
         return False
 
-    def record(source: Any, target: Any, tensor: Any) -> None:
-        traffic = _link_traffic
-        if traffic is None or source is False or target is False or source == target:
-            return
+    def tensor_bytes(tensor: Any) -> int | None:
         raw = upstream.unwrap_tensor(tensor)
         try:
-            nbytes = int(raw.numel()) * int(raw.element_size())
+            return int(raw.numel()) * int(raw.element_size())
         except Exception:
+            return None
+
+    def record_bytes(source: Any, target: Any, nbytes: int | None) -> None:
+        traffic = _link_traffic
+        if (
+            traffic is None
+            or nbytes is None
+            or source is False
+            or target is False
+            or source == target
+        ):
             return
         traffic.record(source, target, nbytes)
+
+    def record(source: Any, target: Any, tensor: Any) -> None:
+        record_bytes(source, target, tensor_bytes(tensor))
 
     def module_tensors(module: Any) -> list[Any]:
         seen: set[int] = set()
@@ -1508,10 +1588,11 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
         return found
 
     def record_module(module: Any, convert: Any) -> Any:
-        before = module_tensors(module)
+        # Moves keep the Parameter objects, so read the sources first.
+        before = [(endpoint(t), tensor_bytes(t)) for t in module_tensors(module)]
         result = convert()
-        for old, new in zip(before, module_tensors(module)):
-            record(endpoint(old), endpoint(new), old)
+        for (source, nbytes), new in zip(before, module_tensors(module)):
+            record_bytes(source, endpoint(new), nbytes)
         return result
 
     tensor_to = upstream._tensor_to
@@ -1887,6 +1968,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     _install_device_index_validation(upstream, torch_mod)
     _install_stream_event_semantics(upstream, torch_mod)
+    _install_module_moves_in_place(upstream, torch_mod)
 
     if _MEMORY_TRACKING:
         per_device_bytes = [p["total_memory"] for p in _DEVICE_PROFILES]

@@ -325,3 +325,43 @@ assert torch.cuda.current_device() == 1
 print("streams and events passed")
 """
     )
+
+
+def test_module_moves_keep_parameter_objects() -> None:
+    # nn.Module._apply assigns param.data when the new tensor has a
+    # compatible shallow-copy type (CPU and CUDA dense tensors do), so a
+    # parameter keeps its identity across .cuda()/.to("cuda") and an
+    # optimizer built first, as Accelerate's prepare() expects, keeps working.
+    # Moving to the device a tensor is already on leaves it unchanged.
+    _run(
+        """
+fakegpu.init(runtime="fakecuda", devices="a100:2")
+import torch
+
+model = torch.nn.Linear(256, 256, bias=False)
+weight = model.weight
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2)
+before = torch.cuda.memory_allocated(0)
+model.cuda()
+assert model.weight is weight and weight.is_cuda
+assert torch.cuda.memory_allocated(0) - before == 256 * 256 * 4
+
+model.to("cuda:0")
+assert model.weight is weight
+assert torch.cuda.memory_allocated(0) - before == 256 * 256 * 4
+
+start = weight.detach().cpu().clone()
+model(torch.ones(4, 256, device="cuda")).sum().backward()
+optimizer.step()
+assert not torch.equal(start, weight.detach().cpu())
+# Weight, gradient and AdamW's two moment buffers, all FP32 on the device.
+assert len(optimizer.state[weight]) == 3
+assert torch.cuda.memory_allocated(0) - before == 4 * 256 * 256 * 4
+
+tied = torch.nn.Sequential(torch.nn.Embedding(8, 4), torch.nn.Linear(4, 8, bias=False))
+tied[1].weight = tied[0].weight
+tied.to("cuda:1")
+assert tied[1].weight is tied[0].weight and tied[0].weight.device == torch.device("cuda", 1)
+print("in-place module moves passed")
+"""
+    )
