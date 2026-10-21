@@ -30,6 +30,7 @@ class QueryField:
 GPU_QUERY_FIELDS: dict[str, QueryField] = {
     "timestamp": QueryField("timestamp"),
     "host": QueryField("host"),
+    "count": QueryField("count"),
     "index": QueryField("index"),
     "name": QueryField("name"),
     "uuid": QueryField("uuid"),

@@ -7,11 +7,9 @@ NVLink and MIG views, health events, the per-device detail page, and the
 
 from __future__ import annotations
 
-import csv
-import io
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from ._smi_environment import (
@@ -1032,27 +1030,42 @@ def render_query(
             sort_keys=True,
         )
 
-    buffer = io.StringIO()
-    writer = csv.writer(buffer, lineterminator="\n")
+    rows = []
     if not output_format["noheader"]:
-        writer.writerow(
-            [
+        rows.append(
+            _csv_row(
                 _query_csv_header(field, available[field])
                 for field in fields
-            ]
+            )
         )
     for record in values:
-        writer.writerow(
-            [
+        rows.append(
+            _csv_row(
                 _query_csv_value(
                     record[field],
                     unit=available[field].unit,
                     nounits=bool(output_format["nounits"]),
                 )
                 for field in fields
-            ]
+            )
         )
-    return buffer.getvalue().rstrip("\n")
+    return "\n".join(rows)
+
+
+def _csv_row(cells: Iterable[Any]) -> str:
+    """Join cells like nvidia-smi, with a comma and a space.
+
+    Scripts often split nvidia-smi output on ``", "``. Only a cell that
+    contains a comma, quote or newline is quoted, as in RFC 4180.
+    """
+
+    quoted = []
+    for cell in cells:
+        text = str(cell)
+        if any(character in text for character in ',"\n'):
+            text = '"' + text.replace('"', '""') + '"'
+        quoted.append(text)
+    return ", ".join(quoted)
 
 
 def _format_age(value: Any) -> str:

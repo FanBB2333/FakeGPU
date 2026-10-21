@@ -168,7 +168,7 @@ def test_smi_sums_publishers_and_shows_modeled_copies(tmp_path: Path, capsys) ->
         "--query-gpu=index,pcie.throughput.rx,pcie.throughput.tx,copy.h2d,copy.modeled_time",
         "--format=csv,noheader",
     ]) == 0
-    assert capsys.readouterr().out.strip() == "0,1048576 KB/s,0 KB/s,1024.0 MiB,0.034 s"
+    assert capsys.readouterr().out.strip() == "0, 1048576 KB/s, 0 KB/s, 1024.0 MiB, 0.034 s"
 
 
 def test_fakecuda_records_copies_over_the_platform_links() -> None:

@@ -172,7 +172,7 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
     )
     row = capsys.readouterr().out.strip()
     assert row.startswith(
-        "0,FakeGPU Test Profile 512MB,test-512m,8.0,512,80,"
+        "0, FakeGPU Test Profile 512MB, test-512m, 8.0, 512, 80, "
     )
 
     assert (
@@ -189,8 +189,8 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
         == 0
     )
     query_lines = capsys.readouterr().out.splitlines()
-    assert query_lines[0] == "timestamp,memory.total [MiB]"
-    assert query_lines[1].split(",")[0]
+    assert query_lines[0] == "timestamp, memory.total [MiB]"
+    assert query_lines[1].split(", ")[0]
 
     assert (
         main(

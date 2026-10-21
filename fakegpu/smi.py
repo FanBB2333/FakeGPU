@@ -792,9 +792,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                 )
             elif gpu_query_fields:
+                devices = inventory["devices"]
+                # nvidia-smi repeats the system's GPU count on every row, even with -i.
+                count = len(devices)
+                if selectors and "count" in gpu_query_fields:
+                    count = len(build_inventory(states, stale_after_seconds=args.stale_after_seconds)["devices"])
                 print(
                     render_query(
-                        inventory["devices"],
+                        [{**device, "count": count} for device in devices],
                         fields=gpu_query_fields,
                         available=GPU_QUERY_FIELDS,
                         query_kind="gpu",
