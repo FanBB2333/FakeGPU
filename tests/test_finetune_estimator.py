@@ -148,6 +148,19 @@ def test_axolotl_epochs_follow_its_max_steps_conversion() -> None:
     assert limited["optimizer_steps"] == 10
 
 
+@pytest.mark.parametrize("dtype,score_bytes", [("bf16", 6), ("fp32", 4)])
+def test_eager_attention_retains_fp32_softmax_and_cast_probabilities(
+    dtype, score_bytes
+) -> None:
+    # Transformers 5.6.0 eager_attention_forward runs
+    # softmax(dtype=float32).to(query.dtype); autograd keeps the FP32 softmax
+    # output and the 16-bit copy (6 bytes per score in BF16, measured with
+    # saved_tensors_hooks on CPU), but only the FP32 tensor in FP32.
+    training = _training(dtype=dtype, attention_implementation="eager")
+    memory = _estimate(training)["memory"]
+    assert memory["attention_score_bytes"] == 2 * 4 * 32**2 * score_bytes * 4
+
+
 def test_fractional_epoch_rounds_to_complete_optimizer_update() -> None:
     report = _estimate(_training(num_samples=19, epochs=0.5))
     assert report["workload"]["optimizer_steps"] == 2

@@ -905,11 +905,14 @@ def _memory(
         )
     attention_scores = 0
     if attention == "eager":
+        # Transformers eager_attention_forward saves the FP32 softmax output
+        # and, for 16-bit compute, its .to(query.dtype) copy for the value matmul.
+        score_element = 4 + (element if element < 4 else 0)
         attention_scores = (
             workload["micro_batch_size"]
             * dimensions["num_attention_heads"]
             * sequence**2
-            * 4
+            * score_element
             * model["full_attention_layers"]
         )
     recurrent_bytes = 0
