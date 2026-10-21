@@ -306,7 +306,7 @@ cudaError_t cudaDeviceDisablePeerAccess(int peerDevice);
 
 // Driver Entry Point (CUDA 12+)
 cudaError_t cudaGetDriverEntryPointByVersion(const char *symbol, void **funcPtr, unsigned int cudaVersion, unsigned long long flags, int *driverStatus);
-cudaError_t cudaGetDriverEntryPoint(const char *symbol, void **funcPtr, unsigned long long flags);
+cudaError_t cudaGetDriverEntryPoint(const char *symbol, void **funcPtr, unsigned long long flags, int *driverStatus);
 
 // Additional Stream Management
 cudaError_t cudaStreamCreateWithFlags(cudaStream_t *pStream, unsigned int flags);

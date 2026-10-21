@@ -863,8 +863,9 @@ cudaError_t cudaGetDriverEntryPointByVersion(const char *symbol, void **funcPtr,
     return setLastError(convertDriverError(result));
 }
 
-cudaError_t cudaGetDriverEntryPoint(const char *symbol, void **funcPtr, unsigned long long flags) {
-    return cudaGetDriverEntryPointByVersion(symbol, funcPtr, 12000, flags, NULL);
+// CUDA 12 added the optional driverStatus argument (cuda_runtime_api.h).
+cudaError_t cudaGetDriverEntryPoint(const char *symbol, void **funcPtr, unsigned long long flags, int *driverStatus) {
+    return cudaGetDriverEntryPointByVersion(symbol, funcPtr, 12000, flags, driverStatus);
 }
 
 // ============================================================================

@@ -55,6 +55,22 @@ def check_driver_entry_point_status(runtime: ctypes.CDLL) -> None:
             result == CUDA_SUCCESS and status.value == expected_status,
             f"cudaGetDriverEntryPointByVersion({symbol!r}) returned {result} with status {status.value}",
         )
+    # CUDA 12 cuda_runtime_api.h: cudaGetDriverEntryPoint(symbol, funcPtr, flags,
+    # driverStatus) writes the same status as the versioned lookup.
+    runtime.cudaGetDriverEntryPoint.argtypes = [
+        ctypes.c_char_p,
+        ctypes.POINTER(c_void_p),
+        ctypes.c_ulonglong,
+        ctypes.POINTER(ctypes.c_int),
+    ]
+    for symbol, expected_status in ((b"cuInit", 0), (b"cuFakeGpuMissingSymbol", 1)):
+        function = c_void_p()
+        status = ctypes.c_int(-1)
+        result = runtime.cudaGetDriverEntryPoint(symbol, ctypes.byref(function), 0, ctypes.byref(status))
+        _check(
+            result == CUDA_SUCCESS and status.value == expected_status,
+            f"cudaGetDriverEntryPoint({symbol!r}) returned {result} with status {status.value}",
+        )
 
 
 def check_get_proc_address_v2_rejects_null_output(driver: ctypes.CDLL) -> None:
