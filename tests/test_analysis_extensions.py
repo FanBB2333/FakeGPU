@@ -1037,6 +1037,27 @@ def test_training_plan_normalizes_deepspeed_zero3_offload() -> None:
 
 
 @pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ({"bfloat16": {"enabled": True}}, "bf16"),
+        ({"bf16": {"enabled": False}, "bfloat16": {"enabled": True}}, "no"),
+        ({"fp16": {"enabled": True}}, "fp16"),
+    ],
+)
+def test_training_plan_reads_deepspeed_legacy_bfloat16_section(
+    config: dict[str, object],
+    expected: str,
+) -> None:
+    # deepspeed.runtime.precision_config.get_bfloat16_config falls back to the
+    # "bfloat16" key only when "bf16" is absent.
+    normalized = normalize_training_config(
+        {**config, "zero_optimization": {"stage": 2}}
+    )
+
+    assert normalized["mixed_precision"] == expected
+
+
+@pytest.mark.parametrize(
     ("optimizer", "state_bytes_per_parameter"),
     [("adamw", 8), ("sgd_momentum", 4), ("sgd", 0)],
 )

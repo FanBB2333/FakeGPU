@@ -749,8 +749,13 @@ def _normalize_fsdp(
 
 
 def _deepspeed_precision(config: Mapping[str, Any]) -> str:
-    for name in ("fp8", "bf16", "fp16"):
-        value = config.get(name)
+    # DeepSpeed still reads the legacy "bfloat16" section when "bf16" is absent.
+    for name, key in (
+        ("fp8", "fp8"),
+        ("bf16", "bf16" if "bf16" in config else "bfloat16"),
+        ("fp16", "fp16"),
+    ):
+        value = config.get(key)
         if isinstance(value, Mapping) and _bool_value(
             value.get("enabled", False)
         ):
