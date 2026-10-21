@@ -20,7 +20,7 @@ from ._finetune_events import _OPERATIONS
 from ._finetune_timeline import SCHEMA_VERSION as TIMELINE_SCHEMA
 from .finetune_estimator import FinetuneEstimateError
 from .finetune_run_estimator import validate_native_run
-from .finetune_window_estimator import _DENSE_MODELS
+from .finetune_window_estimator import _event_context, _require_dense_model
 from .structured_io import canonical_json as _canonical, canonical_sha256 as _digest
 
 SCHEMA_VERSION = "fakegpu.finetune_pipeline_plan.v1"
@@ -481,14 +481,7 @@ def pipeline_plan_from_run(run: Mapping[str, Any]) -> dict[str, Any]:
         raise FinetuneEstimateError(
             "pipeline calibration requires the native timeline protocol"
         )
-    model = run["model_config"]
-    if model.get("model_type") not in _DENSE_MODELS or any(
-        model.get(field, 0)
-        for field in ("num_experts", "num_local_experts", "n_routed_experts")
-    ):
-        raise FinetuneEstimateError(
-            "pipeline calibration currently requires a dense model"
-        )
+    _require_dense_model(run["model_config"], "pipeline")
     if "native_config" not in run or "observed_model" not in observation:
         raise FinetuneEstimateError(
             "pipeline calibration requires native execution evidence"
@@ -622,25 +615,7 @@ def _describe_components(plan, describe_window):
         minimum = 1
         if kind == "optimizer_update":
             update = plan["updates"][operation["optimizer_step"] - 1]
-            preceding = [roots[event_id] for event_id in update["preceding_event_ids"]]
-            if preceding:
-                boundary = {
-                    "step": preceding[0]["optimizer_step"],
-                    "events": [root["descriptor"] for root in preceding],
-                }
-                for root in preceding:
-                    latest[root["descriptor"]["kind"]] = boundary
-            context = {
-                name: None
-                if boundary is None
-                else {
-                    "events": boundary["events"],
-                    "optimizer_updates_since_boundary": update["optimizer_step"]
-                    - boundary["step"]
-                    - 1,
-                }
-                for name, boundary in latest.items()
-            }
+            context = _event_context(latest, roots, update)
             window = describe_window(plan, update, context)
             key = _canonical(window)
             first = key not in seen_windows

@@ -53,6 +53,65 @@ def _run_identity(run: Mapping[str, Any]) -> dict[str, Any]:
     return deepcopy(dict(identity))
 
 
+def _require_calibration_runs(calibration_runs: Any, purpose: str) -> None:
+    if (
+        not isinstance(calibration_runs, Sequence)
+        or isinstance(calibration_runs, (str, bytes))
+        or len(calibration_runs) < _MINIMUM_RUNS
+    ):
+        raise FinetuneEstimateError(f"{purpose} calibration requires at least two runs")
+
+
+def _require_dense_model(model: Mapping[str, Any], purpose: str) -> None:
+    if model.get("model_type") not in _DENSE_MODELS or any(
+        model.get(field, 0)
+        for field in ("num_experts", "num_local_experts", "n_routed_experts")
+    ):
+        raise FinetuneEstimateError(
+            f"{purpose} calibration currently requires a dense model"
+        )
+
+
+def _require_comparable_runs(
+    calibrations: Sequence[Mapping[str, Any]], target: Mapping[str, Any], purpose: str
+) -> None:
+    runs = [*calibrations, target]
+    if len({run["identity"]["uuid"] for run in runs}) != len(runs):
+        raise FinetuneEstimateError("calibration and target require distinct run UUIDs")
+    if len({run["evidence_sha256"] for run in runs}) != len(runs):
+        raise FinetuneEstimateError(
+            "calibration and target contain duplicate timing evidence"
+        )
+    if any(run["signature"] != target["signature"] for run in calibrations):
+        raise FinetuneEstimateError(
+            f"{purpose} calibration signatures must match target model, data and execution"
+        )
+
+
+def _event_context(
+    latest: dict[str, Any], roots: Mapping[str, Any], update: Mapping[str, Any]
+) -> dict[str, Any]:
+    preceding = [roots[event_id] for event_id in update["preceding_event_ids"]]
+    if preceding:
+        boundary = {
+            "step": preceding[0]["optimizer_step"],
+            "events": [event["descriptor"] for event in preceding],
+        }
+        for event in preceding:
+            latest[event["descriptor"]["kind"]] = boundary
+    return {
+        kind: None
+        if boundary is None
+        else {
+            "events": boundary["events"],
+            "optimizer_updates_since_boundary": update["optimizer_step"]
+            - boundary["step"]
+            - 1,
+        }
+        for kind, boundary in latest.items()
+    }
+
+
 def _window_contexts(observation: Mapping[str, Any]):
     """Carry the latest event boundary for each kind into subsequent updates."""
     roots = {
@@ -61,25 +120,7 @@ def _window_contexts(observation: Mapping[str, Any]):
     }
     latest = {"evaluation": None, "checkpoint": None}
     for update in observation["updates"]:
-        preceding = [roots[event_id] for event_id in update["preceding_event_ids"]]
-        if preceding:
-            boundary = {
-                "step": preceding[0]["optimizer_step"],
-                "events": [event["descriptor"] for event in preceding],
-            }
-            for event in preceding:
-                latest[event["descriptor"]["kind"]] = boundary
-        yield {
-            kind: None
-            if boundary is None
-            else {
-                "events": boundary["events"],
-                "optimizer_updates_since_boundary": update["optimizer_step"]
-                - boundary["step"]
-                - 1,
-            }
-            for kind, boundary in latest.items()
-        }
+        yield _event_context(latest, roots, update)
 
 
 def _epoch_window_context(update: Mapping[str, Any]) -> dict[str, Any]:
@@ -122,14 +163,7 @@ def _samples(
             "window calibration does not support periodic evaluation or checkpointing; "
             "their effects on subsequent window state are not modeled"
         )
-    model = run["model_config"]
-    if model.get("model_type") not in _DENSE_MODELS or any(
-        model.get(field, 0)
-        for field in ("num_experts", "num_local_experts", "n_routed_experts")
-    ):
-        raise FinetuneEstimateError(
-            "window calibration currently requires a dense model"
-        )
+    _require_dense_model(run["model_config"], "window")
     identity = _run_identity(run)
     seen = set()
     groups = {}
@@ -252,12 +286,7 @@ def estimate_finetuning_windows(
         raise FinetuneEstimateError("event_context must be boolean")
     if not isinstance(epoch_context, bool):
         raise FinetuneEstimateError("epoch_context must be boolean")
-    if (
-        not isinstance(calibration_runs, Sequence)
-        or isinstance(calibration_runs, (str, bytes))
-        or len(calibration_runs) < _MINIMUM_RUNS
-    ):
-        raise FinetuneEstimateError("window calibration requires at least two runs")
+    _require_calibration_runs(calibration_runs, "window")
     calibrations = [
         _samples(run, event_context=event_context, epoch_context=epoch_context)
         for run in calibration_runs
@@ -265,17 +294,7 @@ def estimate_finetuning_windows(
     target = _samples(
         target_run, event_context=event_context, epoch_context=epoch_context
     )
-    runs = [*calibrations, target]
-    if len({run["identity"]["uuid"] for run in runs}) != len(runs):
-        raise FinetuneEstimateError("calibration and target require distinct run UUIDs")
-    if len({run["evidence_sha256"] for run in runs}) != len(runs):
-        raise FinetuneEstimateError(
-            "calibration and target contain duplicate timing evidence"
-        )
-    if any(run["signature"] != target["signature"] for run in calibrations):
-        raise FinetuneEstimateError(
-            "window calibration signatures must match target model, data and execution"
-        )
+    _require_comparable_runs(calibrations, target, "window")
     if event_context and any(
         run["hardware"] != target["hardware"] for run in calibrations
     ):

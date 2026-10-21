@@ -12,7 +12,13 @@ from ._finetune_event_context import describe_root_events
 from ._finetune_events import SCHEMA_VERSION as EVENT_SCHEMA
 from .finetune_estimator import FinetuneEstimateError
 from .finetune_run_estimator import validate_native_run
-from .finetune_window_estimator import _DENSE_MODELS, _comparison, _run_identity
+from .finetune_window_estimator import (
+    _comparison,
+    _require_calibration_runs,
+    _require_comparable_runs,
+    _require_dense_model,
+    _run_identity,
+)
 from .structured_io import canonical_json as _canonical, canonical_sha256 as _digest
 
 SCHEMA_VERSION = "fakegpu.finetune_event_estimate.v1"
@@ -32,14 +38,7 @@ def _samples(run: Mapping[str, Any]) -> dict[str, Any]:
         )
     if config.get("packing") is not False:
         raise FinetuneEstimateError("event calibration does not support packing")
-    model = run["model_config"]
-    if model.get("model_type") not in _DENSE_MODELS or any(
-        model.get(field, 0)
-        for field in ("num_experts", "num_local_experts", "n_routed_experts")
-    ):
-        raise FinetuneEstimateError(
-            "event calibration currently requires a dense model"
-        )
+    _require_dense_model(run["model_config"], "event")
     identity = _run_identity(run)
     groups = {}
     trace = []
@@ -95,25 +94,10 @@ def estimate_finetuning_events(
     timings are used only for comparison after predictions have been computed.
     This does not predict future event triggers, training time, wall time or VRAM.
     """
-    if (
-        not isinstance(calibration_runs, Sequence)
-        or isinstance(calibration_runs, (str, bytes))
-        or len(calibration_runs) < 2
-    ):
-        raise FinetuneEstimateError("event calibration requires at least two runs")
+    _require_calibration_runs(calibration_runs, "event")
     calibrations = [_samples(run) for run in calibration_runs]
     target = _samples(target_run)
-    runs = [*calibrations, target]
-    if len({run["identity"]["uuid"] for run in runs}) != len(runs):
-        raise FinetuneEstimateError("calibration and target require distinct run UUIDs")
-    if len({run["evidence_sha256"] for run in runs}) != len(runs):
-        raise FinetuneEstimateError(
-            "calibration and target contain duplicate timing evidence"
-        )
-    if any(run["signature"] != target["signature"] for run in calibrations):
-        raise FinetuneEstimateError(
-            "event calibration signatures must match target model, data and execution"
-        )
+    _require_comparable_runs(calibrations, target, "event")
     if any(run["hardware"] != target["hardware"] for run in calibrations):
         raise FinetuneEstimateError(
             "event calibration requires matching recorded hardware"

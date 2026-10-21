@@ -16,7 +16,7 @@ from ._finetune_pipeline_plan import (
     validate_pipeline_plan,
 )
 from .finetune_estimator import FinetuneEstimateError
-from .finetune_window_estimator import _run_identity
+from .finetune_window_estimator import _require_calibration_runs, _run_identity
 
 SCHEMA_VERSION = "fakegpu.finetune_pipeline_estimate.v1"
 _FIELDS = ("wall_seconds", "instrumentation_seconds", "seconds")
@@ -271,12 +271,7 @@ def _estimate(calibrations, plan):
 
 
 def _calibrations(calibration_runs):
-    if (
-        not isinstance(calibration_runs, Sequence)
-        or isinstance(calibration_runs, (str, bytes))
-        or len(calibration_runs) < 2
-    ):
-        raise FinetuneEstimateError("pipeline calibration requires at least two runs")
+    _require_calibration_runs(calibration_runs, "pipeline")
     return [_samples(run) for run in calibration_runs]
 
 
