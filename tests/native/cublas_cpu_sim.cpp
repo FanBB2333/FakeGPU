@@ -960,6 +960,10 @@ int main() {
     // Test 10: cublasLtMatmulAlgoGetHeuristic fills the cublasLt.h layout
     // -------------------------
     {
+        // cublas_api.h: the DFALT names alias the DEFAULT algorithms.
+        static_assert(CUBLAS_GEMM_DFALT == -1 && CUBLAS_GEMM_DEFAULT == -1, "default GEMM algo");
+        static_assert(CUBLAS_GEMM_DFALT_TENSOR_OP == 99 && CUBLAS_GEMM_DEFAULT_TENSOR_OP == 99,
+                      "default tensor-op GEMM algo");
         // cublasLt.h: a 64-byte cublasLtMatmulAlgo_t comes first, then
         // workspaceSize, state, wavesCount and int reserved[4].
         static_assert(sizeof(cublasLtMatmulAlgo_t) == 64, "cublasLtMatmulAlgo_t size");

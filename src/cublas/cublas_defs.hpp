@@ -99,12 +99,12 @@ typedef enum {
     CUBLAS_COMPUTE_32I_PEDANTIC = 73
 } cublasComputeType_t;
 
-// cuBLAS GEMM algorithm
+// cuBLAS GEMM algorithm; the DFALT names are aliases in cublas_api.h.
 typedef enum {
+    CUBLAS_GEMM_DFALT = -1,
     CUBLAS_GEMM_DEFAULT = -1,
     CUBLAS_GEMM_DEFAULT_TENSOR_OP = 99,
-    CUBLAS_GEMM_DFALT = 101,
-    CUBLAS_GEMM_DFALT_TENSOR_OP = 102
+    CUBLAS_GEMM_DFALT_TENSOR_OP = 99
 } cublasGemmAlgo_t;
 
 // Handle management
