@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fakegpu._diffusion_activation import _vae_decode_activation
+from fakegpu._diffusion_pipeline import _local_unet_profile
 
 
 
@@ -650,3 +651,71 @@ def test_sdxl_pipeline_attention_slicing_preserves_vae_precision() -> None:
     assert sliced["vae_precision"] == baseline["vae_precision"]
     assert _phase(sliced, "vae_decode") == _phase(baseline, "vae_decode")
     assert _phase(sliced, "denoise") != _phase(baseline, "denoise")
+
+
+# Fields copied from the pinned upstream unet/config.json files; the reference
+# profiles must describe the same attention levels as a local inspection.
+_UPSTREAM_UNET_CONFIGS = {
+    # stable-diffusion-v1-5/stable-diffusion-v1-5@451f4fe16113bff5a5d2269ed5ad43b0592e9a14
+    SD15: {
+        "attention_head_dim": 8,
+        "block_out_channels": [320, 640, 1280, 1280],
+        "cross_attention_dim": 768,
+        "down_block_types": [
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+            "DownBlock2D",
+        ],
+        "layers_per_block": 2,
+        "up_block_types": [
+            "UpBlock2D",
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+        ],
+    },
+    # stabilityai/stable-diffusion-xl-base-1.0@462165984030d82259a11f4367a4eed129e94a7b
+    SDXL: {
+        "attention_head_dim": [5, 10, 20],
+        "block_out_channels": [320, 640, 1280],
+        "cross_attention_dim": 2048,
+        "down_block_types": [
+            "DownBlock2D",
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+        ],
+        "layers_per_block": 2,
+        "num_attention_heads": None,
+        "transformer_layers_per_block": [1, 2, 10],
+        "up_block_types": [
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+            "UpBlock2D",
+        ],
+    },
+}
+
+
+@pytest.mark.parametrize("profile_id", sorted(_UPSTREAM_UNET_CONFIGS))
+def test_reference_unet_attention_levels_match_upstream_config(profile_id: str) -> None:
+    config = _UPSTREAM_UNET_CONFIGS[profile_id]
+    local = _local_unet_profile(
+        config=config,
+        model_class="UNet2DConditionModel",
+        stats={"parameter_count": 1, "checkpoint_bytes": 2, "dtype_bytes": {}},
+        conditioning_width=config["cross_attention_dim"],
+    )
+    reference = load_diffusion_profiles()[profile_id]["denoiser"]
+    for field in ("attention_heads", "transformer_layers_per_block"):
+        assert reference[field] == local[field]
+
+
+def test_sdxl_first_level_has_no_transformer_blocks() -> None:
+    # SDXL's first down/up blocks are DownBlock2D/UpBlock2D: at 1024x1024 the
+    # 128x128 level has no attention or GEGLU feed-forward.
+    report = estimate_diffusion_generation(SDXL, attention_backend="eager")
+    level = report["activation_models"]["denoiser"]["levels"][0]
+    assert (level["attention_heads"], level["transformer_layers"]) == (0, 0)
+    assert level["attention_workspace_bytes"] == 0
+    assert level["feed_forward_working_bytes"] == 0
