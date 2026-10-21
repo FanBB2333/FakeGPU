@@ -1205,6 +1205,68 @@ def _new_link_traffic() -> Any:
     return LinkTraffic(lambda: topology_from_environment(profile_ids, os.environ))
 
 
+def _install_to_overloads(upstream: Any, torch_mod: Any) -> None:
+    """Accept every ``Tensor.to`` and ``Module.to`` overload on fake devices.
+
+    The upstream conversions only look for a target device: ``to(device,
+    dtype)`` left the dtype positional after the device was moved into a
+    keyword (a TypeError), ``to(other)`` dropped ``other.dtype``, and
+    ``Module.to`` dropped the dtype whenever the target was CUDA.
+    """
+
+    tensor_to = upstream._tensor_to
+
+    @functools.wraps(tensor_to)
+    def _tensor_to_any_overload(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if args and not isinstance(args[0], torch_mod.dtype):
+            first, rest = args[0], args[1:]
+            if isinstance(first, torch_mod.Tensor):
+                # to(other, non_blocking=False, copy=False)
+                parsed = {"device": first.device, "dtype": first.dtype}
+                parsed.update(zip(("non_blocking", "copy"), rest))
+            else:
+                # to(device=None, dtype=None, non_blocking=False, copy=False)
+                parsed = {"device": first}
+                parsed.update(zip(("dtype", "non_blocking", "copy"), rest))
+            kwargs = {**parsed, **kwargs}
+            args = ()
+        return tensor_to(self, *args, **kwargs)
+
+    upstream._tensor_to = _tensor_to_any_overload
+
+    module_to = upstream._module_to
+
+    @functools.wraps(module_to)
+    def _module_to_any_overload(self: Any, *args: Any, **kwargs: Any) -> Any:
+        first = args[0] if args else None
+        if isinstance(first, torch_mod.Tensor):
+            # to(tensor, non_blocking=False)
+            target, dtype = first.device, first.dtype
+        elif isinstance(first, torch_mod.dtype):
+            # to(dtype, non_blocking=False)
+            target, dtype = None, first
+        else:
+            # to(device=None, dtype=None, non_blocking=False)
+            target = first if args else kwargs.get("device")
+            dtype = args[1] if len(args) > 1 else kwargs.get("dtype")
+        memory_format = kwargs.get("memory_format")
+        if upstream._normalize_cuda_device(target, allow_none=True) is None:
+            return module_to(self, *args, **kwargs)
+        # nn.Module.to converts floating-point tensors to ``dtype`` and moves
+        # them in one step; convert first so no copy in the old dtype lands
+        # on the device.
+        conversion = {}
+        if dtype is not None:
+            conversion["dtype"] = dtype
+        if memory_format is not None:
+            conversion["memory_format"] = memory_format
+        if conversion:
+            module_to(self, **conversion)
+        return module_to(self, target)
+
+    upstream._module_to = _module_to_any_overload
+
+
 def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
     """Record host-device and peer copies in ``_link_traffic``.
 
@@ -1635,6 +1697,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     # (fakegpu.link_traffic); recorded only, nothing waits.  Installed before
     # the category hooks so they wrap the recording Module.to/cuda.
     _link_traffic = _new_link_traffic()
+    _install_to_overloads(upstream, torch_mod)
     _install_transfer_recording(upstream, torch_mod)
     _install_upstream_memory_category_hooks(upstream, torch_mod)
     _patch_upstream_all_gather_object(upstream, torch_mod)
