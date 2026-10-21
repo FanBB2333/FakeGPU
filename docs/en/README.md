@@ -8,7 +8,8 @@ tour. The pages below go into detail.
 
 ## Using FakeGPU
 
-- [Command reference](commands.md): every command, grouped by task
+- [Command reference](commands.md): every command, grouped by task, and
+  `fakegpu run` for running a command unchanged on simulated GPUs
 - [Memory analysis and estimation](estimation.md): `preflight`,
   `analyze-repo`, `analyze-kernel`, `estimate-llm`, and `estimate-diffusion`
 - [Online LLM serving](serving.md): serving capacity, vLLM budgets,
@@ -17,7 +18,8 @@ tour. The pages below go into detail.
   runs, calibration, and validation for HF Trainer, LLaMA-Factory, and Axolotl
 - [Diffusion training](diffusion-training.md): cached-feature UNet training
   plans and budgets
-- [Distributed plans and experiment sweeps](distributed.md)
+- [Distributed plans and experiment sweeps](distributed.md): plans,
+  multi-process training on FakeCUDA, topology, traces, and sweeps
 - [Background machine and console](console.md): `fakegpu console`, the
   background machine, events, and `fakegpu daemon`
 - [Platforms and slots](platforms.md): HGX/DGX baseboards, Grace superchips,

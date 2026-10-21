@@ -32,13 +32,21 @@ time.sleep(600)
 PYTHON
 ```
 
+不带 `--gpu` 的 [`fakegpu run`](commands.md#run-a-command-on-simulated-gpus) 也以同样
+方式接入机器，所以命令的每个进程（包括 torchrun 的 worker）都会出现在控制台中：
+
+```bash
+fakegpu run -- torchrun --nproc_per_node 8 train.py
+```
+
 如果进程向 `fakegpu.init()` 传入了 `profile`、`devices` 或 `device_count`，或者设置了
 `FAKEGPU_PROFILE`、`FAKEGPU_PROFILES`、`FAKEGPU_DEVICE_COUNT`，它会保留自己的布局。
 设置 `FAKEGPU_MACHINE=off` 可以让进程不接入机器。新布局只对修改之后启动的进程生效；
 已经在运行的进程保留启动时的设备。
 
 守护进程运行时，`fakegpu nvitop` 和 `fakegpu nvidia-smi` 不带参数就会读取这台机器：
-和真机一样列出布局中的每块 GPU（包括空闲的），以及机器上的进程。
+和真机一样列出布局中的每块 GPU（包括空闲的），以及机器上的进程。使用 reference
+遥测时，nvitop 的标题栏显示 `Driver Version: FakeGPU (modeled)`。
 
 修改设备布局或遥测模式后，请退出并重新打开 `fakegpu nvitop`，它的设备列表和遥测模式
 在启动时确定；控制台的设备列表会即时更新。显式指定这台机器的状态目录时，也会继承
@@ -58,6 +66,10 @@ PYTHON
 控制台使用低饱和度的莫兰迪配色，每种读数在卡片、曲线和表格中使用固定的颜色：显存灰紫、
 利用率灰绿、功耗陶土色、温度沙色，链路流量为灰青（PCIe）或灰蓝（NVLink）。豆沙红数值、
 芥末黄或豆沙红卡片边框表示告警。
+
+曲线标题会注明读数的来源：`memory tracked, sensors modeled`，遥测关闭时为
+`memory tracked, sensors N/A`。显存根据进程的分配跟踪得到；利用率、温度和功耗是
+根据 CPU 活动建模的，并非实测。
 
 | 按键 | 作用 |
 |---|---|
@@ -117,6 +129,8 @@ fakegpu daemon config [--devices a100:4] [--platform auto] [--pcie-gen 0] [--nvl
 fakegpu daemon stop
 ```
 
+使用 reference 遥测时，`fakegpu daemon status` 会在 GPU 表格下方注明 Util、Temp 和
+Power 是根据 CPU 活动建模的，并非实测。
 `fakegpu daemon run` 在前台运行机器。机器文件位于 `~/.fakegpu/machine`
 （`config.json`、`events.jsonl`、`daemon.log` 和 `state/` 目录）；设置 `FAKEGPU_HOME` 可以改变位置。
 

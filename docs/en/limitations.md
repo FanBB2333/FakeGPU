@@ -27,6 +27,16 @@
 - Roofline output is an analytical interval, not a measured kernel latency.
 - Distributed timing includes coordinator work, memory copies, sockets, and
   process scheduling. It is not an NCCL, NVLink, or RDMA benchmark.
+- Multi-process FakeCUDA collectives run over gloo on the CPU. FSDP across
+  processes is not covered by tests yet, and launchers other than `torchrun`,
+  `accelerate launch` and `multiprocessing` need
+  `FAKEGPU_DIST_COLLECTIVES=real`.
+- `fakegpu run` gives simulated GPUs to Python processes only; native CUDA
+  programs need the native launcher. Its summary can miss the last second
+  of a process that ends through `os._exit()` or SIGKILL, and does not count
+  DDP gradient buckets, the CUDA context, library workspaces, or NCCL
+  buffers. See
+  [Limits of `fakegpu run`](commands.md#limits-of-fakegpu-run).
 - Modeled fault events only appear in reports. They do not change CUDA
   execution and do not represent real ECC or Xid data.
 - Hybrid and passthrough modes require a compatible physical CUDA stack.

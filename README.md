@@ -48,7 +48,8 @@ for real hardware.
 It works in three ways:
 
 - **Python FakeCUDA** lets PyTorch code use `cuda` devices while tensors stay
-  on the CPU.
+  on the CPU. `fakegpu run` starts it in every Python process of a command,
+  `torchrun` and `accelerate` workers included.
 - **Native interception** loads in place of `libcuda`, `libcudart`, `libcublas`,
   `libnvidia-ml`, and `libnccl`, so unmodified programs can run.
 - **Static estimators** read model metadata and configs and report memory,
@@ -60,13 +61,14 @@ A physical GPU is only needed for passthrough, hybrid, and calibration runs.
 
 ### What you can do
 
-- **Choose a GPU before renting one.** Estimate checkpoint, KV-cache,
-  activation, and optimizer memory with `estimate-llm` or run a workload to a
-  chosen stage with `preflight`.
+- **Choose a GPU before renting one.** Run your training script unchanged with
+  `fakegpu run` and read its peak memory on each GPU, estimate checkpoint,
+  KV-cache, activation, and optimizer memory with `estimate-llm`, or run a
+  workload to a chosen stage with `preflight`.
 - **Size an LLM service.** `plan-serving` checks how many chat, RAG, or
   speculative-decoding requests fit in memory, including a vLLM-style budget.
-- **Develop CUDA code on a laptop or in CPU-only CI.** Call
-  `fakegpu.init(...)` in your script, or try `demo` and `validate`.
+- **Develop CUDA code on a laptop or in CPU-only CI.** Start your script with
+  `fakegpu run`, call `fakegpu.init(...)` in it, or try `demo` and `validate`.
 - **Compare training plans.** `plan-training` estimates per-rank memory for
   full fine-tuning, LoRA, QLoRA, sharding, and offload.
 - **Plan diffusion generation.** `estimate-diffusion` shows how resolution,
@@ -123,9 +125,31 @@ For a native macOS Conda environment, follow the
 
 ## Usage
 
+### Run your training script unchanged
+
+`fakegpu run` starts a command on simulated GPUs. Every Python process of the
+command, `torchrun` and `accelerate launch` workers included, sees the GPUs
+once it imports torch, and `nvidia-smi` on the command's `PATH` lists them.
+Install FakeGPU in the environment the command's Python uses.
+
+```bash
+python3 -m fakegpu run --gpu a100x8 -- python3 train.py
+python3 -m fakegpu run --gpu h100:4,a100:4 -- \
+  torchrun --nproc_per_node 8 train.py
+```
+
+When the command ends, a summary on stderr gives the peak memory, capacity and
+headroom of each GPU and says whether the run fit. Every number names its
+source: `[C3]` (or another tracking level) for peak memory tracked on the CPU,
+`[catalog]` for capacities from the profile catalog. An `Excludes` line lists
+what a real GPU adds on top, such as the CUDA context and NCCL buffers.
+`fakegpu run` exits with the command's own status. Options and limits are in
+the [command reference](docs/en/commands.md#run-a-command-on-simulated-gpus).
+
 ### Run PyTorch code on FakeCUDA
 
-Initialize FakeGPU before importing PyTorch:
+To choose the GPUs inside a script instead, initialize FakeGPU before
+importing PyTorch:
 
 ```python
 import fakegpu
@@ -182,11 +206,11 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi
 For pip-installed nvitop on macOS/Linux, use `fakegpu nvitop --state-dir build/smi`; see the [NVML bridge guide](docs/en/fakegpu-smi.md#use-pip-installed-nvitop-on-macos-or-linux).
 
 To keep a simulated machine running in the background, install the `console`
-extra and run `fakegpu console`: FakeCUDA processes join the machine, the
-console charts every GPU's memory, utilization, power and temperature, and you
-can change the model of each GPU from the Devices tab. `fakegpu nvitop` and
-`fakegpu nvidia-smi` read the same machine. See the
-[console guide](docs/en/console.md).
+extra and run `fakegpu console`: FakeCUDA processes, and `fakegpu run` without
+`--gpu`, join the machine, the console charts every GPU's memory, utilization,
+power and temperature, and you can change the model of each GPU from the
+Devices tab. `fakegpu nvitop` and `fakegpu nvidia-smi` read the same machine.
+See the [console guide](docs/en/console.md).
 
 <p align="center">
   <img src="docs/images/console-overview.png" width="100%"

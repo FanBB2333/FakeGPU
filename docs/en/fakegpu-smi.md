@@ -25,6 +25,11 @@ python3 your_script.py
 python3 -m fakegpu --build-dir build ./your_native_workload
 ```
 
+A command started with [`fakegpu run`](commands.md#run-a-command-on-simulated-gpus)
+needs no state directory: `nvidia-smi` on the command's `PATH` runs
+`fakegpu nvidia-smi` for the run and lists its GPUs, even before a process
+uses them.
+
 ## Inspect devices and processes
 
 From another terminal:
@@ -69,6 +74,10 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   still read v1.
 - `--query-runtime` exposes the same runtime details as CSV or JSON.
   `--help-query-runtime` lists every field.
+- CSV output separates fields with `, ` like `nvidia-smi` and quotes only
+  cells that contain a comma, quote, or newline. `--query-gpu=count` repeats
+  the number of GPUs on every row, as Accelerate expects, and still counts
+  every GPU when `-i` selects some.
 - Native interception also publishes allocation lifetime, transfer volume,
   kernel launches, GEMM calls and FLOPs, compatibility events, and unsupported
   API counts. `FAKEGPU_SMI_DETAIL_LIMIT` and `FAKEGPU_SMI_MAX_STATE_BYTES` limit
@@ -233,7 +242,8 @@ It calls `empty_cache()` at phase boundaries. The default phase lasts eight
 seconds; Ctrl+C stops the loop. For one finite cycle use `--cycles 1`.
 Actual host allocations stay around 1 GiB, not eight times 80 GiB.
 
-`--telemetry reference` enables the opt-in A100 display model. For another
+`--telemetry reference` enables the opt-in A100 display model, and nvitop's
+header then reads `Driver Version: FakeGPU (modeled)`. For another
 workload, set `FAKEGPU_TELEMETRY=reference` before `fakegpu.init()` and initialize
 with `profile="a100", device_count=8`. The observer records per-device CPU torch
 operator duration and estimated tensor I/O bytes. The viewer exposes GPU and

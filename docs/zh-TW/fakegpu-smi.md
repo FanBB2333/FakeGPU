@@ -23,6 +23,10 @@ python3 your_script.py
 python3 -m fakegpu --build-dir build ./your_native_workload
 ```
 
+以 [`fakegpu run`](commands.md#run-a-command-on-simulated-gpus) 啟動的指令不需要狀態目錄：
+指令的 `PATH` 上的 `nvidia-smi` 會為這次執行呼叫 `fakegpu nvidia-smi` 並列出它的 GPU，
+即使還沒有程序使用它們。
+
 ## 查看裝置與程序
 
 在另一個終端中執行：
@@ -65,6 +69,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   資料。FakeGPU 寫入 state schema v2，仍可讀取 v1。
 - `--query-runtime` 以 CSV 或 JSON 輸出相同的執行期資訊。`--help-query-runtime`
   列出全部欄位。
+- CSV 輸出與 `nvidia-smi` 一樣以 `, ` 分隔欄位，只有包含逗號、引號或換行的儲存格才加
+  引號。`--query-gpu=count` 在每一列重複 GPU 數量，符合 Accelerate 的預期；
+  用 `-i` 選擇部分 GPU 時仍計入全部 GPU。
 - 原生攔截也會發布 allocation 生命週期、傳輸量、kernel launch、GEMM 呼叫與 FLOP、
   相容性事件及 unsupported API 次數。`FAKEGPU_SMI_DETAIL_LIMIT` 與
   `FAKEGPU_SMI_MAX_STATE_BYTES` 分別限制保留的明細與狀態檔大小。
@@ -208,7 +215,8 @@ fakegpu nvitop --state-dir /tmp/fakegpu-smi --telemetry reference
 最後全部釋放。階段切換時呼叫 `empty_cache()`，預設每階段 8 秒，Ctrl+C 停止。
 `--cycles 1` 只執行一輪。主機實際配置量約 1 GiB，不會配置 8 × 80 GiB。
 
-`--telemetry reference` 明確啟用 A100 顯示模型。用於其他程式時，在
+`--telemetry reference` 明確啟用 A100 顯示模型，此時 nvitop 標頭顯示
+`Driver Version: FakeGPU (modeled)`。用於其他程式時，在
 `fakegpu.init()` 前設定 `FAKEGPU_TELEMETRY=reference`，並初始化
 `profile="a100", device_count=8`。觀察器記錄各裝置 CPU torch 算子的執行時間及
 估算的張量 I/O 位元組數，透過 NVML 提供 GPU/記憶體引擎使用率、各程序活躍度、

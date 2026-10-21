@@ -19,6 +19,39 @@ FP32/FP16/BF16 LoRA 與 attention CPU_SIM 案例、CPU 與 GPU 上 tiny Qwen3 Mo
 ZeRO/FSDP 與多機 collective 不在目前範圍內。重現入口為 `scripts/test.sh cpu` 與
 `tests/native/research_distributed.py --help`。
 
+<a id="multi-process-training-on-fakecuda"></a>
+
+## 在 FakeCUDA 上進行多程序訓練
+
+以分散式工作啟動時，FakeCUDA 會把多個真實程序加入同一個 group：`torchrun` 或
+`accelerate launch` 的 worker，`mp.spawn` 或 `multiprocessing` 啟動的程序，以及把
+`init_method` 或 `store` 傳給 `init_process_group` 的腳本。此時 `init_process_group` 會在
+模擬 GPU 背後的 CPU tensor 上加入真實的 gloo group，因此每個 rank 都看到 NCCL
+會產生的數值：
+
+- `get_rank()` 與 `get_world_size()` 回傳真實的 rank 與 world size。
+  `get_backend()` 仍回報要求的 backend，例如 `nccl`。
+- `all_reduce`（包括 `ReduceOp.AVG`）、`broadcast`、`all_gather`、
+  `all_gather_into_tensor`、`reduce_scatter`、`reduce_scatter_tensor`、`reduce`、
+  `gather`、`scatter`、`all_to_all`、`all_to_all_single`、`barrier`、
+  `all_gather_object` 與 `broadcast_object_list` 交換真實數值。對整數 tensor 做
+  `ReduceOp.AVG` 時向零取整。
+- `DistributedDataParallel` 建立時會廣播 rank 0 的參數與 buffer；除非設定
+  `broadcast_buffers=False`，每次訓練 forward 前還會再廣播一次 rank 0 的 buffer。
+  backward 結束時於各 rank 之間對梯度取平均；某個 rank 沒用到的參數在該 rank 上以零計。
+  在 `no_sync()` 內梯度只在本地累積，與真實 DDP 相同。
+- Accelerate 能看到每個程序、它的 rank 與 world size。
+
+其他程序仍使用程序內模擬，collective 只用到本地 tensor：例如只指定 world size 的
+單一程序，或在叢集 pod 環境中看到 `WORLD_SIZE` 與 `MASTER_ADDR` 的程序，如此它不會
+去等永遠不會啟動的對端。對於 FakeGPU 無法辨識的啟動器（如 DeepSpeed 或 Lightning
+的啟動器），設定 `FAKEGPU_DIST_COLLECTIVES=real`；設定
+`FAKEGPU_DIST_COLLECTIVES=simulate` 則讓每個程序都使用模擬。跨程序的 FSDP
+尚未有測試涵蓋。峰值記憶體不包括真實 GPU 上的 DDP 梯度 bucket 與 NCCL 緩衝區。
+若要不修改腳本就在模擬 GPU 上執行啟動器，請使用
+[`fakegpu run`](commands.md#run-a-command-on-simulated-gpus)；若 `torchrun` 卡在
+rendezvous，見[torchrun 卡在 rendezvous 時](commands.md#torchrun-hangs-at-rendezvous)。
+
 ## 拓撲、trace 與頻寬
 
 - `simulate-topology` 模擬 collective 路由與鏈路競爭。

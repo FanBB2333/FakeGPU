@@ -12,6 +12,7 @@ JSON 路徑的位置都可以使用 `.json.gz`。壓縮輸出採用原子寫入�
 
 | 指令 | 用途 |
 |---|---|
+| `fakegpu run` | 在模擬 GPU 上直接執行未修改的指令，並回報記憶體是否放得下（[說明](#run-a-command-on-simulated-gpus)） |
 | `fakegpu doctor` | 檢查安裝、原生函式庫、PyTorch 與 profiles |
 | `fakegpu demo` | 執行小型 CPU FakeCUDA 訓練步驟，程式可看到 CUDA 裝置 |
 | `fakegpu preflight` | 將工作負載執行到指定階段並判斷 fit 或 OOM |
@@ -88,3 +89,120 @@ JSON 路徑的位置都可以使用 `.json.gz`。壓縮輸出採用原子寫入�
 | `fakegpu daemon` | 在背景執行一台模擬 GPU 機器，FakeCUDA 程序會自動接入；支援啟動、停止、狀態、事件與設定 |
 | `fakegpu platform` | 列出主機平台，並顯示一個裝置配置得到的插槽、PCIe 鏈路與 NVLink（[說明](platforms.md)） |
 | `fakegpu metrics` | 匯出有數量上限的 Prometheus/JSON 指標，並提供短期記憶體歷史 |
+
+<a id="run-a-command-on-simulated-gpus"></a>
+
+## 在模擬 GPU 上執行指令
+
+`fakegpu run` 在模擬 GPU 上直接啟動未修改的指令，並在指令結束時把記憶體摘要輸出到
+stderr：
+
+```bash
+python3 -m fakegpu run --gpu a100x8 -- python3 train.py
+python3 -m fakegpu run --gpu h100:4,a100:4 -- \
+  torchrun --nproc_per_node 8 train.py
+python3 -m fakegpu run --gpu a100x4 --report-dir build/run -- \
+  accelerate launch --multi_gpu --num_processes 4 train.py
+```
+
+執行時會把一個 `sitecustomize` 模組放在 `PYTHONPATH` 最前面，因此指令中的每個
+Python 程序第一次匯入 torch 時都會啟動 FakeCUDA，包括 `torchrun`、
+`accelerate launch` 與 `mp.spawn` 啟動的 worker。環境中原有的 `sitecustomize` 仍會
+執行。這些 Python 必須能匯入 FakeGPU；無法匯入的 Python 會在匯入 torch 時印出警告，
+並在沒有模擬 GPU 的情況下執行。以 `-I`、`-E` 或 `-S` 啟動的 Python 會忽略
+`PYTHONPATH`，同樣沒有模擬 GPU。`CUDA_VISIBLE_DEVICES` 會像在真實機器上一樣，把程序
+限制在這次執行的部分 GPU 上，摘要也把它的記憶體計在這些 GPU 上。指令的 `PATH` 上的
+`nvidia-smi`，以及已安裝時的 `nvitop`，會列出這次執行的 GPU，即使還沒有程序使用它們。程序之間的 collective
+傳遞真實數值，見
+[在 FakeCUDA 上進行多程序訓練](distributed.md#multi-process-training-on-fakecuda)。
+
+| 選項 | 說明 |
+|---|---|
+| `--gpu SPEC` | 要模擬的 GPU：`a100x8`、`8xa100`、`a100:8`，或 `h100:4,a100:4` 這樣的列表。ID 來自 `fakegpu doctor --list-profiles`；未知 ID 會以狀態碼 2 結束並提示相近的 ID |
+| `--report-dir DIR` | 保留 `run_report.json`，並把各程序記錄存放在 `DIR/records/`，取代上一次執行的記錄。未指定時，執行產生的檔案放在暫存目錄，結束後刪除 |
+| `--no-summary` | 不輸出摘要 |
+
+未指定 `--gpu` 時，依下列順序取第一個可用的來源決定 GPU：
+
+1. 正在執行的背景機器（`fakegpu daemon start` 或 `fakegpu console`）。這次執行會
+   接入該機器，因此 `fakegpu console` 會顯示它的程序。`FAKEGPU_MACHINE=off` 會跳過
+   這一步；
+2. `FAKEGPU_PROFILES`；
+3. `FAKEGPU_PROFILE` 與 `FAKEGPU_DEVICE_COUNT`，預設為 `a100` 與 8，因此什麼都沒
+   設定時會得到八張 A100 GPU。
+
+自帶 GPU 配置的執行不會接入背景機器。腳本若向 `fakegpu.init()` 傳入自己的 profile，
+會保留該 profile；摘要隨後列出腳本實際使用的 GPU，並加上一行 `Note` 說明。
+
+### 結束狀態與 Ctrl-C
+
+`fakegpu run` 以指令的狀態碼結束。被訊號終止的指令回傳 128 加上訊號編號，例如
+Ctrl-C 後為 130。`fakegpu run` 本身在找不到指令時以 127 結束，指令無法執行時為
+126，`--gpu` 錯誤或缺少指令時為 2。
+
+Ctrl-C 會從終端直接送達指令。`fakegpu run` 會等待指令停止，並照常輸出摘要，內容涵蓋
+到中斷為止的執行。送給 `fakegpu run` 的 SIGTERM 與 SIGHUP 會轉送給指令；執行不在
+終端前景時，SIGINT 也會轉送。
+
+### 閱讀摘要
+
+以一個在 `cuda:0` 上配置一個 1 GiB tensor 的腳本為例：
+
+```text
+── FakeGPU run summary ────────────────────────────────────────────────
+ Command   python3 alloc.py
+ Result    exit 0 after 1.6 s; 1 process used simulated GPUs
+ GPUs      2 × a100 (NVIDIA A100-SXM4-80GB, 80.00 GiB each)  [catalog]
+
+  GPU  Peak memory          Capacity     Headroom     Processes
+    0     1.00 GiB  [C3]     80.00 GiB    79.00 GiB           1
+    1            —           80.00 GiB    80.00 GiB           0
+
+ Verdict   Fits. Largest peak: 1.00 GiB on GPU 0, 1.2% of its capacity.
+ [C3]      Peak reserved memory: operator outputs tracked at PyTorch
+           dispatch on the CPU; not calibrated against a real GPU (C4).
+ [catalog] Capacity from the FakeGPU profile catalog.
+ Excludes  the CUDA context, library workspaces and NCCL buffers a real
+           GPU adds.
+───────────────────────────────────────────────────────────────────────
+```
+
+- **Peak memory** 是每張 GPU 的峰值保留記憶體。同一張 GPU 上各程序的峰值會相加，
+  若這些程序在不同時間達到峰值，數字可能偏高。
+- 峰值後的標籤是記憶體追蹤等級，從 `[C0]`（沒有可用的追蹤）、`[C2]`（tensor
+  生命週期）、`[C3]`（運算子輸出或原生配置）到 `[C4]`（已對照真實 GPU 校準）。
+  多個程序共用的 GPU 顯示其中最弱的等級。表格下方會解釋每個出現的標籤。
+- `[catalog]` 標示取自 FakeGPU profile 目錄的容量。
+- `Excludes` 列出這次執行沒有計入的記憶體：真實 GPU 在峰值之外還會占用的 CUDA
+  context、函式庫 workspace 與 NCCL 緩衝區。
+- 判定結果為 `Fits`、`Does not fit`（模擬的記憶體不足錯誤終止了指令，或峰值超過
+  容量）、`Unresolved`（指令先失敗或被中斷；峰值涵蓋到那時為止的執行），或沒有使用
+  GPU（沒有任何資料放到 `cuda` 上，或 FakeCUDA 沒有啟動）。`run_report.json` 分別
+  記為 `fits`、`does_not_fit`、`unresolved` 與 `no_gpu_use`。指令若攔截模擬的記憶體
+  不足錯誤並繼續執行，仍算放得下；判定結果會說明攔截了幾次。
+- 超過 16 張 GPU 時，只列出有使用的 GPU。
+
+<a id="limits-of-fakegpu-run"></a>
+
+### `fakegpu run` 的限制
+
+- 只有 Python 程序會得到模擬 GPU。原生 CUDA 程式仍需透過啟動器
+  `python3 -m fakegpu --build-dir build <program>` 執行；見
+  [原生函式庫攔截](native-interception.md)。
+- 執行期間的 `nvidia-smi` 讀取已發布的狀態，可能比程序落後約 250 ms。
+- 每個程序每秒以及收到 SIGTERM 或 SIGHUP 時都會重寫自己的記錄，因此某個 rank 失敗後
+  被 `torchrun` 停止的其他 rank 仍會計入摘要。透過 `os._exit()` 或 SIGKILL 結束的程序
+  可能缺少最後一秒的資料。
+- 不計入 DDP 梯度 bucket。
+
+<a id="torchrun-hangs-at-rendezvous"></a>
+
+### torchrun 卡在 rendezvous 時
+
+若主機名稱經由代理的 fake-IP DNS 解析，`torchrun` 可能在 rendezvous 永遠等待，
+無論是否使用 FakeGPU。請傳入 loopback 位址與可用的連接埠：
+
+```bash
+python3 -m fakegpu run --gpu a100x2 -- torchrun --nproc_per_node 2 \
+  --master_addr 127.0.0.1 --master_port 29500 train.py
+```

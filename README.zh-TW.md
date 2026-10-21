@@ -45,6 +45,8 @@ FakeGPU 讓沒有 GPU 的機器看起來像有 GPU。應用程式會看到可設
 它有三種使用方式：
 
 - **Python FakeCUDA**：PyTorch 程式可以使用 `cuda` 裝置，tensor 則留在 CPU 上。
+  `fakegpu run` 會在一條指令的每個 Python 程序中啟動它，包括 `torchrun` 與
+  `accelerate` 的 worker。
 - **原生函式庫攔截**：取代 `libcuda`、`libcudart`、`libcublas`、`libnvidia-ml` 與
   `libnccl` 載入，未修改的程式也能執行。
 - **靜態估算器**：讀取模型中繼資料與設定，不載入權重就能回報記憶體、FLOP 與通訊量。
@@ -55,12 +57,13 @@ FakeGPU 讓沒有 GPU 的機器看起來像有 GPU。應用程式會看到可設
 
 ### 能做什麼
 
-- **租用 GPU 前先選好硬體。** 用 `estimate-llm` 估算 checkpoint、KV cache、
-  activation 與 optimizer 記憶體，或用 `preflight` 把工作負載執行到指定階段。
+- **租用 GPU 前先選好硬體。** 用 `fakegpu run` 直接執行未修改的訓練腳本，讀取它在
+  每張 GPU 上的峰值記憶體；用 `estimate-llm` 估算 checkpoint、KV cache、
+  activation 與 optimizer 記憶體；或用 `preflight` 把工作負載執行到指定階段。
 - **規劃 LLM 服務容量。** `plan-serving` 檢查記憶體能容納多少 chat、RAG 或
   speculative decoding 請求，也支援 vLLM 風格的預算。
-- **在筆記型電腦或無 GPU 的 CI 中開發 CUDA 程式。** 在腳本中呼叫
-  `fakegpu.init(...)`，或試試 `demo` 與 `validate`。
+- **在筆記型電腦或無 GPU 的 CI 中開發 CUDA 程式。** 用 `fakegpu run` 啟動腳本、
+  在腳本中呼叫 `fakegpu.init(...)`，或試試 `demo` 與 `validate`。
 - **比較訓練方案。** `plan-training` 估算完整參數微調、LoRA、QLoRA、分片與 offload
   的單 rank 記憶體。
 - **規劃 diffusion 生成。** `estimate-diffusion` 顯示解析度、batch size、CFG、
@@ -115,9 +118,28 @@ python3 -m fakegpu demo --profile l4
 
 ## 使用方式
 
+### 直接執行未修改的訓練腳本
+
+`fakegpu run` 在模擬 GPU 上啟動一條指令。指令中的每個 Python 程序，包括
+`torchrun` 與 `accelerate launch` 的 worker，在匯入 torch 後都會看到這些 GPU；
+指令的 `PATH` 上的 `nvidia-smi` 也會列出它們。請把 FakeGPU 安裝在指令所用的 Python
+環境中。
+
+```bash
+python3 -m fakegpu run --gpu a100x8 -- python3 train.py
+python3 -m fakegpu run --gpu h100:4,a100:4 -- \
+  torchrun --nproc_per_node 8 train.py
+```
+
+指令結束時，stderr 上的摘要會列出每張 GPU 的峰值記憶體、容量與剩餘空間，並說明這次
+執行是否放得下。每個數字都標明來源：`[C3]`（或其他追蹤等級）表示在 CPU 上追蹤的
+峰值記憶體，`[catalog]` 表示取自 profile 目錄的容量。`Excludes` 一行列出真實 GPU
+還會額外占用的部分，例如 CUDA context 與 NCCL 緩衝區。`fakegpu run` 以指令本身的
+狀態碼結束。選項與限制見[指令參考](docs/zh-TW/commands.md#run-a-command-on-simulated-gpus)。
+
 ### 在 FakeCUDA 上執行 PyTorch 程式
 
-請在匯入 PyTorch 前初始化 FakeGPU：
+若要在腳本內選擇 GPU，請在匯入 PyTorch 前初始化 FakeGPU：
 
 ```python
 import fakegpu
@@ -174,9 +196,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi
 macOS/Linux 可用 `fakegpu nvitop --state-dir build/smi` 查看狀態，安裝與雙終端範例見 [NVML 橋接說明](docs/zh-TW/fakegpu-smi.md#在-macos-或-linux-使用-pip-安裝的-nvitop)。
 
 若想讓一台模擬機器在背景持續執行，安裝 `console` 擴充後執行 `fakegpu console`：
-FakeCUDA 程序會接入這台機器，控制台以曲線呈現每張 GPU 的記憶體、使用率、功耗與溫度，
-也可以在 Devices 分頁逐張更換 GPU 型號。`fakegpu nvitop` 與 `fakegpu nvidia-smi`
-讀取的是同一台機器，詳見[控制台說明](docs/zh-TW/console.md)。
+FakeCUDA 程序與不帶 `--gpu` 的 `fakegpu run` 會接入這台機器，控制台以曲線呈現每張
+GPU 的記憶體、使用率、功耗與溫度，也可以在 Devices 分頁逐張更換 GPU 型號。
+`fakegpu nvitop` 與 `fakegpu nvidia-smi` 讀取的是同一台機器，詳見[控制台說明](docs/zh-TW/console.md)。
 
 <p align="center">
   <img src="docs/images/console-overview.png" width="100%"

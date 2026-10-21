@@ -7,7 +7,8 @@
 
 ## 使用 FakeGPU
 
-- [指令參考](commands.md)：依任務分組的全部指令
+- [指令參考](commands.md)：依任務分組的全部指令，以及在模擬 GPU 上直接執行未修改
+  指令的 `fakegpu run`
 - [記憶體分析與估算](estimation.md)：`preflight`、`analyze-repo`、
   `analyze-kernel`、`estimate-llm` 與 `estimate-diffusion`
 - [線上 LLM serving](serving.md)：serving 容量、vLLM 預算、speculative decoding、
@@ -15,7 +16,8 @@
 - [微調時間與 GPU 記憶體](finetuning.md)：依設定估算，以及 HF Trainer、
   LLaMA-Factory 與 Axolotl 的原生執行、校準和驗證
 - [Diffusion 訓練](diffusion-training.md)：快取特徵 UNet 訓練計畫與預算
-- [分散式規劃與實驗批次執行](distributed.md)
+- [分散式規劃與實驗批次執行](distributed.md)：規劃、在 FakeCUDA 上進行多程序訓練、
+  拓撲、trace 與批次執行
 - [背景機器與控制台](console.md)：`fakegpu console`、背景機器、事件與 `fakegpu daemon`
 - [平台與插槽](platforms.md)：HGX/DGX 基板、Grace 超級晶片、PCIe 插槽與 NVLink 橋，
   以及它們如何決定 PCIe 鏈路、NVLink 與 peer access

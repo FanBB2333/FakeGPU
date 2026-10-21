@@ -22,6 +22,13 @@
 - Roofline 輸出是分析區間，不代表實測的 kernel 延遲。
 - 分散式耗時包含 coordinator、記憶體複製、socket 與程序排程，不能當作 NCCL、
   NVLink 或 RDMA benchmark。
+- 多程序 FakeCUDA collective 在 CPU 上透過 gloo 執行。跨程序的 FSDP 尚未有測試涵蓋；
+  `torchrun`、`accelerate launch` 與 `multiprocessing` 以外的啟動器需要設定
+  `FAKEGPU_DIST_COLLECTIVES=real`。
+- `fakegpu run` 只為 Python 程序提供模擬 GPU；原生 CUDA 程式需要原生啟動器。它的
+  摘要可能缺少透過 `os._exit()` 或 SIGKILL 結束的程序最後一秒的資料，也不計入 DDP
+  梯度 bucket、CUDA context、函式庫 workspace 或 NCCL 緩衝區。見
+  [`fakegpu run` 的限制](commands.md#limits-of-fakegpu-run)。
 - 建模故障事件只出現在報告中，不會改變 CUDA 執行，也不代表真實的 ECC/Xid 資料。
 - Hybrid 與 passthrough 模式需要相容的實體 CUDA 環境。
 - macOS System Integrity Protection 可能移除系統程式的 `DYLD_*` 環境變數。

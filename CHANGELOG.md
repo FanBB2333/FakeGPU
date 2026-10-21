@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `fakegpu run --gpu a100x8 -- <command>` runs an unchanged command on
+  simulated GPUs. Every Python process of the command, `torchrun` and
+  `accelerate launch` workers included, starts FakeCUDA when it imports
+  torch; `nvidia-smi` (and `nvitop` when installed) on the command's `PATH`
+  lists the run's GPUs. A summary on stderr gives each GPU's peak memory,
+  capacity and headroom with source labels (`[C2]`/`[C3]`, `[catalog]`), what
+  the run does not count, and a fit verdict. The exit status is the command's;
+  `--report-dir` keeps a `fakegpu.run.v1` JSON report and per-process records.
+  Without `--gpu` the run joins the background machine when it is running.
+  `CUDA_VISIBLE_DEVICES` limits a process to some of the run's GPUs.
+- The allocator snapshot records simulated out-of-memory events
+  (`oom_events`, `last_oom`).
+- The `count` field for `fakegpu nvidia-smi --query-gpu`, which Accelerate
+  reads. It counts every GPU, also when `-i` selects some.
+
+### Changed
+
+- `fakegpu nvidia-smi` CSV output separates fields with `, ` like
+  `nvidia-smi` and quotes only cells that contain a comma, quote, or newline.
+- Readings that are modeled say so: console chart titles read `memory
+  tracked, sensors modeled` (or `sensors N/A`), `fakegpu nvitop` shows
+  `Driver Version: FakeGPU (modeled)` with reference telemetry, and
+  `fakegpu daemon status` notes that Util, Temp and Power are modeled from CPU
+  activity.
+
+### Fixed
+
+- Multi-process distributed training under FakeCUDA. Processes launched by
+  `torchrun`, `accelerate launch` or `mp.spawn` take their rank and world size
+  from the launcher and join a real gloo group, so collectives carry real
+  values, `DistributedDataParallel` starts from rank 0's weights and averages
+  gradients when backward ends (with `no_sync()` and unused parameters), and
+  Accelerate sees every process. A process that only finds `WORLD_SIZE` and
+  `MASTER_ADDR` in its environment keeps the in-process simulation.
+  `FAKEGPU_DIST_COLLECTIVES=real` or `simulate` overrides the choice.
+
 ## v1.6.0 - 2026-10-17
 
 ### Added

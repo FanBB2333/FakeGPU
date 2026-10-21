@@ -38,6 +38,14 @@ time.sleep(600)
 PYTHON
 ```
 
+[`fakegpu run`](commands.md#run-a-command-on-simulated-gpus) without `--gpu`
+joins the machine the same way, so every process of the command, torchrun
+workers included, shows up in the console:
+
+```bash
+fakegpu run -- torchrun --nproc_per_node 8 train.py
+```
+
 A process keeps its own layout when it passes `profile`, `devices` or
 `device_count` to `fakegpu.init()`, or sets `FAKEGPU_PROFILE`,
 `FAKEGPU_PROFILES` or `FAKEGPU_DEVICE_COUNT`. Set `FAKEGPU_MACHINE=off` to keep
@@ -46,7 +54,8 @@ the change; running processes keep the devices they started with.
 
 While the daemon runs, `fakegpu nvitop` and `fakegpu nvidia-smi` read the
 machine without options. Like on a real host they list every GPU of the
-layout, idle ones included, and the processes on the machine.
+layout, idle ones included, and the processes on the machine. With reference
+telemetry, nvitop's header reads `Driver Version: FakeGPU (modeled)`.
 
 After changing the device layout or sensor mode, quit and reopen `fakegpu
 nvitop`: its device list and sensor mode are selected at startup. The console
@@ -68,6 +77,11 @@ The console uses a muted, low-saturation (Morandi) palette, and every reading
 keeps one color in the cards, charts and tables: memory mauve, utilization
 sage, power clay, temperature sand, and link traffic teal (PCIe) or dusty blue
 (NVLink). Rose values and mustard or rose card borders mark warnings.
+
+Chart titles name where the readings come from: `memory tracked, sensors
+modeled`, or `memory tracked, sensors N/A` with telemetry off. Memory is
+tracked from the processes' allocations; utilization, temperature and power
+are modeled from CPU activity, not measured.
 
 | Key | Action |
 |---|---|
@@ -133,6 +147,8 @@ fakegpu daemon config [--devices a100:4] [--platform auto] [--pcie-gen 0] [--nvl
 fakegpu daemon stop
 ```
 
+With reference telemetry, `fakegpu daemon status` adds a note under the GPU
+table that Util, Temp and Power are modeled from CPU activity, not measured.
 `fakegpu daemon run` runs the machine in the foreground. Machine files live in
 `~/.fakegpu/machine` (`config.json`, `events.jsonl`, `daemon.log` and the
 `state/` directory); set `FAKEGPU_HOME` to move them.

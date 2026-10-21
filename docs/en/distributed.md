@@ -22,6 +22,45 @@ FSDP2. Physical TP/PP/CP/EP, multi-GPU ZeRO/FSDP, and multi-node collectives
 are out of scope. Reproduce it with `scripts/test.sh cpu` and
 `tests/native/research_distributed.py --help`.
 
+<a id="multi-process-training-on-fakecuda"></a>
+
+## Multi-process training on FakeCUDA
+
+FakeCUDA joins real processes into one group when they are launched as a
+distributed job: workers of `torchrun` or `accelerate launch`, processes that
+`mp.spawn` or `multiprocessing` starts, and scripts that pass an
+`init_method` or `store` to `init_process_group`. `init_process_group` then
+joins a real gloo group over the CPU tensors behind the simulated GPUs, so
+every rank sees the values NCCL would produce:
+
+- `get_rank()` and `get_world_size()` return the real rank and world size.
+  `get_backend()` still reports the requested backend, such as `nccl`.
+- `all_reduce` (including `ReduceOp.AVG`), `broadcast`, `all_gather`,
+  `all_gather_into_tensor`, `reduce_scatter`, `reduce_scatter_tensor`,
+  `reduce`, `gather`, `scatter`, `all_to_all`, `all_to_all_single`,
+  `barrier`, `all_gather_object` and `broadcast_object_list` exchange real
+  values. `ReduceOp.AVG` on integer tensors rounds toward zero.
+- `DistributedDataParallel` broadcasts rank 0's parameters and buffers when it
+  is built, and rank 0's buffers again before each training forward unless
+  `broadcast_buffers=False`. When backward ends it averages the gradients
+  across ranks; a parameter that one rank did not use counts as zeros there.
+  Inside `no_sync()` gradients accumulate locally, as with real DDP.
+- Accelerate sees every process, its rank and the world size.
+
+Any other process keeps the in-process simulation, where collectives use
+only the local tensors: a single process that names a world size, or one that
+finds `WORLD_SIZE` and `MASTER_ADDR` in a cluster pod's environment, so it
+does not wait for peers that never start. Set `FAKEGPU_DIST_COLLECTIVES=real`
+for launchers FakeGPU does not recognize, such as the DeepSpeed or Lightning
+launchers, or `FAKEGPU_DIST_COLLECTIVES=simulate` to simulate in every
+process.
+FSDP across processes is not covered by tests yet. Peak memory does not include
+the DDP gradient buckets or NCCL buffers a real GPU holds. To run a launcher
+on simulated GPUs without changing the script, use
+[`fakegpu run`](commands.md#run-a-command-on-simulated-gpus); if `torchrun`
+hangs at rendezvous, see
+[If torchrun hangs at rendezvous](commands.md#torchrun-hangs-at-rendezvous).
+
 ## Topology, traces, and bandwidth
 
 - `simulate-topology` models collective routes and link contention.

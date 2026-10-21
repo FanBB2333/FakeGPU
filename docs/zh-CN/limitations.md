@@ -24,6 +24,13 @@
 - Roofline 输出是分析区间，不是实测 kernel 延迟。
 - 分布式耗时包含 coordinator、内存复制、socket 和进程调度，不能当作 NCCL、
   NVLink 或 RDMA benchmark。
+- 多进程 FakeCUDA 的 collective 在 CPU 上经 gloo 执行。跨进程的 FSDP 尚未有测试
+  覆盖；`torchrun`、`accelerate launch` 和 `multiprocessing` 以外的启动器需要设置
+  `FAKEGPU_DIST_COLLECTIVES=real`。
+- `fakegpu run` 只为 Python 进程提供模拟 GPU；原生 CUDA 程序需要原生启动器。它的
+  摘要可能缺少通过 `os._exit()` 或 SIGKILL 结束的进程最后一秒的数据，也不计入 DDP
+  梯度 bucket、CUDA context、库 workspace 和 NCCL 缓冲区。见
+  [`fakegpu run` 的限制](commands.md#limits-of-fakegpu-run)。
 - 建模故障事件只出现在报告里。它们不会改变 CUDA 执行，也不代表真实的 ECC/Xid
   数据。
 - Hybrid 和 passthrough 模式需要兼容的物理 CUDA 环境。
