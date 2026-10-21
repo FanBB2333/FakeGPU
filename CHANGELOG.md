@@ -25,6 +25,8 @@
 
 ### Fixed
 
+- The console no longer fails with `NoMatches` when its periodic refresh
+  fires while the app is shutting down.
 - FakeCUDA autocast now defaults to float16 like CUDA instead of the CPU
   bfloat16 default, so `torch.amp.autocast("cuda")` no longer fails on
   pre-Ampere profiles; the positional `dtype` form and the legacy

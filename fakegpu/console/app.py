@@ -685,6 +685,9 @@ class ConsoleApp(App[str]):
     # ----------------------------------------------------------- refresh
 
     def refresh_machine(self) -> None:
+        # Shutdown removes the widgets before it stops the refresh timer.
+        if not self.is_running:
+            return
         try:
             status = self.client.call("status")
             events = self.client.call("events", after=self.last_seq, limit=EVENT_BUFFER)

@@ -138,6 +138,18 @@ def test_console_loads_any_valid_machine_config(tmp_path, platform, pcie_generat
     asyncio.run(scenario())
 
 
+def test_console_refresh_after_exit_is_a_no_op(tmp_path):
+    app = ConsoleApp(LocalClient(MachineService(MachinePaths(tmp_path), MachineConfig())), interval=60)
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+        # The refresh timer can still fire after shutdown removed the widgets.
+        app.refresh_machine()
+
+    asyncio.run(scenario())
+
+
 def text(renderable, width=160):
     recorder = Console(width=width, record=True, color_system=None, file=io.StringIO())
     recorder.print(renderable)
