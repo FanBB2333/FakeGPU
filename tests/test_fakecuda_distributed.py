@@ -216,6 +216,23 @@ def test_simulated_subgroups_report_their_own_rank_and_size(tmp_path: Path) -> N
                        "mesh_tp": [1, 4]}
 
 
+def test_simulated_uneven_exchanges_keep_their_shapes(tmp_path: Path) -> None:
+    # NCCL and torch's fake backend accept splits whose totals differ, as in MoE token dispatch.
+    results = _simulate(tmp_path, """
+        received = torch.zeros(9, device="cuda")
+        def exchange():
+            dist.all_to_all_single(received, torch.arange(6.0, device="cuda"), [1, 2, 1, 1, 1, 1, 1, 1],
+                                   [1, 1, 1, 1, 1, 1, 0, 0])
+            return list(received.shape)
+        probe("all_to_all_single", exchange)
+        pieces = [torch.zeros(size, device="cuda") for size in (1, 2, 3, 4, 5, 6, 7, 8)]
+        probe("all_gather", lambda: [dist.all_gather(pieces, torch.ones(6, device="cuda")),
+                                     [list(piece.shape) for piece in pieces]])
+    """)
+    assert results == {"all_to_all_single": [9],
+                        "all_gather": [None, [[1], [2], [3], [4], [5], [6], [7], [8]]]}
+
+
 def test_simulated_async_work_completes_with_its_outputs(tmp_path: Path) -> None:
     results = _simulate(tmp_path, """
         x = torch.ones(2, device="cuda")

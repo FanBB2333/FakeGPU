@@ -739,9 +739,9 @@ def _dist_all_gather(
         return _ORIG_DIST["all_gather"](
             [unwrap_tensor(item) for item in tensor_list], unwrap_tensor(tensor), group=group, async_op=async_op
         )
-    source = unwrap_tensor(tensor)
     for target in tensor_list:
-        unwrap_tensor(target).copy_(source)
+        # Other ranks may contribute tensors of other sizes.
+        _copy_collective_tensor(target, tensor)
     return _done(async_op, tensor_list)
 
 
@@ -915,7 +915,7 @@ def _dist_all_to_all(
             async_op=async_op,
         )
     for output, source in zip(output_tensor_list, input_tensor_list):
-        unwrap_tensor(output).copy_(unwrap_tensor(source))
+        _copy_collective_tensor(output, source)
     return _done(async_op, output_tensor_list)
 
 
@@ -938,7 +938,8 @@ def _dist_all_to_all_single(
             group=group,
             async_op=async_op,
         )
-    unwrap_tensor(output).copy_(unwrap_tensor(input))
+    # With uneven splits, e.g. MoE token dispatch, output and input differ in size.
+    _copy_collective_tensor(output, input)
     return _done(async_op, [output])
 
 
