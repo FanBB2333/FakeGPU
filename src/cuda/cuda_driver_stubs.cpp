@@ -270,6 +270,7 @@ struct StreamState {
 std::unordered_map<CUstream, StreamState> g_stream_states;
 
 struct EventState {
+    unsigned int flags = 0;
     bool recorded = false;
     bool completed = false;
     CUstream last_stream = nullptr;
@@ -402,9 +403,10 @@ bool erase_event_handle(CUevent event) {
     return g_event_states.erase(event) > 0;
 }
 
-void register_event_handle(CUevent event) {
+void register_event_handle(CUevent event, unsigned int flags) {
     std::lock_guard<std::mutex> lock(g_event_mutex);
     g_event_states[event] = EventState{};
+    g_event_states[event].flags = flags;
 }
 
 bool stream_is_non_blocking(unsigned int flags) {
@@ -1563,7 +1565,7 @@ CUresult cuEventCreate(CUevent *phEvent, unsigned int Flags) {
     }
 
     *phEvent = reinterpret_cast<CUevent>(g_next_event_handle.fetch_add(1));
-    register_event_handle(*phEvent);
+    register_event_handle(*phEvent, Flags);
     FGPU_LOG("[FakeCUDA-Driver] cuEventCreate returning fake event\n");
     return CUDA_SUCCESS;
 }
@@ -1639,8 +1641,11 @@ CUresult cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUevent hEnd) 
         !lookup_event_state(hEnd, end_state)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    if (!start_state.recorded || !end_state.recorded) {
-        return CUDA_ERROR_INVALID_VALUE;
+    // cuda.h: unrecorded events and events created with CU_EVENT_DISABLE_TIMING
+    // return CUDA_ERROR_INVALID_HANDLE.
+    if (!start_state.recorded || !end_state.recorded ||
+        ((start_state.flags | end_state.flags) & CU_EVENT_DISABLE_TIMING)) {
+        return CUDA_ERROR_INVALID_HANDLE;
     }
     const std::uint64_t delta_ticks =
         end_state.timeline_tick > start_state.timeline_tick

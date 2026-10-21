@@ -228,6 +228,35 @@ def check_func_attributes_size(runtime: ctypes.CDLL) -> None:
     )
 
 
+def check_event_elapsed_time_errors(runtime: ctypes.CDLL) -> None:
+    # cuda_runtime_api.h (cudaEventElapsedTime): unrecorded events and events
+    # created with cudaEventDisableTiming (0x02) return
+    # cudaErrorInvalidResourceHandle (400).
+    runtime.cudaEventCreateWithFlags.argtypes = [ctypes.POINTER(c_void_p), ctypes.c_uint]
+    runtime.cudaEventRecord.argtypes = [c_void_p, c_void_p]
+    runtime.cudaEventSynchronize.argtypes = [c_void_p]
+    runtime.cudaEventElapsedTime.argtypes = [ctypes.POINTER(ctypes.c_float), c_void_p, c_void_p]
+    runtime.cudaEventDestroy.argtypes = [c_void_p]
+
+    def elapsed(flags: int, record: bool) -> int:
+        events = [c_void_p(), c_void_p()]
+        for event in events:
+            _check(runtime.cudaEventCreateWithFlags(ctypes.byref(event), flags) == 0, "cudaEventCreate failed")
+            if record:
+                runtime.cudaEventRecord(event, None)
+        if record:
+            runtime.cudaEventSynchronize(events[1])
+        milliseconds = ctypes.c_float(-1)
+        result = runtime.cudaEventElapsedTime(ctypes.byref(milliseconds), events[0], events[1])
+        for event in events:
+            runtime.cudaEventDestroy(event)
+        return result
+
+    actual = (elapsed(0, False), elapsed(0x02, True), elapsed(0, True))
+    runtime.cudaGetLastError()
+    _check(actual == (400, 400, 0), f"cudaEventElapsedTime returned {actual}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -257,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
     check_driver_error_text(driver)
     check_last_error_survives_successful_calls(runtime)
     check_func_attributes_size(runtime)
+    check_event_elapsed_time_errors(runtime)
     print("CUDA API contract validation passed")
     return 0
 
