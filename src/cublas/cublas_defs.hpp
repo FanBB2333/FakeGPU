@@ -9,6 +9,13 @@ typedef struct __half {
 } __half;
 #endif
 
+// cuBLAS shipped with CUDA 12.0, the runtime version FakeGPU reports.
+// The encoding is the one in cublas_api.h.
+#define CUBLAS_VER_MAJOR 12
+#define CUBLAS_VER_MINOR 0
+#define CUBLAS_VER_PATCH 1
+#define CUBLAS_VERSION (CUBLAS_VER_MAJOR * 10000 + CUBLAS_VER_MINOR * 100 + CUBLAS_VER_PATCH)
+
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -849,6 +849,32 @@ int main() {
         std::printf("Test8 OK: cublasHgemm (FP16)\n");
     }
 
+    // -------------------------
+    // Test 9: version queries use the cublas_api.h encoding
+    // -------------------------
+    {
+        // CUBLAS_VERSION is major * 10000 + minor * 100 + patch, and
+        // cublasGetVersion works without a handle (cuBLAS docs 2.4.3).
+        int version = 0;
+        check_cublas(cublasGetVersion_v2(nullptr, &version), "cublasGetVersion_v2");
+        int major = -1;
+        int minor = -1;
+        int patch = -1;
+        check_cublas(cublasGetProperty(0, &major), "cublasGetProperty(MAJOR_VERSION)");
+        check_cublas(cublasGetProperty(1, &minor), "cublasGetProperty(MINOR_VERSION)");
+        check_cublas(cublasGetProperty(2, &patch), "cublasGetProperty(PATCH_LEVEL)");
+        if (major != 12 || version != major * 10000 + minor * 100 + patch) {
+            std::fprintf(stderr, "Test9 failed: version=%d major=%d minor=%d patch=%d\n", version, major, minor, patch);
+            return 1;
+        }
+        int unused = 0;
+        if (cublasGetProperty(3, &unused) != CUBLAS_STATUS_INVALID_VALUE) {
+            std::fprintf(stderr, "Test9 failed: an invalid property type was accepted\n");
+            return 1;
+        }
+        std::printf("Test9 OK: cublasGetVersion/cublasGetProperty\n");
+    }
+
     std::printf("All FakeGPU CPU simulation tests passed.\n");
     return 0;
 }

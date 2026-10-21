@@ -775,8 +775,8 @@ cublasStatus_t cublasGetVersion_v2(cublasHandle_t handle, int *version) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
 
-    *version = 12000;  // cuBLAS 12.0
-    FGPU_LOG("[FakeCUBLAS] cublasGetVersion_v2 returning 12000\n");
+    *version = CUBLAS_VERSION;
+    FGPU_LOG("[FakeCUBLAS] cublasGetVersion_v2 returning %d\n", *version);
     return CUBLAS_STATUS_SUCCESS;
 }
 
@@ -784,9 +784,13 @@ cublasStatus_t cublasGetProperty(int type, int *value) {
     if (!value) {
         return CUBLAS_STATUS_INVALID_VALUE;
     }
-
-    *value = 12000;  // Default value
-    return CUBLAS_STATUS_SUCCESS;
+    // libraryPropertyType: MAJOR_VERSION, MINOR_VERSION, PATCH_LEVEL.
+    switch (type) {
+        case 0: *value = CUBLAS_VER_MAJOR; return CUBLAS_STATUS_SUCCESS;
+        case 1: *value = CUBLAS_VER_MINOR; return CUBLAS_STATUS_SUCCESS;
+        case 2: *value = CUBLAS_VER_PATCH; return CUBLAS_STATUS_SUCCESS;
+        default: return CUBLAS_STATUS_INVALID_VALUE;
+    }
 }
 
 // ============================================================================
