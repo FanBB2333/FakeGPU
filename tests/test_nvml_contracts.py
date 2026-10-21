@@ -214,6 +214,46 @@ def test_short_string_buffers_return_insufficient_size(tmp_path: Path) -> None:
     assert result == [7, True, 0, 7, 7, 7, 7]
 
 
+def test_nvlink_throughput_scope_uint_max_sums_all_links(tmp_path: Path) -> None:
+    # nvml.h NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_*: "A scopeId of UINT_MAX returns
+    # aggregate value summed up across all links"; values are KiB.
+    pytest.importorskip("pynvml")
+    from fakegpu.link_traffic import empty_record
+    from fakegpu.smi import SmiStatePublisher
+
+    record = empty_record("pcie", 31.508)
+    record["links"]["nvlink"].update(tx_bytes=12 * 2**20, rx_bytes=6 * 2**20)
+    state = SmiStatePublisher(
+        tmp_path / "state" / "state.json",
+        lambda: {"devices": [{"index": 0, "name": "Fake A100", "profile_id": "a100",
+                              "total_memory": 80 * 2**30, "transfer": record}]},
+    ).publish_once(running=True)
+    state["devices"][0]["topology"]["nvlink"]["active_links"] = 12
+    (tmp_path / "state" / "state.json").write_text(json.dumps(state))
+    code = textwrap.dedent(
+        f"""
+        import json
+        from fakegpu.nvml import NvmlStateBridge
+        with NvmlStateBridge(state_dir={str(tmp_path / "state")!r}, lib_dir={str(BUILD_DIR)!r}):
+            import pynvml as N
+            N.nvmlInit()
+            fields = N.nvmlDeviceGetFieldValues(N.nvmlDeviceGetHandleByIndex(0), [
+                (N.NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_TX, 0xFFFFFFFF),
+                (N.NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_RX, 0xFFFFFFFF),
+                (N.NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_TX, 3),
+            ])
+            print(json.dumps([[f.nvmlReturn, f.value.ullVal] for f in fields]))
+            N.nvmlShutdown()
+        """
+    )
+    env = dict(os.environ, PYTHONPATH=str(ROOT), FAKEGPU_HOME=str(tmp_path), FAKEGPU_MACHINE="off")
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path, env=env, text=True, capture_output=True, timeout=60
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout.strip().splitlines()[-1]) == [[0, 12 * 1024], [0, 6 * 1024], [0, 1024]]
+
+
 def test_bridge_power_fields_follow_power_queries(tmp_path: Path) -> None:
     # docs/en/fakegpu-smi.md: without reference telemetry the bridge reports
     # power draw as unavailable; the field-value path must agree.

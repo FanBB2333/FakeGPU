@@ -1586,8 +1586,9 @@ nvmlReturn_t nvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvml
         entry.nvmlReturn = NVML_ERROR_NOT_SUPPORTED;
         entry.value.uiVal = 0;
 
-        // NVLink counters take the link index as scope. The modeled traffic
-        // of a GPU is spread evenly over its ports; values are KiB.
+        // NVLink counters take the link index as scope, or UINT_MAX for the
+        // sum over all links. The modeled traffic of a GPU is spread evenly
+        // over its ports; values are KiB.
         if (entry.fieldId == NVML_FI_DEV_NVLINK_LINK_COUNT ||
             entry.fieldId == NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_TX ||
             entry.fieldId == NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_RX) {
@@ -1599,10 +1600,10 @@ nvmlReturn_t nvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvml
             if (entry.fieldId == NVML_FI_DEV_NVLINK_LINK_COUNT) {
                 entry.nvmlReturn = NVML_SUCCESS;
                 entry.value.uiVal = ports;
-            } else if (entry.scopeId < ports) {
+            } else if (entry.scopeId < ports || (ports && entry.scopeId == 0xFFFFFFFFu)) {
                 const uint64_t bytes = entry.fieldId == NVML_FI_DEV_NVLINK_THROUGHPUT_DATA_TX ? tx : rx;
                 entry.valueType = NVML_VALUE_TYPE_UNSIGNED_LONG_LONG;
-                entry.value.ullVal = bytes / ports / 1024;
+                entry.value.ullVal = entry.scopeId < ports ? bytes / ports / 1024 : bytes / 1024;
                 entry.nvmlReturn = NVML_SUCCESS;
             } else {
                 entry.nvmlReturn = NVML_ERROR_INVALID_ARGUMENT;
