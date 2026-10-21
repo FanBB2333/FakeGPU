@@ -257,6 +257,18 @@ def check_event_elapsed_time_errors(runtime: ctypes.CDLL) -> None:
     _check(actual == (400, 400, 0), f"cudaEventElapsedTime returned {actual}")
 
 
+def check_grid_dimension_limits(driver: ctypes.CDLL) -> None:
+    # CUDA Programming Guide, compute capabilities table: maximum x-dimension
+    # of a grid is 2^31-1, maximum y- or z-dimension is 65535.
+    driver.cuDeviceGetAttribute.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_int]
+    limits = []
+    for attribute in (5, 6, 7):  # CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X/Y/Z
+        value = ctypes.c_int()
+        _check(driver.cuDeviceGetAttribute(ctypes.byref(value), attribute, 0) == 0, "cuDeviceGetAttribute failed")
+        limits.append(value.value)
+    _check(limits == [2147483647, 65535, 65535], f"grid dimension limits {limits}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, default=Path("build"))
@@ -287,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     check_last_error_survives_successful_calls(runtime)
     check_func_attributes_size(runtime)
     check_event_elapsed_time_errors(runtime)
+    check_grid_dimension_limits(driver)
     print("CUDA API contract validation passed")
     return 0
 

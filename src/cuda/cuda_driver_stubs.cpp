@@ -706,10 +706,14 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
         case CU_DEVICE_ATTRIBUTE_MAX_BLOCK_DIM_Z:
             *pi = 64;
             break;
+        // CUDA Programming Guide, compute capabilities table: grid x up to
+        // 2^31-1, y and z up to 65535.
         case CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X:
+            *pi = 2147483647;
+            break;
         case CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Y:
         case CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_Z:
-            *pi = 2147483647;
+            *pi = 65535;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK:
             *pi = device.profile.shared_mem_per_block;
