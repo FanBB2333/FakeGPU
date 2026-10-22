@@ -9,6 +9,7 @@
 ## Reading specifications / 参数口径
 
 - Each linked YAML is used by both Python and the native runtime. It contains memory capacity, SM count, bus width, clocks, L2 cache, CUDA shared-memory/register/thread limits, power fields, data types, sources, and notes.
+- `torch_name` is the device name the NVIDIA driver reports (the driver README's supported-chips list), which `torch.cuda.get_device_name()` and `nvidia-smi` print. Memory and laptop variants often share it; `canonical: true` marks the profile a name lookup such as `FAKEGPU_DEVICE_NAME` selects, and an exact-case match wins over a case-insensitive one.
 - `reference` means public specification or an explicitly documented derivation; it does not mean physical calibration. `measured` and `synthetic` retain their existing meanings. Catalog support does not imply a matching CUDA toolkit or framework still supports an old GPU.
 - `—` and a numeric zero in a reference specification mean unknown/unverified, not a hardware capacity of zero. `doctor --json` exposes `unavailable_fields`. Timing estimates reject profiles missing SM count, core clock, bus width, or memory clock.
 - Memory capacity is expressed in GiB (nominal vendor GB is represented as binary capacity unless notes specify otherwise). Multi-GPU boards and superchips are represented per CUDA GPU, not by adding memory across devices.

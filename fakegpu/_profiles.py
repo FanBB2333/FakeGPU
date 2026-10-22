@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .profile_catalog import load_profiles
+from .profile_catalog import load_profiles, profile_id_for_device_name
 
 
 _PROFILE_CATALOG = load_profiles()
@@ -50,10 +50,11 @@ def _resolve_profile_id() -> str | None:
     if profile_env:
         return profile_env.strip().lower()
 
-    device_name = os.environ.get("FAKEGPU_DEVICE_NAME", "").strip().lower()
+    device_name = os.environ.get("FAKEGPU_DEVICE_NAME", "").strip()
     if device_name:
-        reverse_names = {value.lower(): key for key, value in _PROFILE_NAMES.items()}
-        return reverse_names.get(device_name)
+        # Variants that report the same driver name resolve to the profile the
+        # catalog marks canonical, not to whichever variant sorts last.
+        return profile_id_for_device_name(device_name, profiles=_PROFILE_CATALOG)
 
     return None
 

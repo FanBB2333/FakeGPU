@@ -3,6 +3,7 @@
 id: quadro-p4000
 name: Fake NVIDIA Quadro P4000
 torch_name: Quadro P4000
+canonical: true
 official_model: Quadro P4000
 architecture: pascal
 compute_major: 6

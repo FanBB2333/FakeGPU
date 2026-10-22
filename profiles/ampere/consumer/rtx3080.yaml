@@ -2,6 +2,7 @@
 id: rtx3080
 name: Fake NVIDIA GeForce RTX 3080
 torch_name: NVIDIA GeForce RTX 3080
+canonical: true
 official_model: GeForce RTX 3080
 architecture: ampere
 compute_major: 8

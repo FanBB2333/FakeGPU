@@ -3,6 +3,7 @@
 id: gt1030
 name: Fake NVIDIA GeForce GT 1030 GDDR5
 torch_name: NVIDIA GeForce GT 1030
+canonical: true
 official_model: GeForce GT 1030
 architecture: pascal
 compute_major: 6

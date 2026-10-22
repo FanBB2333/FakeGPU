@@ -3,6 +3,7 @@
 id: quadro-rtx5000
 name: Fake NVIDIA Quadro RTX 5000
 torch_name: Quadro RTX 5000
+canonical: true
 official_model: QUADRO RTX 5000
 architecture: turing
 compute_major: 7

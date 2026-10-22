@@ -55,6 +55,19 @@
 - Mixed-precision training plans size Adam and momentum state in FP32 next
   to the master copy, as DeepSpeed and PyTorch AMP keep it: 4 more bytes per
   parameter than before.
+- `FAKEGPU_DEVICE_NAME` selects the base profile when memory or laptop
+  variants report the same driver name. The catalog marks one profile per
+  shared name `canonical: true`, and an exact-case match wins, so
+  `NVIDIA GeForce RTX 2070 Super` (the driver's notebook spelling) selects
+  the laptop profile and `NVIDIA GeForce RTX 2070 SUPER` the desktop card.
+  Before, the variant that sorted last won: `NVIDIA GeForce GTX 1080`
+  selected `gtx1080-laptop`, `Quadro P4000` the mobile part,
+  `NVIDIA GeForce RTX 4070` the GDDR6 variant and `NVIDIA L20` `l20-lc`.
+- Turing laptop profiles (RTX 2060/2070/2080 and their Super parts, GTX 1650,
+  1650 Ti and 1660 Ti) and the RTX 3080 12 GB, RTX 3060 8 GB, RTX 3060 Ti
+  GDDR6X, RTX 3050 6 GB, RTX 3080 Laptop 8 GB, RTX 2060 12 GB and GTX 1650
+  GDDR6 profiles report the names the NVIDIA driver gives them, such as
+  `NVIDIA GeForce RTX 2060` and `NVIDIA GeForce RTX 3080`.
 
 ### Fixed
 

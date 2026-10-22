@@ -23,6 +23,23 @@ def test_every_catalog_profile_resolves_consistently(monkeypatch):
         monkeypatch.delenv("FAKEGPU_PROFILES")
 
 
+@pytest.mark.parametrize(
+    ("device_name", "profile_id"),
+    [
+        ("NVIDIA GeForce GTX 1080", "gtx1080"),
+        ("Quadro P4000", "quadro-p4000"),
+        ("NVIDIA GeForce RTX 4070", "rtx4070"),
+        ("NVIDIA L20", "l20"),
+        ("NVIDIA GeForce RTX 3060", "rtx3060"),
+    ],
+)
+def test_device_name_selects_the_base_profile_not_a_variant(monkeypatch, device_name, profile_id):
+    monkeypatch.setenv("FAKEGPU_DEVICE_NAME", device_name)
+    device = _resolve_per_device_profiles(1)[0]
+    assert device["profile_id"] == profile_id
+    assert device["total_memory"] == _PROFILE_CATALOG[profile_id].memory_bytes
+
+
 def test_profile_padding_and_truncation_keep_independent_devices(monkeypatch):
     monkeypatch.setenv("FAKEGPU_PROFILES", "a100:2, h100:1")
     devices = _resolve_per_device_profiles(5)

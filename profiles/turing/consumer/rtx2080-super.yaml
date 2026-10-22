@@ -5,6 +5,7 @@
 id: rtx2080-super
 name: Fake NVIDIA GeForce RTX 2080 SUPER
 torch_name: NVIDIA GeForce RTX 2080 SUPER
+canonical: true
 official_model: GeForce RTX 2080 SUPER
 architecture: turing
 compute_major: 7

@@ -2,6 +2,7 @@
 id: rtx2070
 name: Fake NVIDIA GeForce RTX 2070
 torch_name: NVIDIA GeForce RTX 2070
+canonical: true
 official_model: GeForce RTX 2070
 architecture: turing
 compute_major: 7

@@ -1,7 +1,7 @@
 # Additional source: https://www.nvidia.com/en-us/geforce/laptops/compare/30-series/
 id: rtx3080-laptop-8gb
 name: Fake NVIDIA GeForce RTX 3080 Laptop GPU 8 GB
-torch_name: NVIDIA GeForce RTX 3080 Laptop GPU 8 GB
+torch_name: NVIDIA GeForce RTX 3080 Laptop GPU
 official_model: GeForce RTX 3080 Laptop GPU
 architecture: ampere
 compute_major: 8

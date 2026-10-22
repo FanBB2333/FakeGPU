@@ -165,6 +165,10 @@ class GpuProfile:
     c2c_bandwidth_gbps: float | None = None
     mig_max_instances: int | None = None
     min_power_limit_mw: int | None = None
+    # Several profiles may report the same driver name (memory or laptop
+    # variants of one product). ``canonical`` marks the one a name lookup such
+    # as FAKEGPU_DEVICE_NAME resolves to.
+    canonical: bool = False
     throughput: dict[str, float] = dataclass_field(default_factory=dict)
     throughput_basis: dict[str, str] = dataclass_field(default_factory=dict)
     throughput_source: str = ""
@@ -414,7 +418,61 @@ def validate_catalog(
             if profile.profile_status != "synthetic" and not official_host:
                 warnings.append(f"{prefix} {field} is not an NVIDIA URL")
 
+    errors.extend(_shared_name_errors(catalog))
     return CatalogValidation(errors=tuple(errors), warnings=tuple(warnings))
+
+
+def _profiles_by_name(catalog: Mapping[str, GpuProfile]) -> dict[str, list[GpuProfile]]:
+    groups: dict[str, list[GpuProfile]] = {}
+    for profile in catalog.values():
+        groups.setdefault(profile.torch_name.lower(), []).append(profile)
+    return groups
+
+
+def _shared_name_errors(catalog: Mapping[str, GpuProfile]) -> list[str]:
+    """A driver name shared by several profiles needs exactly one canonical profile."""
+
+    errors = []
+    for name, group in sorted(_profiles_by_name(catalog).items()):
+        canonical = sorted(profile.id for profile in group if profile.canonical)
+        if len(group) == 1:
+            if canonical:
+                errors.append(f"{canonical[0]}: canonical is set but no other profile reports {name!r}")
+        elif len(canonical) != 1:
+            ids = ", ".join(sorted(profile.id for profile in group))
+            errors.append(
+                f"profiles {ids} report the same name {name!r}; exactly one needs canonical: true "
+                f"(found {len(canonical)})"
+            )
+    return errors
+
+
+def profile_id_for_device_name(
+    device_name: str,
+    *,
+    profiles: Mapping[str, GpuProfile] | None = None,
+) -> str | None:
+    """Return the profile a reported device name selects, or None.
+
+    An exact (case-sensitive) ``torch_name`` match wins over a case-insensitive
+    one, so ``NVIDIA GeForce RTX 2070 Super`` (the laptop part) and
+    ``NVIDIA GeForce RTX 2070 SUPER`` (the desktop card) stay distinct. When
+    several profiles share the name, the one marked ``canonical`` is chosen.
+    """
+
+    catalog = profiles if profiles is not None else load_profiles()
+    name = device_name.strip()
+    if not name:
+        return None
+    candidates = [profile for profile in catalog.values() if profile.torch_name == name]
+    if not candidates:
+        candidates = _profiles_by_name(catalog).get(name.lower(), [])
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0].id
+    canonical = sorted(profile.id for profile in candidates if profile.canonical)
+    return canonical[0] if canonical else min(profile.id for profile in candidates)
 
 
 def _optional_spec_errors(profile: GpuProfile, prefix: str) -> list[str]:
@@ -569,12 +627,22 @@ def _profile_from_mapping(
         memory_type=optional_text("memory_type"),
         ecc=optional_text("ecc").lower(),
         form_factor=optional_text("form_factor").lower(),
+        canonical=_optional_bool(raw, "canonical", path),
         throughput=throughput,
         throughput_basis=throughput_basis,
         throughput_source=optional_text("throughput_source"),
         **integers,
         **optional,
     )
+
+
+def _optional_bool(raw: Mapping[str, object], key: str, path: Path) -> bool:
+    value = raw.get(key)
+    if value is None:
+        return False
+    if value not in ("true", "false"):
+        raise ProfileCatalogError(f"{path}: {key!r} must be true or false")
+    return value == "true"
 
 
 def _parse_simple_yaml(path: Path) -> dict[str, object]:

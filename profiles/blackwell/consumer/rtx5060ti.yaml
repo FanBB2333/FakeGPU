@@ -3,6 +3,7 @@
 id: rtx5060ti
 name: Fake NVIDIA GeForce RTX 5060 Ti
 torch_name: NVIDIA GeForce RTX 5060 Ti
+canonical: true
 official_model: GeForce RTX 5060 Ti
 architecture: blackwell
 compute_major: 12

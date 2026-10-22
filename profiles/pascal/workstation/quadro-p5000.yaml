@@ -4,6 +4,7 @@
 id: quadro-p5000
 name: Fake NVIDIA Quadro P5000
 torch_name: Quadro P5000
+canonical: true
 official_model: Quadro P5000
 architecture: pascal
 compute_major: 6
