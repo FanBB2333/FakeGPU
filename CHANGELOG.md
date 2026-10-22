@@ -414,6 +414,27 @@
   and is always allowed). FP8 reductions compute in float16 and round back to
   FP8 after each step, and `ncclAvg` premultiplies by the FP8 value of 1/n.
   Cluster reports name the types `float8_e4m3` and `float8_e5m2`.
+- Native NCCL `ncclSend` and `ncclRecv` pair up by sender, receiver and
+  per-pair order, as NCCL's per-peer queues do. A group holding both a send
+  and a receive (PyTorch's `batch_isend_irecv`) no longer times out,
+  ranks outside a send/recv pair no longer have to take part, and grouped
+  calls pair with ungrouped ones. A group's sends and receives go to the
+  coordinator as one `P2P` request. Zero-count operations now pair with the
+  peer's operation instead of completing alone, and the sizes of a matched
+  pair must agree in bytes rather than in datatype and count. Sends to self
+  pair with receives from self in order; an unmatched one is
+  `ncclInvalidUsage` (was `ncclInvalidArgument`). Grouped all-to-all-v
+  exchanges run as point-to-point operations, so cluster reports count them
+  as one point-to-point operation per sender and receiver instead of one
+  all-to-all call, and each timeline entry lists the two ranks and the pair's
+  sequence number.
+- Native NCCL groups may span several communicators, such as the ranks
+  `ncclCommInitAll` creates in one process, instead of returning
+  `ncclInvalidUsage`. Each communicator's operations run in order on their
+  own thread, and a send to self whose receive is on another communicator is
+  `ncclInvalidUsage`, as in NCCL. When an operation enqueued inside a group
+  returns an error, `ncclGroupEnd` now returns that error and drops the
+  group, as NCCL does, instead of running the other operations.
 
 ## v1.6.0 - 2026-10-17
 

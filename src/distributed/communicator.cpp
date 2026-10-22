@@ -2,6 +2,7 @@
 
 #include "../core/backend_config.hpp"
 #include "buffer_transfer.hpp"
+#include "staging_buffer.hpp"
 #include "topology_model.hpp"
 
 #include <algorithm>
@@ -10,11 +11,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -97,18 +102,41 @@ struct ShrinkState {
     std::condition_variable cv;
 };
 
-struct PointToPointState {
-    PointToPointSubmitRequest request;
-    bool completed = false;
+// One rank's point-to-point batch while its operations wait for their peers.
+struct PointToPointBatchState {
+    PointToPointBatchRequest request;
+    // Byte offset of each operation in the shared-memory staging buffer,
+    // which holds every operation in request order.
+    std::vector<std::size_t> staging_offsets;
+    // Byte offset of each send in request.payload and of each receive in
+    // output_payload when the batch uses socket payloads.
+    std::vector<std::size_t> payload_offsets;
+    std::size_t staging_bytes = 0;
+    std::vector<char> output_payload;
+    std::size_t pending = 0;
     bool failed = false;
     std::string failure_code;
     std::string failure_detail;
-    std::unordered_map<int, PointToPointSubmitRequest> participants;
-    std::unordered_map<int, PointToPointSubmitResult> results;
-    SteadyTimePoint first_submit_at;
-    SteadyTimePoint all_participants_at;
     std::condition_variable cv;
 };
+
+struct PointToPointEndpoint {
+    std::shared_ptr<PointToPointBatchState> batch;
+    std::size_t index = 0;
+};
+
+// The send and the receive that share (sender, receiver, sequence).
+struct PointToPointPairState {
+    int src = -1;
+    int dst = -1;
+    std::uint64_t sequence = 0;
+    std::optional<PointToPointEndpoint> send;
+    std::optional<PointToPointEndpoint> recv;
+    SteadyTimePoint first_posted_at;
+    SteadyTimePoint matched_at;
+};
+
+using PointToPointPairKey = std::tuple<int, int, std::uint64_t>;
 
 struct CommunicatorState {
     std::string unique_id;
@@ -129,7 +157,10 @@ struct CommunicatorState {
     std::unordered_map<std::uint64_t, std::shared_ptr<BatchState>> batches;
     std::unordered_map<std::uint64_t, std::shared_ptr<SplitState>> splits;
     std::unordered_map<std::uint64_t, std::shared_ptr<ShrinkState>> shrinks;
-    std::unordered_map<std::uint64_t, std::shared_ptr<PointToPointState>> point_to_points;
+    // Point-to-point operations do not use next_seqno: they pair up by
+    // (sender, receiver, sequence), so ranks that take no part stay in step.
+    std::map<PointToPointPairKey, std::shared_ptr<PointToPointPairState>> point_to_point_pairs;
+    std::vector<std::shared_ptr<PointToPointBatchState>> point_to_point_batches;
     SteadyTimePoint failed_at;
     std::condition_variable cv;
 };
@@ -313,7 +344,8 @@ void append_operation_timeline_locked(
     SteadyTimePoint first_submit_at,
     SteadyTimePoint all_participants_at,
     SteadyTimePoint completed_at,
-    double modeled_time_us) {
+    double modeled_time_us,
+    std::vector<int> ranks = {}) {
     ClusterOperationTimelineEntry entry;
     entry.index = ++registry.report.operation_timeline_entries;
     entry.comm_id = state->comm_id;
@@ -323,7 +355,7 @@ void append_operation_timeline_locked(
     entry.data_type = std::move(data_type);
     entry.reduce_op = std::move(reduce_op);
     entry.buffer_transport = std::move(buffer_transport);
-    entry.ranks = state->global_ranks;
+    entry.ranks = ranks.empty() ? state->global_ranks : std::move(ranks);
     entry.logical_payload_bytes = logical_payload_bytes;
     entry.socket_request_payload_bytes = socket_request_payload_bytes;
     entry.socket_response_payload_bytes = socket_response_payload_bytes;
@@ -362,17 +394,6 @@ std::uint64_t total_participant_payload_bytes(
     std::uint64_t bytes = 0;
     for (const auto& entry : participants) {
         bytes += static_cast<std::uint64_t>(entry.second.payload.size());
-    }
-    return bytes;
-}
-
-std::uint64_t point_to_point_logical_payload_bytes(
-    const std::shared_ptr<PointToPointState>& point_to_point) {
-    std::uint64_t bytes = 0;
-    for (const auto& entry : point_to_point->participants) {
-        if (entry.second.type == PointToPointType::Send) {
-            bytes += static_cast<std::uint64_t>(entry.second.bytes);
-        }
     }
     return bytes;
 }
@@ -753,26 +774,21 @@ TopologyOperationTotals record_collective_completion_locked(
     return totals;
 }
 
-TopologyOperationTotals record_point_to_point_completion_locked(
+// One matched send and receive is one point-to-point operation.
+TopologyOperationTotals record_point_to_point_pair_locked(
     RegistryImpl& registry,
     const std::shared_ptr<CommunicatorState>& state,
-    const std::shared_ptr<PointToPointState>& point_to_point) {
+    const PointToPointPairState& pair,
+    std::uint64_t bytes) {
     remember_world_size_locked(registry, state->world_size);
     ClusterPointToPointReportStats& stats = registry.report.point_to_point;
     stats.operations++;
-
-    for (const auto& entry : point_to_point->participants) {
-        ClusterRankReportStats& rank_stats = ensure_rank_report_locked(
-            registry,
-            global_rank_for_local(state, entry.first));
-        rank_stats.point_to_point_calls++;
-
-        const PointToPointSubmitRequest& participant = entry.second;
-        if (participant.type == PointToPointType::Send) {
-            stats.sends++;
-            stats.bytes += static_cast<std::uint64_t>(participant.bytes);
-        }
-    }
+    stats.sends++;
+    stats.bytes += bytes;
+    ensure_rank_report_locked(registry, global_rank_for_local(state, pair.src))
+        .point_to_point_calls++;
+    ensure_rank_report_locked(registry, global_rank_for_local(state, pair.dst))
+        .point_to_point_calls++;
 
     const TopologyModel* topology_model = cluster_topology_model();
     if (!topology_model) {
@@ -781,22 +797,13 @@ TopologyOperationTotals record_point_to_point_completion_locked(
 
     std::string topology_error;
     std::vector<TopologyLinkEstimate> links;
-    links.reserve(point_to_point->participants.size() / 2);
-    for (const auto& entry : point_to_point->participants) {
-        const PointToPointSubmitRequest& participant = entry.second;
-        if (participant.type != PointToPointType::Send) {
-            continue;
-        }
-
-        TopologyLinkEstimate link;
-        if (!topology_model->estimate_transfer(
-                global_rank_for_local(state, participant.rank),
-                global_rank_for_local(state, participant.peer),
-                static_cast<std::uint64_t>(participant.bytes),
-                link,
-                topology_error)) {
-            continue;
-        }
+    TopologyLinkEstimate link;
+    if (topology_model->estimate_transfer(
+            global_rank_for_local(state, pair.src),
+            global_rank_for_local(state, pair.dst),
+            bytes,
+            link,
+            topology_error)) {
         links.push_back(std::move(link));
     }
 
@@ -926,20 +933,6 @@ void fail_split_locked(
         std::move(detail));
 }
 
-void fail_point_to_point_locked(
-    const std::shared_ptr<CommunicatorState>& state,
-    const std::shared_ptr<PointToPointState>& p2p,
-    std::string code,
-    std::string detail) {
-    fail_operation_locked(
-        *state,
-        state->point_to_points,
-        *p2p,
-        p2p->request.seqno,
-        std::move(code),
-        std::move(detail));
-}
-
 void record_failure_observer_locked(
     RegistryImpl& registry,
     const std::shared_ptr<CommunicatorState>& state,
@@ -983,15 +976,16 @@ void fail_pending_operations_locked(
     for (const auto& entry : state->splits) {
         notify_failed(*entry.second, code, detail);
     }
-    for (const auto& entry : state->point_to_points) {
-        notify_failed(*entry.second, code, detail);
+    for (const auto& batch : state->point_to_point_batches) {
+        notify_failed(*batch, code, detail);
     }
 
     state->collectives.clear();
     state->barriers.clear();
     state->batches.clear();
     state->splits.clear();
-    state->point_to_points.clear();
+    state->point_to_point_pairs.clear();
+    state->point_to_point_batches.clear();
     state->cv.notify_all();
 }
 
@@ -1075,26 +1069,6 @@ bool collective_requests_match(
     return true;
 }
 
-bool point_to_point_requests_match(
-    const PointToPointSubmitRequest& expected,
-    const PointToPointSubmitRequest& actual,
-    std::string& error_code,
-    std::string& error_detail) {
-    if (expected.transport != actual.transport) {
-        error_code = "buffer_transport_mismatch";
-        error_detail = "point-to-point peers disagreed on buffer transport";
-        return false;
-    }
-    if (expected.timeout_ms != actual.timeout_ms) {
-        error_code = "p2p_timeout_mismatch";
-        error_detail =
-            "expected timeout_ms=" + std::to_string(expected.timeout_ms) +
-            ", got " + std::to_string(actual.timeout_ms);
-        return false;
-    }
-    return true;
-}
-
 bool split_requests_match(
     const CommunicatorSplitRequest& expected,
     const CommunicatorSplitRequest& actual,
@@ -1135,114 +1109,180 @@ bool shrink_requests_match(
     return true;
 }
 
-CollectiveExecutionResult execute_point_to_point_locked(
-    const std::shared_ptr<PointToPointState>& p2p) {
+bool open_point_to_point_staging(
+    const PointToPointBatchState& batch,
+    StagingBufferHandle& handle,
+    std::string& error) {
+    StagingBufferMetadata metadata;
+    metadata.name = batch.request.staging_name;
+    metadata.dtype = collective_data_type_name(CollectiveDataType::Uint8);
+    metadata.bytes = batch.staging_bytes;
+    metadata.shape = {batch.staging_bytes};
+    metadata.owner_rank = batch.request.rank;
+    return StagingBufferManager().open(metadata, false, handle, error);
+}
+
+// Copies a matched send into its receive. It runs without the registry lock:
+// only this pair writes the receive's region of the receiver's buffer, and
+// the batches' requests and offsets do not change after registration.
+bool transfer_point_to_point_pair(
+    const PointToPointPairState& pair,
+    std::string& error) {
+    const PointToPointBatchState& sender = *pair.send->batch;
+    PointToPointBatchState& receiver = *pair.recv->batch;
+    const std::size_t send_index = pair.send->index;
+    const std::size_t recv_index = pair.recv->index;
+    const std::size_t bytes = sender.request.operations[send_index].bytes;
+    if (bytes == 0) {
+        return true;
+    }
+
+    const char* source = nullptr;
+    StagingBufferHandle send_handle;
+    if (sender.request.transport == BufferTransport::SocketPayload) {
+        source = sender.request.payload.data() + sender.payload_offsets[send_index];
+    } else {
+        if (!open_point_to_point_staging(sender, send_handle, error)) {
+            return false;
+        }
+        source = static_cast<const char*>(send_handle.data()) +
+                 sender.staging_offsets[send_index];
+    }
+
+    if (receiver.request.transport == BufferTransport::SocketPayload) {
+        std::memcpy(
+            receiver.output_payload.data() + receiver.payload_offsets[recv_index],
+            source,
+            bytes);
+        return true;
+    }
+    StagingBufferHandle recv_handle;
+    if (!open_point_to_point_staging(receiver, recv_handle, error)) {
+        return false;
+    }
+    std::memcpy(
+        static_cast<char*>(recv_handle.data()) + receiver.staging_offsets[recv_index],
+        source,
+        bytes);
+    return true;
+}
+
+void forget_point_to_point_batch_locked(
+    CommunicatorState& state,
+    const std::shared_ptr<PointToPointBatchState>& batch) {
+    auto& batches = state.point_to_point_batches;
+    batches.erase(std::remove(batches.begin(), batches.end(), batch), batches.end());
+}
+
+// Moves the data of pairs whose send and receive have both been posted, then
+// records them and releases the batches that were waiting on them.
+void complete_point_to_point_pairs(
+    std::unique_lock<std::mutex>& lock,
+    RegistryImpl& registry,
+    const std::shared_ptr<CommunicatorState>& state,
+    const std::vector<std::shared_ptr<PointToPointPairState>>& ready) {
+    if (ready.empty()) {
+        return;
+    }
     std::string error;
-    CollectiveExecutionResult result;
-    result.ok = true;
-
-    for (const auto& entry : p2p->participants) {
-        const PointToPointSubmitRequest& participant = entry.second;
-        const PointToPointSubmitRequest& peer =
-            p2p->participants.at(participant.peer);
-        if (participant.type == peer.type) {
-            return CollectiveExecutionResult{
-                false,
-                "p2p_direction_mismatch",
-                "rank " + std::to_string(participant.rank) +
-                    " and peer " + std::to_string(participant.peer) +
-                    " submitted the same point-to-point direction",
-            };
+    std::size_t transferred = 0;
+    lock.unlock();
+    for (const auto& pair : ready) {
+        if (!transfer_point_to_point_pair(*pair, error)) {
+            break;
         }
-        if (peer.peer != participant.rank) {
-            return CollectiveExecutionResult{
-                false,
-                "peer_mismatch",
-                "rank " + std::to_string(participant.rank) +
-                    " expected peer " + std::to_string(participant.peer) +
-                    " to target rank " + std::to_string(participant.rank),
-            };
-        }
-        if (participant.dtype != peer.dtype) {
-            return CollectiveExecutionResult{
-                false,
-                "dtype_mismatch",
-                "point-to-point dtype mismatch between rank " +
-                    std::to_string(participant.rank) + " and peer " +
-                    std::to_string(participant.peer),
-            };
-        }
-        if (participant.count != peer.count) {
-            return CollectiveExecutionResult{
-                false,
-                "count_mismatch",
-                "point-to-point count mismatch between rank " +
-                    std::to_string(participant.rank) + " and peer " +
-                    std::to_string(participant.peer),
-            };
-        }
-        if (participant.bytes != peer.bytes) {
-            return CollectiveExecutionResult{
-                false,
-                "bytes_mismatch",
-                "point-to-point bytes mismatch between rank " +
-                    std::to_string(participant.rank) + " and peer " +
-                    std::to_string(participant.peer),
-            };
-        }
+        ++transferred;
+    }
+    lock.lock();
+    if (state->failed) {
+        return;
+    }
+    if (transferred != ready.size()) {
+        fail_pending_operations_locked(state, "staging_open_failed", error);
+        return;
     }
 
-    for (const auto& entry : p2p->participants) {
-        const PointToPointSubmitRequest& participant = entry.second;
-        if (participant.type != PointToPointType::Send) {
-            continue;
-        }
-
-        const PointToPointSubmitRequest& receiver =
-            p2p->participants.at(participant.peer);
-
-        std::vector<char> sender_bytes;
-        if (!load_participant_buffer(
-                participant.transport,
-                participant.staging_name,
-                participant.dtype,
-                participant.transport == BufferTransport::SocketPayload
-                    ? participant.payload_bytes
-                    : participant.bytes,
-                {participant.count},
-                participant.rank,
-                participant.seqno,
-                participant.payload,
-                sender_bytes,
-                error)) {
-            return CollectiveExecutionResult{false, "staging_open_failed", error};
-        }
-
-        std::vector<char> receiver_output;
-        if (!store_participant_buffer(
-                receiver.transport,
-                receiver.staging_name,
-                receiver.dtype,
-                {receiver.count},
-                receiver.rank,
-                receiver.seqno,
-                sender_bytes.data(),
-                sender_bytes.size(),
-                receiver_output,
-                error)) {
-            return CollectiveExecutionResult{false, "staging_open_failed", error};
-        }
-        if (receiver.transport == BufferTransport::SocketPayload) {
-            result.output_payloads[receiver.rank] = std::move(receiver_output);
+    const SteadyTimePoint completed_at = std::chrono::steady_clock::now();
+    for (const auto& pair : ready) {
+        const PointToPointBatchState& sender = *pair->send->batch;
+        const PointToPointBatchState& receiver = *pair->recv->batch;
+        const PointToPointOperation& send =
+            sender.request.operations[pair->send->index];
+        const std::uint64_t bytes = static_cast<std::uint64_t>(send.bytes);
+        const TopologyOperationTotals topology_totals =
+            record_point_to_point_pair_locked(registry, state, *pair, bytes);
+        append_operation_timeline_locked(
+            registry,
+            state,
+            pair->sequence,
+            "point_to_point",
+            "send_recv",
+            collective_data_type_name(send.dtype),
+            collective_reduce_op_name(CollectiveReduceOp::None),
+            buffer_transport_name(sender.request.transport),
+            bytes,
+            sender.request.transport == BufferTransport::SocketPayload ? bytes : 0,
+            receiver.request.transport == BufferTransport::SocketPayload ? bytes : 0,
+            pair->first_posted_at,
+            pair->matched_at,
+            completed_at,
+            topology_totals.estimated_time_us,
+            {global_rank_for_local(state, pair->src),
+             global_rank_for_local(state, pair->dst)});
+        for (const PointToPointEndpoint* endpoint : {&*pair->send, &*pair->recv}) {
+            PointToPointBatchState& batch = *endpoint->batch;
+            if (batch.pending > 0 && --batch.pending == 0) {
+                batch.cv.notify_all();
+            }
         }
     }
+}
 
-    for (const auto& entry : p2p->participants) {
-        if (entry.second.transport == BufferTransport::SocketPayload) {
-            result.output_payloads.emplace(entry.first, std::vector<char>{});
+PointToPointPairKey point_to_point_pair_key(
+    int rank,
+    const PointToPointOperation& operation) {
+    return operation.type == PointToPointType::Send
+        ? PointToPointPairKey{rank, operation.peer, operation.sequence}
+        : PointToPointPairKey{operation.peer, rank, operation.sequence};
+}
+
+std::string describe_point_to_point(int rank, const PointToPointOperation& operation) {
+    return "rank " + std::to_string(rank) +
+           (operation.type == PointToPointType::Send ? " send to rank " : " receive from rank ") +
+           std::to_string(operation.peer) + " (sequence " +
+           std::to_string(operation.sequence) + ")";
+}
+
+// Fails the communicator after a batch waited too long, naming the first of
+// its operations whose peer never posted the other side.
+void fail_point_to_point_timeout_locked(
+    RegistryImpl& registry,
+    const std::shared_ptr<CommunicatorState>& state,
+    const PointToPointBatchState& batch) {
+    std::unordered_set<int> waiting_ranks;
+    for (const auto& entry : state->point_to_point_pairs) {
+        const PointToPointPairState& pair = *entry.second;
+        const std::optional<PointToPointEndpoint>& posted = pair.send ? pair.send : pair.recv;
+        if (posted) {
+            waiting_ranks.insert(posted->batch->request.rank);
         }
     }
-    return result;
+    for (int rank : waiting_ranks) {
+        ensure_rank_report_locked(registry, global_rank_for_local(state, rank)).timeouts++;
+    }
+
+    std::string detail = "timeout waiting for point-to-point peers of rank " +
+                         std::to_string(batch.request.rank);
+    for (const PointToPointOperation& operation : batch.request.operations) {
+        const auto it = state->point_to_point_pairs.find(
+            point_to_point_pair_key(batch.request.rank, operation));
+        if (it != state->point_to_point_pairs.end()) {
+            detail = "timeout waiting for the peer of " +
+                     describe_point_to_point(batch.request.rank, operation);
+            break;
+        }
+    }
+    fail_pending_operations_locked(state, "timeout_waiting_for_p2p", detail);
 }
 
 bool batch_items_match(
@@ -1860,7 +1900,7 @@ CommunicatorShrinkResult CommunicatorRegistry::shrink_communicator(
     if (!state->failed && !request.abort_parent &&
         (!state->collectives.empty() || !state->barriers.empty() ||
          !state->batches.empty() || !state->splits.empty() ||
-         !state->point_to_points.empty())) {
+         !state->point_to_point_batches.empty())) {
         return make_shrink_error(
             "outstanding_operations",
             "normal communicator shrink requires no outstanding operations");
@@ -2053,129 +2093,190 @@ PointToPointSubmitResult CommunicatorRegistry::submit_point_to_point(const Point
         return make_point_to_point_error("invalid_timeout", "timeout_ms must be > 0");
     }
 
-    RegistryImpl& registry = registry_impl();
-    std::shared_ptr<PointToPointState> p2p;
+    PointToPointBatchRequest batch_request;
+    batch_request.comm_id = request.comm_id;
+    batch_request.rank = request.rank;
+    batch_request.transport = request.transport;
+    batch_request.staging_name = request.staging_name;
+    batch_request.payload = request.payload;
+    batch_request.timeout_ms = request.timeout_ms;
+    PointToPointOperation operation;
+    operation.type = request.type;
+    operation.peer = request.peer;
+    operation.sequence = request.seqno;
+    operation.dtype = request.dtype;
+    operation.count = request.count;
+    operation.bytes = request.bytes;
+    batch_request.operations.push_back(operation);
 
+    PointToPointBatchResult batch_result =
+        submit_point_to_point_batch(std::move(batch_request));
+    if (!batch_result.ok) {
+        return make_point_to_point_error(
+            std::move(batch_result.error_code),
+            std::move(batch_result.error_detail));
+    }
+    PointToPointSubmitResult result;
+    result.ok = true;
+    result.seqno = request.seqno;
+    result.output_payload = std::move(batch_result.output_payload);
+    return result;
+}
+
+PointToPointBatchResult CommunicatorRegistry::submit_point_to_point_batch(
+    PointToPointBatchRequest request) {
+    constexpr auto make_batch_p2p_error = &error_result<PointToPointBatchResult>;
+    if (request.comm_id <= 0) {
+        return make_batch_p2p_error("invalid_comm_id", "comm_id must be > 0");
+    }
+    if (request.rank < 0) {
+        return make_batch_p2p_error("invalid_rank", "rank must be >= 0");
+    }
+    if (request.timeout_ms <= 0) {
+        return make_batch_p2p_error("invalid_timeout", "timeout_ms must be > 0");
+    }
+    if (request.operations.empty()) {
+        return make_batch_p2p_error("invalid_op_count", "op_count must be > 0");
+    }
+
+    auto batch = std::make_shared<PointToPointBatchState>();
+    std::size_t send_bytes = 0;
+    std::size_t recv_bytes = 0;
+    batch->staging_offsets.reserve(request.operations.size());
+    batch->payload_offsets.reserve(request.operations.size());
+    for (const PointToPointOperation& operation : request.operations) {
+        if (operation.peer < 0) {
+            return make_batch_p2p_error("invalid_peer", "peer must be >= 0");
+        }
+        if (operation.sequence == 0) {
+            return make_batch_p2p_error("invalid_seqno", "sequence must be > 0");
+        }
+        const std::size_t element_size = collective_data_type_size(operation.dtype);
+        if (operation.count > std::numeric_limits<std::size_t>::max() / element_size ||
+            operation.bytes != operation.count * element_size) {
+            return make_batch_p2p_error(
+                "invalid_bytes",
+                "bytes must equal count times the datatype size");
+        }
+        if (operation.bytes > std::numeric_limits<std::size_t>::max() - batch->staging_bytes) {
+            return make_batch_p2p_error("invalid_bytes", "point-to-point batch is too large");
+        }
+        batch->staging_offsets.push_back(batch->staging_bytes);
+        batch->staging_bytes += operation.bytes;
+        std::size_t& direction_bytes =
+            operation.type == PointToPointType::Send ? send_bytes : recv_bytes;
+        batch->payload_offsets.push_back(direction_bytes);
+        direction_bytes += operation.bytes;
+    }
+    if (request.transport == BufferTransport::SharedMemory &&
+        batch->staging_bytes > 0 &&
+        request.staging_name.empty()) {
+        return make_batch_p2p_error("missing_staging_name", "staging_name must be set");
+    }
+    if (request.transport == BufferTransport::SocketPayload) {
+        if (request.payload.size() != send_bytes) {
+            return make_batch_p2p_error(
+                "socket_payload_size_mismatch",
+                "point-to-point socket payload size did not match the send bytes");
+        }
+        batch->output_payload.assign(recv_bytes, '\0');
+    }
+    batch->request = std::move(request);
+    batch->pending = batch->request.operations.size();
+    const PointToPointBatchRequest& posted = batch->request;
+
+    RegistryImpl& registry = registry_impl();
     std::unique_lock<std::mutex> lock(registry.mutex);
     OperationError error;
     const std::shared_ptr<CommunicatorState> state =
-        find_live_member_locked(registry, request.comm_id, request.rank, error);
+        find_live_member_locked(registry, posted.comm_id, posted.rank, error);
     if (!state) {
-        return make_point_to_point_error(std::move(error.code), std::move(error.detail));
+        return make_batch_p2p_error(std::move(error.code), std::move(error.detail));
     }
     if (state->failed) {
-        return make_point_to_point_error(state->failure_code, state->failure_detail);
+        return make_batch_p2p_error(state->failure_code, state->failure_detail);
     }
-    if (request.peer >= state->world_size) {
-        return make_point_to_point_error("invalid_peer", "peer must be within [0, world_size)");
-    }
-    if (request.peer == request.rank) {
-        return make_point_to_point_error("invalid_peer", "peer must not equal rank");
-    }
-    if (!seqno_matches(*state, request.seqno, error)) {
-        return make_point_to_point_error(std::move(error.code), std::move(error.detail));
-    }
-
-    auto p2p_it = state->point_to_points.find(request.seqno);
-    if (p2p_it == state->point_to_points.end()) {
-        p2p = std::make_shared<PointToPointState>();
-        p2p->request = request;
-        p2p->first_submit_at = std::chrono::steady_clock::now();
-        state->point_to_points.emplace(request.seqno, p2p);
-    } else {
-        p2p = p2p_it->second;
+    for (const PointToPointOperation& operation : posted.operations) {
+        if (operation.peer >= state->world_size) {
+            return make_batch_p2p_error("invalid_peer", "peer must be within [0, world_size)");
+        }
+        if (operation.peer == posted.rank) {
+            return make_batch_p2p_error("invalid_peer", "peer must not equal rank");
+        }
     }
 
-    std::string error_code;
-    std::string error_detail;
-    if (!point_to_point_requests_match(p2p->request, request, error_code, error_detail)) {
-        fail_point_to_point_locked(state, p2p, std::move(error_code), std::move(error_detail));
-        return make_point_to_point_error(state->failure_code, state->failure_detail);
+    // Post every operation before waiting, as NCCL queues a group's sends and
+    // receives per peer before it schedules any of them.
+    state->point_to_point_batches.push_back(batch);
+    const SteadyTimePoint posted_at = std::chrono::steady_clock::now();
+    std::vector<std::shared_ptr<PointToPointPairState>> ready;
+    for (std::size_t index = 0; index < posted.operations.size(); ++index) {
+        const PointToPointOperation& operation = posted.operations[index];
+        const PointToPointPairKey key = point_to_point_pair_key(posted.rank, operation);
+        std::shared_ptr<PointToPointPairState>& pair = state->point_to_point_pairs[key];
+        if (!pair) {
+            pair = std::make_shared<PointToPointPairState>();
+            pair->src = std::get<0>(key);
+            pair->dst = std::get<1>(key);
+            pair->sequence = operation.sequence;
+            pair->first_posted_at = posted_at;
+        }
+        std::optional<PointToPointEndpoint>& side =
+            operation.type == PointToPointType::Send ? pair->send : pair->recv;
+        if (side) {
+            fail_pending_operations_locked(
+                state,
+                "duplicate_p2p_sequence",
+                describe_point_to_point(posted.rank, operation) + " was posted twice");
+            return make_batch_p2p_error(state->failure_code, state->failure_detail);
+        }
+        side = PointToPointEndpoint{batch, index};
+        if (!pair->send || !pair->recv) {
+            continue;
+        }
+        const std::size_t sent =
+            pair->send->batch->request.operations[pair->send->index].bytes;
+        const std::size_t expected =
+            pair->recv->batch->request.operations[pair->recv->index].bytes;
+        if (sent != expected) {
+            fail_pending_operations_locked(
+                state,
+                "bytes_mismatch",
+                "rank " + std::to_string(pair->src) + " sent " + std::to_string(sent) +
+                    " bytes to rank " + std::to_string(pair->dst) +
+                    ", which posted a receive of " + std::to_string(expected) +
+                    " bytes (sequence " + std::to_string(pair->sequence) + ")");
+            return make_batch_p2p_error(state->failure_code, state->failure_detail);
+        }
+        pair->matched_at = posted_at;
+        ready.push_back(pair);
+        state->point_to_point_pairs.erase(key);
     }
 
-    if (!p2p->participants.emplace(request.rank, request).second) {
-        fail_point_to_point_locked(
+    complete_point_to_point_pairs(lock, registry, state, ready);
+
+    if (!batch->failed && !state->failed && batch->pending > 0 &&
+        !wait_for_completion_locked(
+            lock,
+            batch->cv,
+            posted.timeout_ms,
+            [&] { return batch->pending == 0 || batch->failed || state->failed; },
+            registry,
             state,
-            p2p,
-            "duplicate_p2p_rank",
-            "rank already submitted this point-to-point seqno");
-        return make_point_to_point_error(state->failure_code, state->failure_detail);
+            posted.rank)) {
+        fail_point_to_point_timeout_locked(registry, state, *batch);
+    }
+    forget_point_to_point_batch_locked(*state, batch);
+    if (batch->failed || batch->pending > 0) {
+        return batch->failed
+            ? make_batch_p2p_error(batch->failure_code, batch->failure_detail)
+            : make_batch_p2p_error(state->failure_code, state->failure_detail);
     }
 
-    if (static_cast<int>(p2p->participants.size()) != state->world_size) {
-        if (!wait_for_completion_locked(
-                lock,
-                p2p->cv,
-                request.timeout_ms,
-                [&] { return p2p->completed || p2p->failed || state->failed; },
-                registry,
-                state,
-                request.rank)) {
-            record_timeout_locked(registry, state, p2p->participants);
-            fail_point_to_point_locked(
-                state,
-                p2p,
-                "timeout_waiting_for_p2p",
-                "timeout waiting for all ranks to join point-to-point seqno " +
-                    std::to_string(request.seqno));
-            return make_point_to_point_error(state->failure_code, state->failure_detail);
-        }
-
-        if (p2p->completed) {
-            return std::move(p2p->results.at(request.rank));
-        }
-        return make_point_to_point_error(state->failure_code, state->failure_detail);
-    }
-
-    p2p->all_participants_at = std::chrono::steady_clock::now();
-    lock.unlock();
-    CollectiveExecutionResult execution = execute_point_to_point_locked(p2p);
-    lock.lock();
-
-    if (state->failed) {
-        return make_point_to_point_error(state->failure_code, state->failure_detail);
-    }
-    if (!execution.ok) {
-        fail_point_to_point_locked(state, p2p, execution.error_code, execution.error_detail);
-        return make_point_to_point_error(state->failure_code, state->failure_detail);
-    }
-
-    const TopologyOperationTotals topology_totals =
-        record_point_to_point_completion_locked(registry, state, p2p);
-    const std::uint64_t response_payload_bytes =
-        total_payload_bytes(execution.output_payloads);
-    for (const auto& entry : p2p->participants) {
-        PointToPointSubmitResult result;
-        result.ok = true;
-        result.seqno = request.seqno;
-        auto payload_it = execution.output_payloads.find(entry.first);
-        if (payload_it != execution.output_payloads.end()) {
-            result.output_payload = std::move(payload_it->second);
-        }
-        p2p->results[entry.first] = std::move(result);
-    }
-    const SteadyTimePoint completed_at = std::chrono::steady_clock::now();
-    append_operation_timeline_locked(
-        registry,
-        state,
-        request.seqno,
-        "point_to_point",
-        "send_recv",
-        collective_data_type_name(request.dtype),
-        collective_reduce_op_name(CollectiveReduceOp::None),
-        buffer_transport_name(request.transport),
-        point_to_point_logical_payload_bytes(p2p),
-        total_participant_payload_bytes(p2p->participants),
-        response_payload_bytes,
-        p2p->first_submit_at,
-        p2p->all_participants_at,
-        completed_at,
-        topology_totals.estimated_time_us);
-    p2p->completed = true;
-    state->next_seqno++;
-    state->point_to_points.erase(request.seqno);
-    p2p->cv.notify_all();
-    return std::move(p2p->results.at(request.rank));
+    PointToPointBatchResult result;
+    result.ok = true;
+    result.output_payload = std::move(batch->output_payload);
+    return result;
 }
 
 CollectiveSubmitResult CommunicatorRegistry::submit_collective(const CollectiveSubmitRequest& request) {

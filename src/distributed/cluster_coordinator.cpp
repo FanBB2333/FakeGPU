@@ -432,6 +432,96 @@ std::string handle_point_to_point(
     });
 }
 
+// P2P carries one rank's sends and receives from a group (or one ungrouped
+// call): op<i>_type=send|recv, op<i>_peer, op<i>_seq (the pair sequence),
+// op<i>_dtype, op<i>_count and op<i>_bytes. Socket payloads carry the send
+// bytes in operation order; the response carries the receive bytes.
+std::string handle_point_to_point_batch(
+    CommunicatorRegistry& registry,
+    CoordinatorMessage& request,
+    std::vector<char>& response_payload) {
+    PointToPointBatchRequest batch_request;
+    int op_count = 0;
+    std::string error;
+    if (!read_int(request.fields, "comm_id", batch_request.comm_id, error) ||
+        !read_int(request.fields, "rank", batch_request.rank, error) ||
+        !read_int(request.fields, "timeout_ms", batch_request.timeout_ms, error) ||
+        !read_int(request.fields, "op_count", op_count, error)) {
+        return bad_request(error);
+    }
+    if (op_count <= 0) {
+        return bad_request("op_count must be > 0");
+    }
+    const auto transport_it = request.fields.find("buffer_transport");
+    if (transport_it != request.fields.end() && transport_it->second == "socket") {
+        batch_request.transport = BufferTransport::SocketPayload;
+    }
+    const auto staging_it = request.fields.find("staging_name");
+    if (staging_it != request.fields.end()) {
+        batch_request.staging_name = staging_it->second;
+    }
+    std::size_t payload_bytes = 0;
+    if (!read_optional_size(
+            request.fields,
+            "payload_bytes",
+            request.payload.size(),
+            payload_bytes,
+            error)) {
+        return bad_request(error);
+    }
+    if (payload_bytes != request.payload.size()) {
+        return format_error_response(
+            "socket_payload_size_mismatch",
+            "payload_bytes did not match the attached payload");
+    }
+
+    batch_request.operations.reserve(static_cast<std::size_t>(op_count));
+    for (int index = 0; index < op_count; ++index) {
+        PointToPointOperation operation;
+        const std::string prefix = "op" + std::to_string(index) + "_";
+        const auto type_it = request.fields.find(prefix + "type");
+        const auto dtype_it = request.fields.find(prefix + "dtype");
+        if (type_it == request.fields.end()) {
+            return bad_request("missing required field: " + prefix + "type");
+        }
+        if (type_it->second == "send") {
+            operation.type = PointToPointType::Send;
+        } else if (type_it->second == "recv") {
+            operation.type = PointToPointType::Recv;
+        } else {
+            return bad_request("unsupported point-to-point type: " + type_it->second);
+        }
+        if (dtype_it == request.fields.end()) {
+            return bad_request("missing required field: " + prefix + "dtype");
+        }
+        if (!parse_collective_data_type(dtype_it->second, operation.dtype)) {
+            return bad_request("unsupported dtype");
+        }
+        if (!read_int(request.fields, prefix + "peer", operation.peer, error) ||
+            !read_u64(request.fields, prefix + "seq", operation.sequence, error) ||
+            !read_size(request.fields, prefix + "count", operation.count, error) ||
+            !read_size(request.fields, prefix + "bytes", operation.bytes, error)) {
+            return bad_request(error);
+        }
+        batch_request.operations.push_back(operation);
+    }
+    batch_request.payload = std::move(request.payload);
+
+    const int comm_id = batch_request.comm_id;
+    const int rank = batch_request.rank;
+    PointToPointBatchResult result =
+        registry.submit_point_to_point_batch(std::move(batch_request));
+    if (!result.ok) {
+        return format_error_response(result.error_code, result.error_detail);
+    }
+    response_payload = std::move(result.output_payload);
+    return format_ok_response({
+        {"comm_id", std::to_string(comm_id)},
+        {"rank", std::to_string(rank)},
+        {"op_count", std::to_string(op_count)},
+    });
+}
+
 std::string handle_collective(
     CommunicatorRegistry& registry,
     CoordinatorMessage& request,
@@ -753,6 +843,8 @@ void ClusterCoordinator::handle_client(int client_fd) {
         response = handle_shrink_comm(communicator_registry_, request);
     } else if (request.command == "SEND" || request.command == "RECV") {
         response = handle_point_to_point(communicator_registry_, request, response_payload);
+    } else if (request.command == "P2P") {
+        response = handle_point_to_point_batch(communicator_registry_, request, response_payload);
     } else if (collective_command_type(request.command, collective_type)) {
         response = handle_collective(communicator_registry_, request, collective_type, response_payload);
     } else if (request.command == "BARRIER") {
