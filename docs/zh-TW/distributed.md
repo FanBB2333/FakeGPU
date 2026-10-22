@@ -38,6 +38,18 @@ FSDP `SHARD_GRAD_OP` 與 FSDP2 `reshard_after_forward=False`（`shard_grad_op`�
 的事，在 group 之間複製。與 `HYBRID_SHARD` 一樣，group 預設取 Accelerate 每台
 機器的程序數。
 
+各階段描述的是穩定狀態下的一次迭代：
+
+- forward 與 backward 已持有先前各步留下的 optimizer state 與 master 權重。
+  ZeRO-3 還持有其梯度分區，梯度累積時也保留梯度。
+- optimizer step 時，foreach Adam（torch 在 CUDA 上的預設實作）額外配置一個
+  moment 大小的暫存張量。
+- DeepSpeed ZeRO 還會建立梯度分區的 FP32 副本。stage 1 與 2 會先釋放 16 位元梯度。
+
+在一張 Ampere GPU（sm_80）上以 DeepSpeed 0.15.3 單 rank 訓練 0.6B BF16 模型，
+stage 1 到 3 的 step 峰值與預測相差不到 0.2%。這不能說明其他模型規模或 rank 數
+下有相同的精度。
+
 [版本化原生驗收矩陣](../../tests/data/research_native_evidence.json)記錄六組
 FP32/FP16/BF16 LoRA 與 attention CPU_SIM 案例、CPU 與 GPU 上 tiny Qwen3 MoE 的
 路由與梯度，以及兩個 CPU rank 執行原生 DDP 與 FSDP2。實體 TP/PP/CP/EP、多 GPU

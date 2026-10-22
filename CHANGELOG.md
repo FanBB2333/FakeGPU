@@ -418,6 +418,14 @@
   parameter shard at rest (`parameters_sharded` is true, with the new
   `parameters_resharded_after_forward` false), add the unsharded parameters
   from forward through backward and drop them for the optimizer step.
+- Training-plan phases describe a steady-state iteration. Forward and
+  backward hold the optimizer state and master weights, and ZeRO-3 forward
+  holds its gradient partition. The Adam temporary is one moment in the
+  moments' dtype, not one gradient. DeepSpeed ZeRO steps add the FP32
+  gradient partition (`fp32_gradients`), and stages 1 and 2 drop the 16-bit
+  gradients first. Single-rank DeepSpeed 0.15.3 BF16 runs of a 0.6B model now
+  match the measured step peak within 0.2%; before, plans were 15–27% low.
+  The validation example becomes 149.01 → 37.72 GiB per rank.
 
 ## v1.6.0 - 2026-10-17
 

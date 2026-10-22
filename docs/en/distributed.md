@@ -43,6 +43,20 @@ step, as FSDP does after backward on a gradient-sync step.
 group and replicates across groups. Like `HYBRID_SHARD`, the group defaults
 to Accelerate's processes per machine.
 
+The phases describe a steady-state iteration:
+
+- Forward and backward already hold the optimizer state and master weights
+  from earlier steps. ZeRO-3 also holds its gradient partition, and gradient
+  accumulation keeps the gradients.
+- At the optimizer step, foreach Adam (torch's CUDA default) adds a temporary
+  the size of one moment.
+- DeepSpeed ZeRO also builds an FP32 copy of the gradient partition. Stages 1
+  and 2 free the 16-bit gradients before it.
+
+Single-rank DeepSpeed 0.15.3 runs of a 0.6B BF16 model on an Ampere GPU (sm_80)
+matched the predicted step peak within 0.2% for stages 1 to 3. That does not
+show the same accuracy at other model sizes or rank counts.
+
 The [versioned native validation matrix](../../tests/data/research_native_evidence.json)
 records six FP32/FP16/BF16 LoRA and attention CPU_SIM cases, tiny Qwen3 MoE
 routing and gradients on CPU and GPU, and two CPU ranks running native DDP and

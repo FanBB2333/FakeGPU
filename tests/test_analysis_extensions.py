@@ -1226,6 +1226,49 @@ def test_training_plan_sizes_deepspeed_reduce_buckets_like_deepspeed(
     assert workspace == expected
 
 
+@pytest.mark.parametrize(
+    ("stage", "measured_step_peak", "step_bytes_per_parameter", "bucket"),
+    [
+        (1, 13_131_453_952, 22, 0),
+        (2, 13_131_453_952, 22, 0),
+        (3, 15_323_555_328, 24, 1_000_000_000),
+    ],
+)
+def test_training_plan_matches_measured_deepspeed_phases(
+    stage: int,
+    measured_step_peak: int,
+    step_bytes_per_parameter: int,
+    bucket: int,
+) -> None:
+    # Same single-rank runs, second iteration (torch AdamW, foreach). Every
+    # iteration starts with the BF16 parameters, FP32 master and FP32 Adam
+    # state resident (14 B/parameter; stage 3 adds its BF16 gradient buffer
+    # and bucket). The step builds an FP32 gradient partition (4 B) and Adam's
+    # sqrt(exp_avg_sq) temporary (4 B); stages 1 and 2 free the BF16
+    # gradients first.
+    parameters = _MEASURED_PARAMETERS
+    normalized = normalize_training_config(
+        {"bf16": {"enabled": True}, "zero_optimization": {"stage": stage}}
+    )
+    report = estimate_training_plan(
+        normalized, parameter_bytes=2 * parameters, activation_bytes=0
+    )
+
+    phases = {
+        phase["phase"]: phase for phase in report["memory_timeline"]["phases"]
+    }
+    forward = phases["forward"]["components"]
+    assert forward["optimizer_state"] == 8 * parameters
+    assert forward["master_parameters"] == 4 * parameters
+    assert forward.get("gradients", 0) == (2 * parameters if stage == 3 else 0)
+    assert phases["backward"]["components"]["optimizer_state"] == 8 * parameters
+    step = phases["optimizer_step"]
+    assert step["components"]["fp32_gradients"] == 4 * parameters
+    assert step["components"]["optimizer_temporary"] == 4 * parameters
+    assert step["peak_bytes"] == step_bytes_per_parameter * parameters + bucket
+    assert abs(step["peak_bytes"] - measured_step_peak) / measured_step_peak < 0.005
+
+
 def test_training_plan_reads_deepspeed_zero_defaults() -> None:
     stage2 = normalize_training_config({"zero_optimization": {"stage": 2}})
     stage3 = normalize_training_config({"zero_optimization": {"stage": 3}})

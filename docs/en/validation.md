@@ -119,7 +119,7 @@ GiB values are binary units.
 | Online serving prefix cache | Same decoder, 8 active sequences, 4K prompt + 256 generated tokens, paged BF16 KV; independent caches → one shared 1K prefix | **4.25 → 3.38 GiB** (−20.6%) | Shared/private paged-block formula |
 | Mixed chat/completion serving | Same decoder; prompts 4K/8K/2K and generation 256/512/1024; independent KV → two chat requests sharing a 1K system prefix | **1.97 → 1.84 GiB** decode KV (−6.3%) | Heterogeneous request-set formula and chat/RAG matrix |
 | Speculative target calls | 5 draft tokens per verification step and an independent 70% per-token acceptance assumption | **1.00 → 2.94** expected output tokens per target step; not a throughput claim | Geometric acceptance formula plus dual-model memory tests |
-| LLM training | 8B BF16 parameters, AdamW, 4 GPUs, checkpointed activations; replicated → full shard | **134.11 → 33.99 GiB** per rank (−74.7%) | Training-plan phase model |
+| LLM training | 8B BF16 parameters, AdamW, 4 GPUs, checkpointed activations; replicated → full shard | **149.01 → 37.72 GiB** per rank (−74.7%) | Training-plan phase model |
 | Stable Diffusion v1.5 generation | 512², batch 1, FP16, CFG; all weights resident → model offload | **2.61 → 1.72 GiB** (−34.3%) | Component + phase model |
 | SDXL batch generation | 1024², batch 4, FP16, CFG; regular VAE decode → VAE slicing | **26.64 → 11.64 GiB** (−56.3%) | Sequential VAE batch-shape model |
 | SDXL high-resolution generation | 2048², batch 1, FP16, CFG; full-frame VAE → 512² VAE tiles | **26.64 → 7.92 GiB** (−70.3%) | Sequential VAE tile-shape model |

@@ -284,11 +284,31 @@ def estimate_training_plan(
     workspace = buckets["workspace_by_phase"]
     communication_workspace_bytes = max(workspace.values())
     gathered_parameter_window = buckets["gathered_parameter_window_bytes"]
+    # Foreach Adam (torch's CUDA default) allocates sqrt(exp_avg_sq), one
+    # moment's worth, in the moments' dtype.
     optimizer_temporary_bytes = (
+        gpu_optimizer_state_bytes // 2 if optimizer in {"adam", "adamw"} else 0
+    )
+    deepspeed_zero = normalized.get("framework") == "deepspeed" and zero_stage >= 1
+    # DeepSpeed ZeRO steps an FP32 copy of the gradient partition. Stages 1
+    # and 2 free the 16-bit gradients first; stage 3 keeps its gradient
+    # partition buffer from engine start.
+    fp32_gradient_bytes = (
+        gpu_master_parameter_bytes if deepspeed_zero else 0
+    )
+    persistent_gradients = deepspeed_zero and zero_stage >= 3
+    forward_gradient_bytes = (
         gpu_gradient_bytes
-        if optimizer in {"adam", "adamw"} and not offload_optimizer
+        if persistent_gradients
+        or int(normalized.get("gradient_accumulation_steps", 1) or 1) > 1
         else 0
     )
+    # Optimizer state and master weights persist across iterations, so every
+    # phase after the first optimizer step holds them.
+    resident = {
+        "optimizer_state": gpu_optimizer_state_bytes,
+        "master_parameters": gpu_master_parameter_bytes,
+    }
     timeline = [
         _phase(
             "model_load",
@@ -303,6 +323,8 @@ def estimate_training_plan(
             "forward",
             {
                 "parameters": gpu_parameter_bytes,
+                **resident,
+                "gradients": forward_gradient_bytes,
                 "activations": retained_activation_bytes,
                 "allgathered_parameters": gathered_parameter_window,
                 "communication_workspace": workspace["forward"],
@@ -312,6 +334,7 @@ def estimate_training_plan(
             "backward",
             {
                 "parameters": gpu_parameter_bytes,
+                **resident,
                 "activations": retained_activation_bytes,
                 "gradients": gpu_gradient_bytes,
                 "allgathered_parameters": gathered_parameter_window,
@@ -322,9 +345,13 @@ def estimate_training_plan(
             "optimizer_step",
             {
                 "parameters": gpu_parameter_bytes,
-                "gradients": gpu_gradient_bytes,
-                "optimizer_state": gpu_optimizer_state_bytes,
-                "master_parameters": gpu_master_parameter_bytes,
+                "gradients": (
+                    0
+                    if fp32_gradient_bytes and not persistent_gradients
+                    else gpu_gradient_bytes
+                ),
+                "fp32_gradients": fp32_gradient_bytes,
+                **resident,
                 "optimizer_temporary": optimizer_temporary_bytes,
                 "communication_workspace": workspace["optimizer_step"],
             },
