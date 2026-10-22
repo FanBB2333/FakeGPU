@@ -401,6 +401,17 @@
   the packed `F4` (2 elements per byte) and `F6_E2M3`/`F6_E3M2` (4 elements
   per 3 bytes). These checkpoints were rejected before; low-precision ones
   count as quantized storage, and FP4 storage declares 4-bit weights.
+- DeepSpeed training plans size ZeRO buckets as DeepSpeed allocates them. An
+  omitted `reduce_bucket_size` is 5e8 elements, not 5e8 bytes clamped to the
+  model. The bucket takes the model dtype's bytes, also at stage 1, is doubled
+  by `overlap_comm` and is gone at the optimizer step; stage 3 keeps one for
+  the whole run. `overlap_comm` now defaults to on for stage 3 and
+  `contiguous_gradients` to on, as in DeepSpeed. The allgather bucket no
+  longer counts, and the ZeRO-3 gathered window follows
+  `stage3_max_reuse_distance`, the prefetch bucket and
+  `stage3_max_live_parameters` (nothing on one rank). `plan-training
+  --hidden-size` resolves `auto` bucket sizes as the HF Trainer and Accelerate
+  do. FSDP plans keep their bucket heuristic.
 
 ## v1.6.0 - 2026-10-17
 

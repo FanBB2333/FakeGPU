@@ -13,6 +13,24 @@ FSDP2 `full_shard` 可向 `plan-training --parameter-shapes layout.json` 提供
 統一的 `--parameter-element-bytes`。它依原生每參數第 0 維 chunk 計算，並以最大的
 rank 編列預算。未提供形狀時使用均衡切分近似。自訂 placement 不在建模範圍內。
 
+DeepSpeed ZeRO 的 bucket 大小以元素個數計，預設值與 DeepSpeed 相同：
+`reduce_bucket_size` 與 `allgather_bucket_size` 為 5e8，`stage3_prefetch_bucket_size`
+為 5e7，`stage3_max_live_parameters` 與 `stage3_max_reuse_distance` 為 1e9。
+
+- reduce bucket 佔用元素個數乘以模型 dtype 的位元組數，模型再小也不縮減。開啟
+  `contiguous_gradients`（預設）時，stage 1 與 2 在 backward 期間持有它，並在
+  optimizer step 之前釋放；`overlap_comm` 使其加倍。stage 3 在整個執行期間持有
+  一個 bucket。
+- allgather bucket 原地寫入參數，不佔用記憶體。
+- ZeRO-3 的 gathered window 約為 `stage3_max_reuse_distance` 的一半加上 prefetch
+  bucket。單一 rank 不做 gather。
+- 設為 `auto` 的大小在傳入 `--hidden-size` 時取 HF Trainer 與 Accelerate 填入的值：
+  reduce bucket 為 `hidden_size²`，prefetch bucket 為 `0.9·hidden_size²`。未傳入時
+  使用 DeepSpeed 預設值，並在 notes 中註明。
+
+以上依據 DeepSpeed 0.15.3 與 0.19.8。FSDP 沒有 bucket 設定，FSDP 規劃仍沿用
+FakeGPU 的啟發式：每次 collective 取 `min(參數位元組數, 500 MB)`。
+
 [版本化原生驗收矩陣](../../tests/data/research_native_evidence.json)記錄六組
 FP32/FP16/BF16 LoRA 與 attention CPU_SIM 案例、CPU 與 GPU 上 tiny Qwen3 MoE 的
 路由與梯度，以及兩個 CPU rank 執行原生 DDP 與 FSDP2。實體 TP/PP/CP/EP、多 GPU

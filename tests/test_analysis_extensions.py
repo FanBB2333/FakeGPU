@@ -1142,7 +1142,9 @@ def test_training_plan_handles_accelerate_fsdp_and_auto_deepspeed_values() -> No
     )
     assert deepspeed["zero_stage"] == 3
     assert deepspeed["optimizer_offload_device"] == "cpu"
-    assert deepspeed["reduce_bucket_elements"] == 0
+    # Accelerate builds zero_optimization from zero_stage and the offload
+    # devices only, so DeepSpeed's default bucket applies.
+    assert deepspeed["reduce_bucket_elements"] == 500_000_000
 
 
 def test_training_plan_converts_deepspeed_bucket_elements_to_bytes() -> None:
@@ -1166,14 +1168,185 @@ def test_training_plan_converts_deepspeed_bucket_elements_to_bytes() -> None:
     )
 
     assert normalized["reduce_bucket_elements"] == 500_000_000
-    assert report["communication"] == {
-        "reduce_bucket_bytes": 1_000_000_000,
-        "allgather_bucket_bytes": 500_000_000,
-        "stage3_prefetch_bucket_bytes": 250_000_000,
-        "overlap_communication": False,
-        "gradient_accumulation_steps": 1,
-    }
+    communication = report["communication"]
+    assert communication["reduce_bucket_bytes"] == 1_000_000_000
+    assert communication["allgather_bucket_bytes"] == 500_000_000
+    assert communication["stage3_prefetch_bucket_bytes"] == 250_000_000
+    # DeepSpeed turns overlap_comm on by default for stage 3 only.
+    assert communication["overlap_communication"] is True
     assert report["rank_local_storage"]["communication_workspace_bytes"] == 1_000_000_000
+
+
+# Single-rank DeepSpeed 0.15.3 runs of a 596,049,920-parameter BF16 model on
+# an Ampere GPU (sm_80): torch.empty(reduce_bucket_size) BF16 buckets were
+# 1e9 B by default, 2e9 B with overlap_comm, 4e8 B at 2e8 elements and 2e9 B at
+# 1e9 elements (larger than the model), and none without contiguous_gradients.
+# Stages 1 and 2 free them before the optimizer step; stage 3 keeps one from
+# engine start, also with overlap_comm.
+_MEASURED_PARAMETERS = 596_049_920
+
+
+@pytest.mark.parametrize(
+    ("zero", "expected"),
+    [
+        ({"stage": 1}, (0, 1_000_000_000, 0)),
+        ({"stage": 1, "overlap_comm": True}, (0, 2_000_000_000, 0)),
+        ({"stage": 2}, (0, 1_000_000_000, 0)),
+        ({"stage": 2, "overlap_comm": True}, (0, 2_000_000_000, 0)),
+        ({"stage": 2, "reduce_bucket_size": 200_000_000}, (0, 400_000_000, 0)),
+        ({"stage": 2, "reduce_bucket_size": 1e9}, (0, 2_000_000_000, 0)),
+        # Without contiguous gradients each bucket is flattened into a copy.
+        ({"stage": 2, "contiguous_gradients": False}, (0, 1_000_000_000, 0)),
+        ({"stage": 3}, (1_000_000_000,) * 3),
+        ({"stage": 3, "overlap_comm": False}, (1_000_000_000,) * 3),
+        ({"stage": 3, "reduce_bucket_size": 200_000_000}, (400_000_000,) * 3),
+        ({"stage": 3, "contiguous_gradients": False}, (0, 1_000_000_000, 0)),
+    ],
+)
+def test_training_plan_sizes_deepspeed_reduce_buckets_like_deepspeed(
+    zero: dict[str, object],
+    expected: tuple[int, int, int],
+) -> None:
+    normalized = normalize_training_config(
+        {"bf16": {"enabled": True}, "zero_optimization": zero}
+    )
+    report = estimate_training_plan(
+        normalized,
+        parameter_bytes=2 * _MEASURED_PARAMETERS,
+        activation_bytes=0,
+    )
+
+    workspace = tuple(
+        phase["components"].get("communication_workspace", 0)
+        for phase in report["memory_timeline"]["phases"][1:]
+    )
+    assert workspace == expected
+
+
+def test_training_plan_reads_deepspeed_zero_defaults() -> None:
+    stage2 = normalize_training_config({"zero_optimization": {"stage": 2}})
+    stage3 = normalize_training_config({"zero_optimization": {"stage": 3}})
+
+    # DeepSpeed runtime/zero/config.py: contiguous_gradients=True, and
+    # overlap_comm=None becomes stage == 3.
+    assert stage2["contiguous_gradients"] is True
+    assert stage2["overlap_communication"] is False
+    assert stage3["overlap_communication"] is True
+    assert (
+        stage3["reduce_bucket_elements"],
+        stage3["allgather_bucket_elements"],
+        stage3["stage3_prefetch_bucket_elements"],
+        stage3["stage3_max_live_parameters"],
+        stage3["stage3_max_reuse_distance"],
+    ) == (500_000_000, 500_000_000, 50_000_000, 1_000_000_000, 1_000_000_000)
+    # The un-prefixed field names are accepted as well.
+    aliases = normalize_training_config(
+        {"zero_optimization": {"stage": 3, "prefetch_bucket_size": 7, "max_live_parameters": 9}}
+    )
+    assert aliases["stage3_prefetch_bucket_elements"] == 7
+    assert aliases["stage3_max_live_parameters"] == 9
+
+
+def test_training_plan_resolves_auto_buckets_from_hidden_size() -> None:
+    # transformers integrations/deepspeed.py and Accelerate fill "auto" with
+    # hidden_size**2 and int(0.9 * hidden_size**2).
+    normalized = normalize_training_config(
+        {
+            "bf16": {"enabled": True},
+            "zero_optimization": {
+                "stage": 3,
+                "reduce_bucket_size": "auto",
+                "stage3_prefetch_bucket_size": "auto",
+            },
+        }
+    )
+    assert normalized["reduce_bucket_elements"] == "auto"
+
+    resolved = estimate_training_plan(
+        normalized, parameter_bytes=10**9, activation_bytes=0, hidden_size=4096
+    )
+    unresolved = estimate_training_plan(
+        normalized, parameter_bytes=10**9, activation_bytes=0
+    )
+
+    assert resolved["communication"]["reduce_bucket_elements"] == 4096 * 4096
+    assert resolved["communication"]["stage3_prefetch_bucket_elements"] == int(
+        0.9 * 4096 * 4096
+    )
+    assert unresolved["communication"]["reduce_bucket_elements"] == 500_000_000
+    assert any("pass hidden_size" in note for note in unresolved["notes"])
+
+
+def test_plan_training_cli_takes_hidden_size_for_auto_buckets(tmp_path: Path) -> None:
+    from fakegpu.training_plan import main as plan_main
+
+    config = tmp_path / "ds.json"
+    output = tmp_path / "plan.json"
+    config.write_text(
+        json.dumps(
+            {"bf16": {"enabled": True}, "zero_optimization": {"stage": 2, "reduce_bucket_size": "auto"}}
+        )
+    )
+
+    assert plan_main(
+        [
+            str(config),
+            "--parameter-bytes", "2000000",
+            "--activation-bytes", "0",
+            "--hidden-size", "1024",
+            "--json", str(output),
+        ]
+    ) == 0
+    assert json.loads(output.read_text())["communication"]["reduce_bucket_bytes"] == 2 * 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    ("world_size", "parameters", "zero", "window_elements"),
+    [
+        # One rank: the gathered parameter is a view of its partition
+        # (partition_parameters.py NoGatherHandle).
+        (1, 10**10, {}, 0),
+        # Half the reuse distance stays gathered, plus the prefetch bucket.
+        (8, 10**10, {}, 550_000_000),
+        (
+            8,
+            10**10,
+            {"stage3_max_reuse_distance": 0, "stage3_max_live_parameters": 10**8},
+            50_000_000,
+        ),
+        # Prefetch stops once max_live parameters are gathered.
+        (
+            8,
+            10**10,
+            {"stage3_max_reuse_distance": 4 * 10**8, "stage3_max_live_parameters": 10**8},
+            200_000_000,
+        ),
+        # Never more than the model.
+        (8, 3 * 10**8, {}, 300_000_000),
+    ],
+)
+def test_training_plan_bounds_the_zero3_gathered_window(
+    world_size: int,
+    parameters: int,
+    zero: dict[str, object],
+    window_elements: int,
+) -> None:
+    normalized = normalize_training_config(
+        {
+            "world_size": world_size,
+            "bf16": {"enabled": True},
+            "zero_optimization": {"stage": 3, **zero},
+        }
+    )
+    report = estimate_training_plan(
+        normalized,
+        parameter_bytes=2 * parameters,
+        activation_bytes=0,
+    )
+
+    assert report["communication"]["gathered_parameter_window_elements"] == window_elements
+    forward = report["memory_timeline"]["phases"][1]["components"]
+    assert forward.get("allgathered_parameters", 0) == 2 * window_elements
 
 
 @pytest.mark.parametrize(

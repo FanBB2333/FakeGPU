@@ -15,6 +15,26 @@ native per-parameter dim-0 chunks and budgets the largest rank. Without shapes,
 it falls back to a balanced-shard approximation. Custom placements are not
 modeled.
 
+DeepSpeed ZeRO bucket sizes count elements, with DeepSpeed's defaults:
+`reduce_bucket_size` and `allgather_bucket_size` 5e8, `stage3_prefetch_bucket_size`
+5e7, and `stage3_max_live_parameters` and `stage3_max_reuse_distance` 1e9.
+
+- The reduce bucket takes its element count times the model dtype's bytes,
+  however small the model is. With `contiguous_gradients` on (the default),
+  stages 1 and 2 hold it during backward and free it before the optimizer step.
+  `overlap_comm` doubles it. Stage 3 holds one bucket for the whole run.
+- The allgather bucket writes into the parameters in place and takes no memory.
+- The ZeRO-3 gathered window is about half of `stage3_max_reuse_distance` plus
+  the prefetch bucket. A single rank gathers nothing.
+- Sizes set to `auto` take the values the HF Trainer and Accelerate fill in
+  when you pass `--hidden-size`: `hidden_size²` for the reduce bucket and
+  `0.9·hidden_size²` for the prefetch bucket. Without it, the plan uses the
+  DeepSpeed default and says so in its notes.
+
+This follows DeepSpeed 0.15.3 and 0.19.8. FSDP has no bucket setting, so FSDP
+plans keep FakeGPU's heuristic of `min(parameter bytes, 500 MB)` per
+collective.
+
 The [versioned native validation matrix](../../tests/data/research_native_evidence.json)
 records six FP32/FP16/BF16 LoRA and attention CPU_SIM cases, tiny Qwen3 MoE
 routing and gradients on CPU and GPU, and two CPU ranks running native DDP and
