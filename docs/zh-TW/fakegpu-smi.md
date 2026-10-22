@@ -75,6 +75,10 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 - `--query-gpu` 與 `--query-compute-apps` 也接受 nvidia-smi 590 `--help-query-*`
   列出的全部欄位與別名，欄名與 nvidia-smi 一致。FakeGPU 未建模的欄位（如
   `utilization.gpu`、`temperature.gpu`）輸出 `[N/A]`。
+- 表格開頭與 nvidia-smi 的標題列一樣帶有 `Driver Version:` 與 `CUDA Version:`。
+  驅動版本是建模值 `570.195.03`，與 FakeGPU 原生 NVML 回報的版本一致；
+  `--query-gpu=driver_version` 輸出同一個值。在 workload 啟動前設定
+  `FAKEGPU_DRIVER_VERSION` 可建模其他版本。
 - 原生攔截也會發布 allocation 生命週期、傳輸量、kernel launch、GEMM 呼叫與 FLOP、
   相容性事件及 unsupported API 次數。`FAKEGPU_SMI_DETAIL_LIMIT` 與
   `FAKEGPU_SMI_MAX_STATE_BYTES` 分別限制保留的明細與狀態檔大小。

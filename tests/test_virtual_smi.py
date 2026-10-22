@@ -1616,3 +1616,54 @@ def test_virtual_smi_selects_pci_bus_ids_in_every_nvml_form(
         assert _csv_cells(capsys.readouterr().out.strip()) == [
             "1", "00000000:02:00.0",
         ], selector
+
+
+def test_virtual_smi_reports_a_modeled_driver_version_like_nvidia_smi(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    import re
+
+    from packaging.version import Version
+
+    monkeypatch.delenv("FAKEGPU_DRIVER_VERSION", raising=False)
+    path = tmp_path / "state.json"
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+
+    # nvidia-smi's banner reads "Driver Version: 580.178.04     CUDA Version:
+    # 13.0"; torch and vLLM collect_env parse it with these expressions.
+    assert main(["--state", str(path)]) == 0
+    table = capsys.readouterr().out
+    driver = re.search(r"Driver Version: (.*?) ", table)
+    assert driver is not None and driver.group(1) == "570.195.03"
+    assert "Driver Version: 570.195.03 (modeled)" in table
+    assert re.search(r"CUDA Version:\s*(\d+\.\d+)", table)
+
+    # --query-gpu=driver_version is a parseable version, as on a real GPU.
+    assert main([
+        "--state", str(path), "--query-gpu=driver_version",
+        "--format=csv,noheader",
+    ]) == 0
+    assert Version(capsys.readouterr().out.strip()) == Version("570.195.3")
+
+    assert main(["--state", str(path), "-q"]) == 0
+    assert "driver 570.195.03 (modeled)" in capsys.readouterr().out
+
+    # Older states and the native publisher wrote a "simulated" placeholder.
+    legacy = json.loads(path.read_text(encoding="utf-8"))
+    legacy["software"]["driver_version"] = "simulated"
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    assert main([
+        "--state", str(path), "--query-gpu=driver_version",
+        "--format=csv,noheader",
+    ]) == 0
+    assert capsys.readouterr().out.strip() == "570.195.03"
+
+    monkeypatch.setenv("FAKEGPU_DRIVER_VERSION", "550.54.15")
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+    assert main([
+        "--state", str(path), "--query-gpu=driver_version",
+        "--format=csv,noheader",
+    ]) == 0
+    assert capsys.readouterr().out.strip() == "550.54.15"

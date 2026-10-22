@@ -55,6 +55,11 @@
 - Mixed-precision training plans size Adam and momentum state in FP32 next
   to the master copy, as DeepSpeed and PyTorch AMP keep it: 4 more bytes per
   parameter than before.
+- `fakegpu nvidia-smi` reports a modeled driver version, `570.195.03` (the
+  one FakeGPU's native NVML returns), instead of `simulated`, so
+  `--query-gpu=driver_version` parses as a version. The table banner carries
+  `Driver Version:` next to `CUDA Version:`, where torch and vLLM
+  `collect_env` look for it. `FAKEGPU_DRIVER_VERSION` still overrides it.
 
 ### Fixed
 

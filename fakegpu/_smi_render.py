@@ -27,7 +27,11 @@ from ._smi_query import (
     _query_timestamp,
     _query_value,
 )
-from ._smi_state import DEFAULT_STALE_AFTER_SECONDS, build_inventory
+from ._smi_state import (
+    DEFAULT_STALE_AFTER_SECONDS,
+    MODELED_DRIVER_VERSION,
+    build_inventory,
+)
 
 
 def render_table(
@@ -56,10 +60,19 @@ def render_table(
             for item in inventory["runtimes"]
         }
     )
+    driver_versions = sorted(
+        {
+            str(item["software"].get("driver_version") or MODELED_DRIVER_VERSION)
+            for item in inventory["runtimes"]
+        }
+    ) or [MODELED_DRIVER_VERSION]
+    # nvidia-smi's banner carries "Driver Version: X " and "CUDA Version: Y";
+    # torch and vLLM collect_env read them with r"Driver Version: (.*?) ".
     lines = [
         "FakeGPU-SMI (simulated CUDA telemetry)",
         (
             f"FakeGPU Version: {', '.join(versions) if versions else 'unknown'}"
+            f" | Driver Version: {', '.join(driver_versions)} (modeled)"
             f" | CUDA Version: "
             f"{', '.join(cuda_versions) if cuda_versions else 'N/A'}"
             " | Hardware-only telemetry: N/A"
@@ -668,7 +681,8 @@ def _runtime_detail_lines(item: Mapping[str, Any]) -> list[str]:
                 f"Python {software.get('python_version') or 'N/A'}, "
                 f"PyTorch {software.get('torch_version') or 'N/A'}, "
                 f"CUDA {software.get('cuda_version') or 'N/A'}, "
-                f"driver {software.get('driver_version') or 'N/A'}, "
+                f"driver {software.get('driver_version') or 'N/A'}"
+                f"{' (modeled)' if software.get('driver_version_source') == 'modeled_default' else ''}, "
                 f"platform {software.get('platform') or 'N/A'}"
             ),
             (

@@ -82,6 +82,11 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   of nvidia-smi 590's `--help-query-*` lists, headed by nvidia-smi's column
   names. Fields FakeGPU does not model, such as `utilization.gpu` or
   `temperature.gpu`, print `[N/A]`.
+- The table's first lines carry `Driver Version:` and `CUDA Version:` like
+  nvidia-smi's banner. The driver version is a modeled `570.195.03`, the
+  version FakeGPU's native NVML reports, and `--query-gpu=driver_version`
+  prints the same value. Set `FAKEGPU_DRIVER_VERSION` before the workload
+  starts to model another one.
 - Native interception also publishes allocation lifetime, transfer volume,
   kernel launches, GEMM calls and FLOPs, compatibility events, and unsupported
   API counts. `FAKEGPU_SMI_DETAIL_LIMIT` and `FAKEGPU_SMI_MAX_STATE_BYTES` limit

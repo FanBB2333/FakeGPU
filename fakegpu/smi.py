@@ -46,6 +46,7 @@ from ._smi_render import (
 )
 from ._smi_state import (
     DEFAULT_STALE_AFTER_SECONDS,
+    MODELED_DRIVER_VERSION,
     SCHEMA_VERSION,
     _catalog_metadata,
     _discover_state_paths,
@@ -957,6 +958,7 @@ def _software_metadata() -> dict[str, Any]:
         if torch_cuda
         else "fakecuda_default"
     )
+    configured_driver = os.environ.get("FAKEGPU_DRIVER_VERSION", "").strip()
     return {
         "python_version": platform.python_version(),
         "python_implementation": platform.python_implementation(),
@@ -968,9 +970,9 @@ def _software_metadata() -> dict[str, Any]:
         ),
         "cuda_version": cuda_version,
         "cuda_version_source": cuda_source,
-        "driver_version": os.environ.get(
-            "FAKEGPU_DRIVER_VERSION",
-            "simulated",
+        "driver_version": configured_driver or MODELED_DRIVER_VERSION,
+        "driver_version_source": (
+            "FAKEGPU_DRIVER_VERSION" if configured_driver else "modeled_default"
         ),
     }
 
