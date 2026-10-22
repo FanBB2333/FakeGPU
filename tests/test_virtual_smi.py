@@ -1060,14 +1060,14 @@ def test_virtual_smi_rejects_unknown_schema(tmp_path: Path, capsys) -> None:
     path = tmp_path / "state.json"
     path.write_text(json.dumps({"schema_version": "unknown"}), encoding="utf-8")
     assert main(["--state", str(path)]) == 1
-    assert "unsupported schema" in capsys.readouterr().out
+    assert "unsupported schema" in capsys.readouterr().err
 
 
 def test_virtual_smi_rejects_non_object_state(tmp_path: Path, capsys) -> None:
     path = tmp_path / "state.json"
     path.write_text(json.dumps([]), encoding="utf-8")
     assert main(["--state", str(path)]) == 1
-    assert "state root must be an object" in capsys.readouterr().out
+    assert "state root must be an object" in capsys.readouterr().err
 
 
 def test_render_table_distinguishes_hosts_profiles_and_stages() -> None:
@@ -1667,3 +1667,22 @@ def test_virtual_smi_reports_a_modeled_driver_version_like_nvidia_smi(
         "--format=csv,noheader",
     ]) == 0
     assert capsys.readouterr().out.strip() == "550.54.15"
+
+
+def test_virtual_smi_writes_state_warnings_to_stderr(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    SmiStatePublisher(tmp_path / "good.json", _snapshot).publish_once(running=True)
+    (tmp_path / "bad.json").write_text("{not json", encoding="utf-8")
+
+    # nvidia-smi prints only its report on stdout. Line counters such as
+    # MONAI's nnunetv2 runner and DeepSpeed's test helper count
+    # `nvidia-smi -L` lines to find the number of GPUs.
+    for view in (["-L"], [], ["-q"], ["topo", "-m"], ["--query-gpu=index", "--format=csv,noheader"]):
+        assert main([*view, "--state-dir", str(tmp_path)]) == 0
+        captured = capsys.readouterr()
+        assert "warning" not in captured.out, view
+        assert "bad.json" in captured.err, view
+    assert main(["-L", "--state-dir", str(tmp_path)]) == 0
+    assert len(capsys.readouterr().out.splitlines()) == 1

@@ -798,20 +798,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else:
                     print(json.dumps(payload, sort_keys=True))
             elif args.list_gpus:
-                print(render_gpu_list(inventory, errors=errors))
+                print(render_gpu_list(inventory))
             elif args.detail:
-                print(render_detail(inventory, errors=errors))
+                print(render_detail(inventory))
             elif args.view == "topo":
-                print(render_topology_matrix(inventory, errors=errors))
+                print(render_topology_matrix(inventory))
             elif args.view == "nvlink":
-                print(render_nvlink_status(inventory, errors=errors))
+                print(render_nvlink_status(inventory))
             elif args.view == "events":
-                print(render_health_events(inventory, errors=errors))
+                print(render_health_events(inventory))
             elif args.view == "mig":
                 print(
                     render_mig_view(
                         inventory,
-                        errors=errors,
                         instance_kind=(
                             "gpu"
                             if args.list_gpu_instances
@@ -847,13 +846,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(
                     render_table(
                         states,
-                        errors=errors,
                         device_selectors=selectors,
                         stale_after_seconds=args.stale_after_seconds,
                         inventory=inventory,
                     )
                 )
             sys.stdout.flush()
+            if not args.json:
+                # nvidia-smi's stdout carries only its report; line counters
+                # such as `nvidia-smi -L | wc -l` must not count warnings.
+                for error in errors:
+                    print(f"warning: {error}", file=sys.stderr)
 
             refresh += 1
             if args.loop is None:

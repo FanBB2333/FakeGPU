@@ -37,7 +37,6 @@ from ._smi_state import (
 def render_table(
     states: Sequence[dict[str, Any]],
     *,
-    errors: Sequence[str] = (),
     device_selectors: Sequence[str] = (),
     stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
     inventory: Mapping[str, Any] | None = None,
@@ -131,16 +130,10 @@ def render_table(
                 f"{_table_cell(item['tracking_confidence'])} | "
                 f"{item['status']} | {_format_age(item['age_seconds'])} |"
             )
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 
-def render_gpu_list(
-    inventory: Mapping[str, Any],
-    *,
-    errors: Sequence[str] = (),
-) -> str:
+def render_gpu_list(inventory: Mapping[str, Any]) -> str:
     lines = []
     for item in inventory.get("devices") or []:
         lines.append(
@@ -162,16 +155,10 @@ def render_gpu_list(
             )
     if not lines:
         lines.append("No published FakeCUDA GPUs found.")
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 
-def render_topology_matrix(
-    inventory: Mapping[str, Any],
-    *,
-    errors: Sequence[str] = (),
-) -> str:
+def render_topology_matrix(inventory: Mapping[str, Any]) -> str:
     devices = list(inventory.get("devices") or [])
     lines = ["FakeGPU modeled topology matrix"]
     if not devices:
@@ -276,16 +263,10 @@ def render_topology_matrix(
                 ),
             ]
         )
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 
-def render_nvlink_status(
-    inventory: Mapping[str, Any],
-    *,
-    errors: Sequence[str] = (),
-) -> str:
+def render_nvlink_status(inventory: Mapping[str, Any]) -> str:
     devices = list(inventory.get("devices") or [])
     lines = [
         "FakeGPU modeled NVLink status",
@@ -325,15 +306,12 @@ def render_nvlink_status(
                 f"  Link {link['link']}: Active -> {remote}, "
                 f"{_format_gbps(link['bandwidth_gbps'])} GB/s"
             )
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 
 def render_mig_view(
     inventory: Mapping[str, Any],
     *,
-    errors: Sequence[str] = (),
     instance_kind: str = "all",
 ) -> str:
     devices = list(inventory.get("devices") or [])
@@ -402,16 +380,10 @@ def render_mig_view(
                     "memory tracking "
                     f"{instance['memory_tracking']}"
                 )
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 
-def render_health_events(
-    inventory: Mapping[str, Any],
-    *,
-    errors: Sequence[str] = (),
-) -> str:
+def render_health_events(inventory: Mapping[str, Any]) -> str:
     records = _health_event_records(inventory)
     maximum_severity = _maximum_fault_severity(records)
     rank = FAULT_SEVERITY_RANK.get(maximum_severity, 0)
@@ -471,8 +443,6 @@ def render_health_events(
             "Some modeled fault details were omitted by "
             "FAKEGPU_SMI_DETAIL_LIMIT."
         )
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 
@@ -601,11 +571,7 @@ def _health_event_records(
     return records
 
 
-def render_detail(
-    inventory: Mapping[str, Any],
-    *,
-    errors: Sequence[str] = (),
-) -> str:
+def render_detail(inventory: Mapping[str, Any]) -> str:
     lines = ["FakeGPU-SMI detailed report"]
     runtimes = list(inventory.get("runtimes") or [])
     if runtimes:
@@ -618,8 +584,6 @@ def render_detail(
         lines.append("No published FakeCUDA GPUs found.")
     for item in devices:
         lines.extend(_device_detail_lines(item))
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 

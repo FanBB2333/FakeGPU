@@ -60,6 +60,9 @@
   `--query-gpu=driver_version` parses as a version. The table banner carries
   `Driver Version:` next to `CUDA Version:`, where torch and vLLM
   `collect_env` look for it. `FAKEGPU_DRIVER_VERSION` still overrides it.
+- `fakegpu nvidia-smi` writes warnings about unreadable state files to
+  stderr instead of appending them to the report, so `nvidia-smi -L | wc -l`
+  counts GPUs only. Queries report them too.
 
 ### Fixed
 
