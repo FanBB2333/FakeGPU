@@ -346,3 +346,138 @@ def test_bridge_power_fields_follow_power_queries(tmp_path: Path) -> None:
     )
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout.strip().splitlines()[-1]) == [["error", 3], 400000, [[3, 0], [0, 400000]]]
+
+
+def _native(tmp_path: Path, body: str, **environment: str):
+    """Run ``body`` against the native libraries through ctypes alone, without
+    pynvml (which would call nvmlInit first); return its ``result``."""
+    suffix = ".dylib" if sys.platform == "darwin" else ".so.1"
+    runtime_suffix = ".dylib" if sys.platform == "darwin" else ".so.12"
+    code = textwrap.dedent(
+        """
+        import ctypes, json
+        nvml = ctypes.CDLL({nvml!r}, mode=ctypes.RTLD_GLOBAL)
+        cuda = ctypes.CDLL({cuda!r}, mode=ctypes.RTLD_GLOBAL)
+        cudart = ctypes.CDLL({cudart!r}, mode=ctypes.RTLD_GLOBAL)
+        nvml.nvmlErrorString.restype = ctypes.c_char_p
+        result = None
+        """
+    ).format(
+        nvml=str(LIBRARY),
+        cuda=str(BUILD_DIR / ("libcuda" + suffix)),
+        cudart=str(BUILD_DIR / ("libcudart" + runtime_suffix)),
+    ) + textwrap.dedent(body) + "\nprint(json.dumps(result))\n"
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith(("FAKEGPU_", "CUDA_VISIBLE_DEVICES"))
+    }
+    env.update(
+        FAKEGPU_HOME=str(tmp_path), FAKEGPU_MACHINE="off", FAKEGPU_TERMINAL_REPORT="0",
+        FAKEGPU_REPORT_PATH=str(tmp_path / "report.json"), **environment,
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path, env=env, text=True, capture_output=True, timeout=60
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout.strip().splitlines()[-1])
+
+
+def test_nvml_requires_init_and_counts_init_calls(tmp_path: Path) -> None:
+    # Measured on driver 580: before nvmlInit and after the last matching
+    # nvmlShutdown every query returns NVML_ERROR_UNINITIALIZED (1), even with
+    # invalid arguments; nvmlSystemGetNVMLVersion and nvmlErrorString work
+    # without initialization; each nvmlInit needs its own nvmlShutdown.
+    result = _native(
+        tmp_path,
+        """
+        count = ctypes.c_uint()
+        version = ctypes.create_string_buffer(80)
+        def query():
+            return nvml.nvmlDeviceGetCount_v2(ctypes.byref(count))
+        result = [
+            query(), nvml.nvmlDeviceGetCount_v2(None), nvml.nvmlSystemGetDriverVersion(version, 80),
+            nvml.nvmlSystemGetNVMLVersion(version, 80), nvml.nvmlShutdown(),
+            nvml.nvmlInit_v2(), nvml.nvmlInit_v2(), nvml.nvmlShutdown(), query(),
+            nvml.nvmlShutdown(), query(), nvml.nvmlShutdown(),
+            nvml.nvmlErrorString(1).decode(),
+        ]
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="2",
+    )
+    assert result == [1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 1, "Uninitialized"]
+
+
+def test_nvml_error_strings_match_the_driver(tmp_path: Path) -> None:
+    # Texts returned by libnvidia-ml (driver 580) for every defined code.
+    result = _native(
+        tmp_path,
+        "result = [nvml.nvmlErrorString(code).decode() for code in (0, 4, 5, 9, 15, 17, 18, 19, 20, 25, 28, 30, 100, 999)]",
+    )
+    assert result == [
+        "Success", "Insufficient Permissions", "Already Initialized", "Driver Not Loaded", "GPU is lost",
+        "GPU access blocked by the operating system", "Driver/library version mismatch",
+        "In use by another client", "Insufficient Memory", "Argument version mismatch",
+        "No supported GPUs were found", "Reset type is not supported for given device",
+        "Unknown Error", "Unknown Error",
+    ]
+
+
+def test_nvml_versions_match_the_cuda_driver(tmp_path: Path) -> None:
+    # One modeled driver: the NVML version is "<CUDA major>.<driver version>"
+    # and nvmlSystemGetCudaDriverVersion equals cuDriverGetVersion.
+    result = _native(
+        tmp_path,
+        """
+        assert nvml.nvmlInit_v2() == 0
+        driver, library = ctypes.create_string_buffer(80), ctypes.create_string_buffer(80)
+        nvml.nvmlSystemGetDriverVersion(driver, 80)
+        nvml.nvmlSystemGetNVMLVersion(library, 80)
+        nvml_cuda, cuda_version = ctypes.c_int(), ctypes.c_int()
+        nvml.nvmlSystemGetCudaDriverVersion_v2(ctypes.byref(nvml_cuda))
+        cuda.cuDriverGetVersion(ctypes.byref(cuda_version))
+        result = [driver.value.decode(), library.value.decode(), nvml_cuda.value, cuda_version.value]
+        nvml.nvmlShutdown()
+        """,
+    )
+    driver, library, nvml_cuda, cuda_version = result
+    assert nvml_cuda == cuda_version
+    assert library == f"{cuda_version // 1000}.{driver}"
+
+
+def test_compute_processes_list_this_process_while_it_holds_memory(tmp_path: Path) -> None:
+    # nvml.h: nvmlDeviceGetComputeRunningProcesses_v3 fills nvmlProcessInfo_t
+    # {pid, usedGpuMemory, gpuInstanceId, computeInstanceId}; a size query
+    # with too small a buffer returns NVML_ERROR_INSUFFICIENT_SIZE (7) and the
+    # needed count. Instance ids are 0xFFFFFFFF outside MIG (measured).
+    result = _native(
+        tmp_path,
+        """
+        import os
+        class Info(ctypes.Structure):
+            _fields_ = [("pid", ctypes.c_uint), ("used", ctypes.c_ulonglong),
+                        ("gi", ctypes.c_uint), ("ci", ctypes.c_uint)]
+        assert nvml.nvmlInit_v2() == 0
+        handle = ctypes.c_void_p()
+        nvml.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle))
+        def processes():
+            count = ctypes.c_uint(0)
+            size_query = nvml.nvmlDeviceGetComputeRunningProcesses_v3(handle, ctypes.byref(count), None)
+            infos = (Info * 4)()
+            listed = ctypes.c_uint(4)
+            rc = nvml.nvmlDeviceGetComputeRunningProcesses_v3(handle, ctypes.byref(listed), infos)
+            return [size_query, count.value, rc,
+                    [[i.pid == os.getpid(), i.used, i.gi, i.ci] for i in infos[:listed.value]]]
+        cudart.cudaMalloc.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_size_t]
+        cudart.cudaFree.argtypes = [ctypes.c_void_p]
+        before = processes()
+        pointer = ctypes.c_void_p()
+        assert cudart.cudaMalloc(ctypes.byref(pointer), 1 << 20) == 0
+        during = processes()
+        cudart.cudaFree(pointer)
+        result = [before, during, processes()]
+        nvml.nvmlShutdown()
+        """,
+        FAKEGPU_PROFILE="a100", FAKEGPU_DEVICE_COUNT="1",
+    )
+    idle = [0, 0, 0, []]
+    assert result == [idle, [7, 1, 0, [[True, 1 << 20, 0xFFFFFFFF, 0xFFFFFFFF]]], idle]

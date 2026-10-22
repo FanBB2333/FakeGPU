@@ -70,6 +70,9 @@
 - Native `cuMemGetInfo` and `cudaMemGetInfo` leave a modeled CUDA context
   out of free memory, `FAKEGPU_CUDA_CONTEXT_BYTES` (default 601.5 MiB), as
   FakeCUDA does.
+- Native CUDA and NVML report one modeled driver: version 570.195.03, NVML
+  version 12.570.195.03, and CUDA 12.8 from both `cuDriverGetVersion` and
+  `nvmlSystemGetCudaDriverVersion`.
 - Freeing a pointer FakeGPU never allocated with `cudaFree`, `cuMemFree`,
   `cudaFreeHost` or `cuMemFreeHost` still succeeds by default, but now
   follows `FAKEGPU_UNSUPPORTED_API`: `warn` prints a warning and `error`
@@ -78,6 +81,9 @@
 - Native CUDA IPC returns not supported, because simulated memory cannot be
   opened by another process. `cuIpcOpenMemHandle` takes its handle by value
   and `cuIpcOpenMemHandle_v2` is exported.
+- Native NVML counts `nvmlInit` calls. Queries return
+  `NVML_ERROR_UNINITIALIZED` before the first `nvmlInit` and after the
+  matching last `nvmlShutdown`, as the driver does.
 
 ### Fixed
 
@@ -432,6 +438,9 @@
   inactive until retained and keep their flags; host registration tracks
   ranges and their flags; pointer attributes describe unregistered,
   registered, pinned and VMM memory.
+- Native NVML lists the calling process in
+  `nvmlDeviceGetComputeRunningProcesses` while it holds simulated device
+  memory, and `nvmlErrorString` returns the driver's text for every code.
 
 ## v1.6.0 - 2026-10-17
 
