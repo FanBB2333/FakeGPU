@@ -121,6 +121,31 @@ bool is_virtual_device(CUdevice dev) {
     return dev >= 0 && dev < GlobalState::instance().get_device_count();
 }
 
+// cuInit's answer when CUDA_VISIBLE_DEVICES leaves no device (measured on the
+// real driver: "", "-1" and "7,0" give CUDA_ERROR_NO_DEVICE; "0,0" gives
+// CUDA_ERROR_INVALID_DEVICE). Calls that need an initialized driver then
+// return CUDA_ERROR_NOT_INITIALIZED.
+CUresult simulated_init_result() {
+    GlobalState& state = GlobalState::instance();
+    state.initialize();
+    switch (state.cuda_visibility()) {
+        case GlobalState::CudaVisibility::NoDevice:
+            return CUDA_ERROR_NO_DEVICE;
+        case GlobalState::CudaVisibility::InvalidDevice:
+            return CUDA_ERROR_INVALID_DEVICE;
+        case GlobalState::CudaVisibility::Visible:
+        default:
+            return CUDA_SUCCESS;
+    }
+}
+
+// The device's PCI address, from the bus id NVML and the SMI state report.
+PciAddress device_pci_address(CUdevice dev) {
+    PciAddress address;
+    parse_pci_address(GlobalState::instance().get_device(dev).pci_bus_id, address);
+    return address;
+}
+
 // Device ordinal to pass to the real driver: virtual devices map onto the
 // physical ones in hybrid mode; passthrough already uses physical ordinals.
 CUdevice real_device(CUdevice dev) {
@@ -607,8 +632,9 @@ CUresult cuInit(unsigned int Flags) {
         return CudaDriverPassthrough::instance().cuInit(Flags);
     }
 
-    FGPU_LOG("[FakeCUDA-Driver] cuInit completed successfully (fake)\n");
-    return CUDA_SUCCESS;
+    const CUresult result = simulated_init_result();
+    FGPU_LOG("[FakeCUDA-Driver] cuInit (fake) returning %d\n", result);
+    return result;
 }
 
 CUresult cuDriverGetVersion(int *driverVersion) {
@@ -636,7 +662,7 @@ CUresult cuDeviceGetCount(int *count) {
         return CudaDriverPassthrough::instance().cuDeviceGetCount(count);
     }
 
-    GlobalState::instance().initialize();
+    if (simulated_init_result() != CUDA_SUCCESS) return CUDA_ERROR_NOT_INITIALIZED;
     *count = GlobalState::instance().get_device_count();
     FGPU_LOG("[FakeCUDA-Driver] cuDeviceGetCount (fake) returning %d\n", *count);
     return CUDA_SUCCESS;
@@ -650,6 +676,7 @@ CUresult cuDeviceGet(CUdevice *device, int ordinal) {
         return CudaDriverPassthrough::instance().cuDeviceGet(device, ordinal);
     }
 
+    if (simulated_init_result() != CUDA_SUCCESS) return CUDA_ERROR_NOT_INITIALIZED;
     if (!is_virtual_device(ordinal)) return CUDA_ERROR_INVALID_DEVICE;
 
     *device = ordinal;
@@ -760,11 +787,15 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
         case CU_DEVICE_ATTRIBUTE_ECC_ENABLED:
             *pi = 1;
             break;
+        // The PCI address of the bus id NVML and the SMI state report. The
+        // "device ID" is the slot number in domain:bus:device.function (cuda.h:
+        // "PCI device (also known as slot) identifier"), 0 on real GPUs, not
+        // the vendor product id NVML returns as pciDeviceId.
         case CU_DEVICE_ATTRIBUTE_PCI_BUS_ID:
-            *pi = dev + 1;  // The synthetic bus NVML and the SMI state report (index + 1)
+            *pi = static_cast<int>(device_pci_address(dev).bus);
             break;
         case CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID:
-            *pi = static_cast<int>(device.profile.pci_device_id);
+            *pi = static_cast<int>(device_pci_address(dev).device);
             break;
         case CU_DEVICE_ATTRIBUTE_TCC_DRIVER:
             *pi = 0;
@@ -788,7 +819,7 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = 1;
             break;
         case CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID:
-            *pi = 0;
+            *pi = static_cast<int>(device_pci_address(dev).domain);
             break;
         case CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR:
             *pi = device.profile.compute_major;
@@ -950,8 +981,12 @@ CUresult cuDeviceGetUuid(CUuuid *uuid, CUdevice dev) {
 
     if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
 
-    memset(uuid->bytes, 0, sizeof(uuid->bytes));
-    memcpy(uuid->bytes, &dev, std::min(sizeof(dev), sizeof(uuid->bytes)));
+    // The 16 bytes of the UUID nvmlDeviceGetUUID prints for the same device
+    // (on the real driver the bytes are the string's hex digits in order). A
+    // MIG instance selected by CUDA_VISIBLE_DEVICES reports its MIG UUID.
+    unsigned char bytes[16] = {};
+    if (!uuid_string_bytes(GlobalState::instance().get_device(dev).uuid, bytes)) return CUDA_ERROR_INVALID_DEVICE;
+    memcpy(uuid->bytes, bytes, sizeof(bytes));
     return CUDA_SUCCESS;
 }
 
@@ -1811,8 +1846,10 @@ CUresult cuDeviceCanAccessPeer(int *canAccessPeer, CUdevice dev, CUdevice peerDe
     if (dev < 0 || dev >= state.get_device_count() || peerDev < 0 || peerDev >= state.get_device_count()) {
         return CUDA_ERROR_INVALID_DEVICE;
     }
-    // Follows the modeled NVLink/PCIe topology; without one every pair has access.
-    *canAccessPeer = state.snapshot_device_topology().can_access_peer(dev, peerDev) ? 1 : 0;
+    // Follows the modeled NVLink/PCIe topology (physical indices); without
+    // one every pair has access.
+    *canAccessPeer = state.snapshot_device_topology().can_access_peer(
+        state.physical_index(dev), state.physical_index(peerDev)) ? 1 : 0;
     return CUDA_SUCCESS;
 }
 
@@ -1842,9 +1879,14 @@ CUresult cuDeviceGetPCIBusId(char *pciBusId, int len, CUdevice dev) {
         return real_fn(pciBusId, len, real_device(dev));
     }
 
-    // Same synthetic bus as NVML and the SMI state (index + 1).
-    snprintf(pciBusId, len, "0000:%02x:00.0", dev + 1);
-    return CUDA_SUCCESS;
+    if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
+    // NVML's busIdLegacy spelling: a four-digit domain and uppercase hex, as
+    // the real driver prints it. A buffer too short for it receives the
+    // truncated string and CUDA_ERROR_INVALID_VALUE, as the real driver does
+    // for len 8.
+    const std::string id = cuda_pci_bus_id(device_pci_address(dev));
+    snprintf(pciBusId, static_cast<size_t>(len), "%s", id.c_str());
+    return id.size() < static_cast<size_t>(len) ? CUDA_SUCCESS : CUDA_ERROR_INVALID_VALUE;
 }
 
 CUresult cuDeviceGetByPCIBusId(CUdevice *dev, const char *pciBusId) {
@@ -1856,8 +1898,21 @@ CUresult cuDeviceGetByPCIBusId(CUdevice *dev, const char *pciBusId) {
         return real_fn(dev, pciBusId);
     }
 
-    *dev = 0;  // Default to device 0
-    return CUDA_SUCCESS;
+    // The real driver accepts every form cuda.h lists, in either case and
+    // with a 4- or 8-digit domain; a bus no visible device has is
+    // CUDA_ERROR_INVALID_DEVICE and leaves *dev untouched.
+    PciAddress requested;
+    if (!parse_pci_address(pciBusId, requested)) return CUDA_ERROR_INVALID_VALUE;
+    if (simulated_init_result() != CUDA_SUCCESS) return CUDA_ERROR_NOT_INITIALIZED;
+    for (int ordinal = 0; ordinal < GlobalState::instance().get_device_count(); ++ordinal) {
+        const PciAddress address = device_pci_address(ordinal);
+        if (address.domain == requested.domain && address.bus == requested.bus &&
+            address.device == requested.device && address.function == requested.function) {
+            *dev = ordinal;
+            return CUDA_SUCCESS;
+        }
+    }
+    return CUDA_ERROR_INVALID_DEVICE;
 }
 
 CUresult cuModuleLoad(CUmodule *module, const char *fname) {
@@ -2691,12 +2746,15 @@ CUresult cuDeviceGetP2PAttribute(int *value, int attrib, CUdevice srcDevice, CUd
         dstDevice < 0 || dstDevice >= state.get_device_count() || srcDevice == dstDevice) {
         return CUDA_ERROR_INVALID_DEVICE;
     }
+    // The topology is indexed by physical device, not CUDA ordinal.
+    const int source = state.physical_index(srcDevice);
+    const int target = state.physical_index(dstDevice);
     const ModeledDeviceTopology topology = state.snapshot_device_topology();
-    const bool access = topology.can_access_peer(srcDevice, dstDevice);
-    const bool nvlink = topology.nvlink_links(srcDevice, dstDevice) > 0;
+    const bool access = topology.can_access_peer(source, target);
+    const bool nvlink = topology.nvlink_links(source, target) > 0;
     switch (attrib) {
         case 0x01:  // CU_DEVICE_P2P_ATTRIBUTE_PERFORMANCE_RANK: lower is faster
-            *value = !access || nvlink ? 0 : topology.pcie_relation(srcDevice, dstDevice) == "PIX" ? 1 : 2;
+            *value = !access || nvlink ? 0 : topology.pcie_relation(source, target) == "PIX" ? 1 : 2;
             break;
         case 0x02:  // CU_DEVICE_P2P_ATTRIBUTE_ACCESS_SUPPORTED
         case 0x04:  // CU_DEVICE_P2P_ATTRIBUTE_CUDA_ARRAY_ACCESS_SUPPORTED

@@ -162,6 +162,10 @@ def load_live_states(
     return list(latest.values()), errors
 
 
+# A simulated GPU's identity. The native core derives the same strings
+# (src/core/device.cpp synthetic_gpu_uuid, synthetic_pci_bus_id; MIG UUIDs
+# in _smi_environment._synthetic_mig_uuid), so CUDA,
+# NVML, nvidia-smi, torch and the machine daemon agree on which GPU is which.
 def _synthetic_uuid(host: str, index: int, profile_id: str) -> str:
     identity = uuid.uuid5(
         uuid.NAMESPACE_DNS,
@@ -170,9 +174,18 @@ def _synthetic_uuid(host: str, index: int, profile_id: str) -> str:
     return f"GPU-{identity}"
 
 
+def _synthetic_pci_address(index: int) -> tuple[int, int, int]:
+    """(domain, bus, device) of the simulated GPU at physical ``index``."""
+
+    domain, bus = divmod(max(0, index), 255)
+    return domain, bus + 1, 0
+
+
 def _synthetic_pci_bus_id(index: int) -> str:
-    domain, bus = divmod(index, 255)
-    return f"{domain:08X}:{bus + 1:02X}:00.0"
+    """NVML's ``busId`` spelling, ``NVML_DEVICE_PCI_BUS_ID_FMT`` (uppercase)."""
+
+    domain, bus, device = _synthetic_pci_address(index)
+    return f"{domain:08X}:{bus:02X}:{device:02X}.0"
 
 
 def _integer_mapping(value: Any) -> dict[str, int]:

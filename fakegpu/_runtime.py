@@ -178,6 +178,24 @@ def _init_fakecuda_runtime(
     if effective_device_count is not None:
         os.environ["FAKEGPU_DEVICE_COUNT"] = str(effective_device_count)
 
+    # CUDA_VISIBLE_DEVICES picks among the simulated GPUs as CUDA does among
+    # real ones. ``fakegpu run`` has already applied it when it sets
+    # FAKEGPU_PHYSICAL_INDICES, so the layout is not filtered twice.
+    if "FAKEGPU_PHYSICAL_INDICES" not in os.environ:
+        visible_count = _apply_cuda_visible_devices(effective_device_count)
+        if visible_count == 0:
+            import warnings
+
+            warnings.warn(
+                "fakegpu: CUDA_VISIBLE_DEVICES="
+                f"{os.environ.get('CUDA_VISIBLE_DEVICES')!r} hides every simulated GPU; "
+                "torch.cuda is left unpatched, as CUDA would report no device",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            return RuntimeInitResult(runtime="fakecuda", backend="none")
+        effective_device_count = visible_count
+
     # Resolve topology only after the daemon and explicit arguments have
     # selected the devices; an inherited platform must see that final layout.
     if platform is not None or os.environ.get("FAKEGPU_PLATFORM"):
@@ -187,6 +205,35 @@ def _init_fakecuda_runtime(
 
     patch_result = patch_torch(num_devices=effective_device_count)
     return RuntimeInitResult(runtime="fakecuda", backend=patch_result.backend)
+
+
+def _apply_cuda_visible_devices(device_count: int | None) -> int | None:
+    """Narrow FAKEGPU_PROFILES to the GPUs ``CUDA_VISIBLE_DEVICES`` leaves visible.
+
+    Returns the visible GPU count, or ``device_count`` unchanged when the mask
+    is unset or keeps every GPU in order. The visible GPUs keep their
+    physical indices in FAKEGPU_PHYSICAL_INDICES, so nvidia-smi and the
+    reports list them as on a real machine.
+    """
+
+    mask = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if mask is None:
+        return device_count
+    from ._profiles import _resolve_per_device_profiles
+    from ._run_bootstrap import PHYSICAL_INDICES_ENV, visible_gpus
+
+    count = device_count if device_count is not None else int(os.environ.get("FAKEGPU_DEVICE_COUNT") or 8)
+    layout = [str(entry["profile_id"]) for entry in _resolve_per_device_profiles(count)]
+    visible = visible_gpus(",".join(layout), mask)
+    if visible is None:
+        return device_count
+    profiles, physical = visible
+    if not profiles:
+        return 0
+    os.environ["FAKEGPU_PROFILES"] = ",".join(profiles)
+    os.environ["FAKEGPU_DEVICE_COUNT"] = str(len(profiles))
+    os.environ[PHYSICAL_INDICES_ENV] = ",".join(map(str, physical))
+    return len(profiles)
 
 
 def _infer_device_count_from_devices(devices: str | Sequence[str] | None) -> int | None:

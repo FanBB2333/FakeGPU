@@ -1,15 +1,18 @@
 #include "global_state.hpp"
+#include "backend_config.hpp"
 #include "logging.hpp"
 #include "gpu_profile.hpp"
 #include "native_smi.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <dlfcn.h>
 #include <limits>
 #include <sstream>
 #include <string>
+#include <tuple>
 
 namespace fake_gpu {
 
@@ -112,6 +115,111 @@ std::vector<GpuProfile> build_default_profiles() {
     GpuProfile profile = maybe_profile.has_value() ? maybe_profile.value() : GpuProfile::A100();
     return std::vector<GpuProfile>(count, profile);
 }
+
+// CUDA_DEVICE_ORDER (CUDA Programming Guide 5.2.1.2). PCI_BUS_ID enumerates
+// in ascending PCI bus id. The default, FASTEST_FIRST, orders by a heuristic
+// NVIDIA does not publish; FakeGPU does not model it and also enumerates in
+// PCI order, which matches PCI_BUS_ID and NVML.
+std::vector<int> cuda_enumeration_order(const std::vector<Device>& devices) {
+    std::vector<int> order(devices.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = static_cast<int>(i);
+    auto key = [&devices](int index) {
+        PciAddress address;
+        parse_pci_address(devices[static_cast<std::size_t>(index)].pci_bus_id, address);
+        return std::make_tuple(address.domain, address.bus, address.device, address.function);
+    };
+    std::stable_sort(order.begin(), order.end(), [&key](int a, int b) { return key(a) < key(b); });
+    return order;
+}
+
+// An index entry reads like strtoul: leading digits count and the rest is
+// ignored, so "0abc" selects device 0 (measured on the real driver). A sign
+// or no digits makes the entry invalid.
+bool parse_visible_index(const std::string& entry, std::size_t& value) {
+    std::size_t position = entry[0] == '+' ? 1 : 0;
+    if (position >= entry.size() || !std::isdigit(static_cast<unsigned char>(entry[position]))) return false;
+    value = 0;
+    for (; position < entry.size() && std::isdigit(static_cast<unsigned char>(entry[position])); ++position) {
+        value = std::min<std::size_t>(value * 10 + static_cast<std::size_t>(entry[position] - '0'), 1u << 20);
+    }
+    return true;
+}
+
+// The one device whose UUID starts with prefix; -1 when none or several do.
+template <class DeviceList>
+int unique_uuid_match(const DeviceList& candidates, const std::string& prefix) {
+    int match = -1;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        if (candidates[i].uuid.compare(0, prefix.size(), prefix) != 0) continue;
+        if (match >= 0) return -1;
+        match = static_cast<int>(i);
+    }
+    return match;
+}
+
+// The devices CUDA_VISIBLE_DEVICES selects, in mask order (CUDA Programming
+// Guide 5.2.1.1). Entries are read up to the first one that names no device,
+// so "" and "-1" select nothing. Returns false when a device is listed twice,
+// which makes CUDA initialization fail (cuInit returns
+// CUDA_ERROR_INVALID_DEVICE on the real driver for "0,0").
+bool select_visible_devices(
+    const char* mask,
+    const std::vector<int>& order,
+    std::vector<Device>& devices,
+    std::vector<Device>& mig_devices,
+    std::vector<int>& physical_out,
+    std::vector<Device*>& devices_out) {
+    std::istringstream entries{std::string(mask)};
+    std::string entry;
+    while (std::getline(entries, entry, ',')) {
+        entry = trim_copy(entry);
+        if (entry.empty()) break;
+        if (entry.rfind("MIG-", 0) == 0) {
+            // "Only single MIG instance enumeration is supported": a MIG id
+            // counts as the first entry and ends the list.
+            if (!physical_out.empty()) break;
+            Device* instance = nullptr;
+            if (entry.rfind("MIG-GPU-", 0) == 0) {
+                // Legacy MIG-GPU-<uuid>/<gpu instance>/<compute instance>.
+                const std::size_t slash = entry.find('/');
+                unsigned int gi = 0, ci = 0;
+                char tail = 0;
+                if (slash == std::string::npos ||
+                    std::sscanf(entry.c_str() + slash, "/%u/%u%c", &gi, &ci, &tail) != 2) {
+                    break;
+                }
+                const int parent = unique_uuid_match(devices, entry.substr(4, slash - 4));
+                for (Device& candidate : mig_devices) {
+                    if (parent >= 0 && candidate.parent_device_index == parent &&
+                        candidate.gpu_instance_id == gi && candidate.compute_instance_id == ci) {
+                        instance = &candidate;
+                    }
+                }
+            } else {
+                const int match = unique_uuid_match(mig_devices, entry);
+                if (match >= 0) instance = &mig_devices[static_cast<std::size_t>(match)];
+            }
+            if (instance) {
+                physical_out.push_back(instance->parent_device_index);
+                devices_out.push_back(instance);
+            }
+            break;
+        }
+        int physical = -1;
+        std::size_t position = 0;
+        if (entry.rfind("GPU-", 0) == 0) {
+            // A UUID, or enough of its beginning to name one GPU.
+            physical = unique_uuid_match(devices, entry);
+        } else if (parse_visible_index(entry, position) && position < order.size()) {
+            physical = order[position];
+        }
+        if (physical < 0) break;
+        if (std::find(physical_out.begin(), physical_out.end(), physical) != physical_out.end()) return false;
+        physical_out.push_back(physical);
+        devices_out.push_back(&devices[static_cast<std::size_t>(physical)]);
+    }
+    return true;
+}
 } // namespace
 
 GlobalState& GlobalState::instance() {
@@ -190,28 +298,79 @@ void GlobalState::initialize() {
                 instance.compute_instance_id;
         }
         device_stats.resize(devices.size());
+
+        // CUDA's view (CUDA Programming Guide 5.2.1.1). Hybrid and
+        // passthrough leave the mask to the real driver, which applies it to
+        // the physical GPUs backing the modeled ones. FAKEGPU_PHYSICAL_INDICES
+        // means a FakeCUDA parent (fakegpu.init or fakegpu run) already
+        // narrowed FAKEGPU_PROFILES to the visible GPUs.
+        const std::vector<int> order = cuda_enumeration_order(devices);
+        const char* mask = std::getenv("CUDA_VISIBLE_DEVICES");
+        if (!mask || std::getenv("FAKEGPU_PHYSICAL_INDICES") ||
+            BackendConfig::instance().mode() != FakeGpuMode::Simulate) {
+            for (int physical : order) {
+                cuda_physical.push_back(physical);
+                cuda_devices.push_back(&devices[static_cast<std::size_t>(physical)]);
+            }
+        } else if (!select_visible_devices(mask, order, devices, mig_devices, cuda_physical, cuda_devices)) {
+            cuda_physical.clear();
+            cuda_devices.clear();
+            visibility = CudaVisibility::InvalidDevice;
+        }
+        if (visibility != CudaVisibility::InvalidDevice && cuda_devices.empty()) {
+            visibility = CudaVisibility::NoDevice;
+        }
         initialized = true;
         FGPU_LOG("[GlobalState-%p] Valid devices count after init: %lu\n", this, devices.size());
     }
     ensure_native_smi_publisher();
 }
 
+namespace {
+Device& missing_device() {
+    static Device failure_dev(-1, GpuProfile::A100());
+    return failure_dev;
+}
+} // namespace
+
 int GlobalState::get_device_count() const {
-    return devices.size();
+    return static_cast<int>(cuda_devices.size());
 }
 
-Device& GlobalState::get_device(int index) {
-    // In a real scenario, check bounds
-    if (index < 0 || index >= devices.size()) {
-        static Device failure_dev(-1, GpuProfile::A100());
-        return failure_dev;
-    }
-    return devices[index];
+Device& GlobalState::get_device(int ordinal) {
+    if (ordinal < 0 || ordinal >= static_cast<int>(cuda_devices.size())) return missing_device();
+    return *cuda_devices[static_cast<std::size_t>(ordinal)];
+}
+
+GlobalState::CudaVisibility GlobalState::cuda_visibility() const {
+    return visibility;
+}
+
+int GlobalState::physical_index(int ordinal) const {
+    return physical_index_nolock(ordinal);
+}
+
+int GlobalState::get_physical_device_count() const {
+    return static_cast<int>(devices.size());
+}
+
+Device& GlobalState::get_physical_device(int index) {
+    if (index < 0 || index >= static_cast<int>(devices.size())) return missing_device();
+    return devices[static_cast<std::size_t>(index)];
+}
+
+int GlobalState::physical_index_nolock(int ordinal) const {
+    if (ordinal < 0 || ordinal >= static_cast<int>(cuda_physical.size())) return -1;
+    return cuda_physical[static_cast<std::size_t>(ordinal)];
+}
+
+int GlobalState::current_physical_nolock() const {
+    return physical_index_nolock(current_device);
 }
 
 void GlobalState::set_current_device(int device) {
     std::lock_guard<std::mutex> lock(mutex);
-    if (device >= 0 && device < static_cast<int>(devices.size())) {
+    if (device >= 0 && device < static_cast<int>(cuda_devices.size())) {
         current_device = device;
     }
 }
@@ -234,14 +393,15 @@ bool GlobalState::register_managed_allocation(void* ptr, size_t size, int device
 bool GlobalState::register_host_allocation(void* ptr, size_t size, int device) {
     std::lock_guard<std::mutex> lock(mutex);
     if (!ptr) return false;
-    if (device < 0 || device >= static_cast<int>(devices.size())) {
+    if (device < 0 || device >= static_cast<int>(cuda_devices.size())) {
         device = current_device;
     }
     if (allocations.find(ptr) != allocations.end()) return false;
 
     AllocationRecord rec;
     rec.size = size;
-    rec.device = device;
+    rec.device = physical_index_nolock(device);
+    rec.ordinal = device;
     rec.kind = AllocationKind::Host;
     allocations[ptr] = rec;
     return true;
@@ -254,11 +414,15 @@ bool GlobalState::release_allocation(void* ptr, size_t& size, int& device) {
     if (it->second.kind == AllocationKind::Host) return false;
 
     size = it->second.size;
-    device = it->second.device;
+    device = it->second.ordinal;
+    const int physical = it->second.device;
     allocations.erase(it);
 
-    devices[device].used_memory -= size;
-    DeviceRuntimeStats& stats = device_stats[device];
+    devices[physical].used_memory -= size;
+    if (Device* target = cuda_devices[static_cast<std::size_t>(device)]; target->is_mig_device) {
+        target->used_memory -= size;
+    }
+    DeviceRuntimeStats& stats = device_stats[physical];
     stats.free_calls += 1;
     saturating_add_u64(stats.free_bytes, static_cast<uint64_t>(size));
     return true;
@@ -271,7 +435,7 @@ bool GlobalState::release_host_allocation(void* ptr, size_t& size, int& device) 
     if (it->second.kind != AllocationKind::Host) return false;
 
     size = it->second.size;
-    device = it->second.device;
+    device = it->second.ordinal;
     allocations.erase(it);
     return true;
 }
@@ -283,7 +447,7 @@ bool GlobalState::get_allocation_info(void* ptr, size_t& size, int& device) cons
     if (it->second.kind == AllocationKind::Host) return false;
 
     size = it->second.size;
-    device = it->second.device;
+    device = it->second.ordinal;
     return true;
 }
 
@@ -293,7 +457,7 @@ bool GlobalState::get_allocation_info_ex(void* ptr, size_t& size, int& device, A
     if (it == allocations.end()) return false;
 
     size = it->second.size;
-    device = it->second.device;
+    device = it->second.ordinal;
     kind = it->second.kind;
     return true;
 }
@@ -320,7 +484,7 @@ std::vector<std::pair<void*, size_t>> GlobalState::snapshot_allocations() const 
 void GlobalState::record_memcpy_h2d(const void* dst_device_ptr, size_t bytes) {
     if (!dst_device_ptr || bytes == 0) return;
     std::lock_guard<std::mutex> lock(mutex);
-    const int device = resolve_device_for_ptr_nolock(dst_device_ptr, current_device);
+    const int device = resolve_device_for_ptr_nolock(dst_device_ptr, current_physical_nolock());
     DeviceRuntimeStats* stats = stats_for_device_nolock(device);
     if (!stats) return;
     stats->memcpy_h2d_calls += 1;
@@ -331,7 +495,7 @@ void GlobalState::record_memcpy_h2d(const void* dst_device_ptr, size_t bytes) {
 void GlobalState::record_memcpy_d2h(const void* src_device_ptr, size_t bytes) {
     if (!src_device_ptr || bytes == 0) return;
     std::lock_guard<std::mutex> lock(mutex);
-    const int device = resolve_device_for_ptr_nolock(src_device_ptr, current_device);
+    const int device = resolve_device_for_ptr_nolock(src_device_ptr, current_physical_nolock());
     DeviceRuntimeStats* stats = stats_for_device_nolock(device);
     if (!stats) return;
     stats->memcpy_d2h_calls += 1;
@@ -361,16 +525,18 @@ void GlobalState::record_memcpy_d2d(const void* dst_device_ptr, const void* src_
         return;
     }
 
-    const int device = (dst_device >= 0) ? dst_device : (src_device >= 0 ? src_device : current_device);
+    const int device = (dst_device >= 0) ? dst_device : (src_device >= 0 ? src_device : current_physical_nolock());
     DeviceRuntimeStats* stats = stats_for_device_nolock(device);
     if (!stats) return;
     stats->memcpy_d2d_calls += 1;
     saturating_add_u64(stats->memcpy_d2d_bytes, static_cast<uint64_t>(bytes));
 }
 
-void GlobalState::record_memcpy_peer(int dst_device, int src_device, size_t bytes) {
+void GlobalState::record_memcpy_peer(int dst_ordinal, int src_ordinal, size_t bytes) {
     if (bytes == 0) return;
     std::lock_guard<std::mutex> lock(mutex);
+    const int dst_device = physical_index_nolock(dst_ordinal);
+    const int src_device = physical_index_nolock(src_ordinal);
     if (DeviceRuntimeStats* src_stats = stats_for_device_nolock(src_device)) {
         src_stats->memcpy_peer_tx_calls += 1;
         saturating_add_u64(src_stats->memcpy_peer_tx_bytes, static_cast<uint64_t>(bytes));
@@ -394,7 +560,7 @@ void GlobalState::record_memcpy_h2h(size_t bytes) {
 void GlobalState::record_memset(const void* dst_device_ptr, size_t bytes) {
     if (!dst_device_ptr || bytes == 0) return;
     std::lock_guard<std::mutex> lock(mutex);
-    const int device = resolve_device_for_ptr_nolock(dst_device_ptr, current_device);
+    const int device = resolve_device_for_ptr_nolock(dst_device_ptr, current_physical_nolock());
     DeviceRuntimeStats* stats = stats_for_device_nolock(device);
     if (!stats) return;
     stats->memset_calls += 1;
@@ -405,7 +571,7 @@ void GlobalState::record_cublas_gemm(const void* output_device_ptr, uint64_t flo
     if (!output_device_ptr) return;
     initialize();
     std::lock_guard<std::mutex> lock(mutex);
-    const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_device);
+    const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_physical_nolock());
     DeviceRuntimeStats* stats = stats_for_device_nolock(device);
     if (!stats) return;
     stats->cublas_gemm_calls += 1;
@@ -416,7 +582,7 @@ void GlobalState::record_cublaslt_matmul(const void* output_device_ptr, uint64_t
     if (!output_device_ptr) return;
     initialize();
     std::lock_guard<std::mutex> lock(mutex);
-    const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_device);
+    const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_physical_nolock());
     DeviceRuntimeStats* stats = stats_for_device_nolock(device);
     if (!stats) return;
     stats->cublaslt_matmul_calls += 1;
@@ -425,7 +591,7 @@ void GlobalState::record_cublaslt_matmul(const void* output_device_ptr, uint64_t
 
 void GlobalState::record_kernel_launch(const std::string& kernel_name) {
     std::lock_guard<std::mutex> lock(mutex);
-    DeviceRuntimeStats* stats = stats_for_device_nolock(current_device);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(current_physical_nolock());
     if (!stats) return;
     stats->kernel_launch_total += 1;
     if (stats->kernel_launches.size() < 10000) {
@@ -439,7 +605,7 @@ void GlobalState::record_cublas_gemm_typed(const void* output_device_ptr, uint64
     if (!output_device_ptr) return;
     initialize();
     std::lock_guard<std::mutex> lock(mutex);
-    const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_device);
+    const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_physical_nolock());
     DeviceRuntimeStats* stats = stats_for_device_nolock(device);
     if (!stats) return;
     stats->cublas_gemm_calls += 1;
@@ -453,7 +619,7 @@ void GlobalState::record_cublaslt_matmul_typed(const void* output_device_ptr, ui
     if (!output_device_ptr) return;
     initialize();
     std::lock_guard<std::mutex> lock(mutex);
-    const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_device);
+    const int device = resolve_device_for_ptr_nolock(output_device_ptr, current_physical_nolock());
     DeviceRuntimeStats* stats = stats_for_device_nolock(device);
     if (!stats) return;
     stats->cublaslt_matmul_calls += 1;
@@ -463,9 +629,9 @@ void GlobalState::record_cublaslt_matmul_typed(const void* output_device_ptr, ui
     saturating_add_u64(dtype_stats.flops, flops);
 }
 
-void GlobalState::record_compat_event(int device, const std::string& operation, const std::string& dtype) {
+void GlobalState::record_compat_event(int ordinal, const std::string& operation, const std::string& dtype) {
     std::lock_guard<std::mutex> lock(mutex);
-    DeviceRuntimeStats* stats = stats_for_device_nolock(device);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(physical_index_nolock(ordinal));
     if (!stats) return;
     const std::string key = operation + ":" + dtype;
     auto& evt = stats->compat_events[key];
@@ -477,12 +643,12 @@ void GlobalState::record_compat_event(int device, const std::string& operation, 
 }
 
 bool GlobalState::record_unsupported_api(
-    int device,
+    int ordinal,
     const std::string& operation,
     const std::string& behavior,
     const std::string& policy) {
     std::lock_guard<std::mutex> lock(mutex);
-    DeviceRuntimeStats* stats = stats_for_device_nolock(device);
+    DeviceRuntimeStats* stats = stats_for_device_nolock(physical_index_nolock(ordinal));
     if (!stats) return false;
     const std::string key = operation + ":" + behavior + ":" + policy;
     auto& evt = stats->unsupported_api_events[key];
@@ -660,7 +826,10 @@ int GlobalState::resolve_device_for_ptr_nolock(const void* ptr, int fallback_dev
 
 int GlobalState::resolve_device_for_ptr(const void* ptr, int fallback_device) const {
     std::lock_guard<std::mutex> lock(mutex);
-    return resolve_device_for_ptr_nolock(ptr, fallback_device);
+    if (!ptr) return fallback_device;
+    auto it = find_allocation_nolock(ptr);
+    if (it == allocations.end() || it->second.kind == AllocationKind::Host) return fallback_device;
+    return it->second.ordinal;
 }
 
 GlobalState::DeviceRuntimeStats* GlobalState::stats_for_device_nolock(int device) {
@@ -682,16 +851,24 @@ void GlobalState::saturating_add_u64(uint64_t& target, uint64_t value) {
     }
 }
 
-bool GlobalState::register_allocation_nolock(void* ptr, size_t size, int device, AllocationKind kind) {
+bool GlobalState::register_allocation_nolock(void* ptr, size_t size, int ordinal, AllocationKind kind) {
     if (!ptr) return false;
-    if (device < 0 || device >= static_cast<int>(devices.size())) return false;
+    const int device = physical_index_nolock(ordinal);
+    if (device < 0) return false;
     if (allocations.find(ptr) != allocations.end()) return false;
 
-    Device& dev = devices[device];
-    if (dev.used_memory + size > dev.total_memory) {
+    // A MIG instance named in CUDA_VISIBLE_DEVICES has its own capacity; the
+    // bytes also count against the GPU it is part of, as NVML reports them.
+    Device& target = *cuda_devices[static_cast<std::size_t>(ordinal)];
+    if (target.used_memory + size > target.total_memory) {
         return false; // not enough fake memory
     }
+    if (target.is_mig_device) {
+        target.used_memory += size;
+        target.used_memory_peak = std::max(target.used_memory_peak, target.used_memory);
+    }
 
+    Device& dev = devices[device];
     dev.used_memory += size;
     dev.used_memory_peak = std::max(dev.used_memory_peak, dev.used_memory);
     if (DeviceRuntimeStats* stats = stats_for_device_nolock(device)) {
@@ -702,6 +879,7 @@ bool GlobalState::register_allocation_nolock(void* ptr, size_t size, int device,
     AllocationRecord rec;
     rec.size = size;
     rec.device = device;
+    rec.ordinal = ordinal;
     rec.kind = kind;
     allocations[ptr] = rec;
     return true;

@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BUILD_DIR = Path(os.environ.get("FAKEGPU_BUILD_DIR", REPO_ROOT / "build"))
 COORDINATOR_BIN = BUILD_DIR / "fakegpu-coordinator"
 LIBNCCL = BUILD_DIR / ("libnccl.dylib" if sys.platform == "darwin" else "libnccl.so")
+LIBCUDART = BUILD_DIR / ("libcudart.dylib" if sys.platform == "darwin" else "libcudart.so.12")
 NCCL_SUCCESS = 0
 NCCL_SYSTEM_ERROR = 2
 NCCL_INVALID_ARGUMENT = 4
@@ -232,6 +233,30 @@ def child_init_all(_rank: int) -> int:
     return 0
 
 
+def child_current_device_rank(rank: int) -> int:
+    """ncclCommInitRank binds to the caller's CUDA device, not LOCAL_RANK.
+
+    NCCL init.cc reads cudaGetDevice() into comm->cudaDev, and
+    ncclCommCuDevice returns it. Each rank selects the other rank's index.
+    """
+
+    runtime = ctypes.CDLL(str(LIBCUDART), mode=ctypes.RTLD_GLOBAL)
+    os.environ["LOCAL_RANK"] = str(rank)
+    expect_rc(runtime.cudaSetDevice(1 - rank), 0, "cudaSetDevice")
+    lib = load_nccl()
+    lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, UniqueId, ctypes.c_int]
+    lib.ncclCommCuDevice.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+    comm = ctypes.c_void_p()
+    unique_id = UniqueId(internal=os.environ["NCCL_SMOKE_UNIQUE_ID"].encode())
+    expect_rc(lib.ncclCommInitRank(ctypes.byref(comm), REDUCE_WORLD, unique_id, rank), NCCL_SUCCESS, "ncclCommInitRank")
+    device = ctypes.c_int(-1)
+    expect_rc(lib.ncclCommCuDevice(comm, ctypes.byref(device)), NCCL_SUCCESS, "ncclCommCuDevice")
+    if device.value != 1 - rank:
+        raise AssertionError(f"rank {rank} communicator is on device {device.value}, expected {1 - rank}")
+    lib.ncclCommDestroy(comm)
+    return 0
+
+
 def run_ranks(child: str, world: int, timeout_ms: int, extra_env: dict[str, str] | None = None) -> bool:
     """Run ``world`` rank processes against a fresh coordinator; True if all succeed."""
 
@@ -288,6 +313,11 @@ def check_init_all_device_list() -> None:
         raise AssertionError("ncclCommInitAll did not validate its device list")
 
 
+def check_comm_binds_current_device() -> None:
+    if not run_ranks("--current-device-rank", REDUCE_WORLD, 3000):
+        raise AssertionError("ncclCommInitRank did not bind the communicator to cudaGetDevice()")
+
+
 def check_lifecycle_contracts() -> None:
     env = dict(os.environ, FAKEGPU_DIST_MODE="simulate")
     if subprocess.run([sys.executable, __file__, "--lifecycle"], env=env).returncode != 0:
@@ -307,6 +337,8 @@ def main() -> int:
         return child_empty_p2p_rank(int(sys.argv[2]))
     if sys.argv[1:2] == ["--init-all"]:
         return child_init_all(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--current-device-rank"]:
+        return child_current_device_rank(int(sys.argv[2]))
     if not LIBNCCL.exists():
         print(f"missing NCCL library: {LIBNCCL}", file=sys.stderr)
         return 2
@@ -314,6 +346,7 @@ def main() -> int:
     check_lifecycle_contracts()
     check_empty_point_to_point()
     check_init_all_device_list()
+    check_comm_binds_current_device()
     check_split_timeout()
     check_reduce_over_socket_payloads()
     print("nccl stubs smoke test passed")

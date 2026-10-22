@@ -314,24 +314,18 @@ std::string unique_id_to_token(const ncclUniqueId& unique_id) {
     return std::string(begin, end);
 }
 
-int infer_device_for_rank(int rank) {
-    int inferred = rank;
-    const char* local_rank = std::getenv("LOCAL_RANK");
-    if (local_rank && *local_rank) {
-        try {
-            inferred = std::stoi(local_rank);
-        } catch (...) {
-        }
+// NCCL binds a communicator to the calling thread's current CUDA device
+// (init.cc: cudaGetDevice(&comm->cudaDev)), so callers select it with
+// cudaSetDevice first; ncclCommCuDevice reports it. Ask the loaded CUDA
+// runtime the same way; without one, use FakeGPU's current device.
+int current_cuda_device() {
+    using get_device_fn = int (*)(int*);
+    if (const auto get_device = reinterpret_cast<get_device_fn>(dlsym(RTLD_DEFAULT, "cudaGetDevice"))) {
+        int device = 0;
+        if (get_device(&device) == 0) return device;
     }
     fake_gpu::GlobalState::instance().initialize();
-    const int device_count = fake_gpu::GlobalState::instance().get_device_count();
-    if (device_count > 0) {
-        inferred %= device_count;
-        if (inferred < 0) {
-            inferred += device_count;
-        }
-    }
-    return inferred;
+    return fake_gpu::GlobalState::instance().get_current_device();
 }
 
 bool parse_int_field(
@@ -2723,7 +2717,7 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
     state->world_size = nranks;
     state->rank = rank;
     state->global_rank = rank;
-    state->device = infer_device_for_rank(rank);
+    state->device = current_cuda_device();
     state->real_comm = reinterpret_cast<void*>(real_comm);
     *comm = state;
     clear_last_error(*comm);

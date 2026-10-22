@@ -35,6 +35,9 @@
 - 建模故障事件只出现在报告里。它们不会改变 CUDA 执行，也不代表真实的 ECC/Xid
   数据。
 - Hybrid 和 passthrough 模式需要兼容的物理 CUDA 环境。
+- 不建模 CUDA 默认的 `CUDA_DEVICE_ORDER=FASTEST_FIRST`：模拟 GPU 与 `PCI_BUS_ID`
+  一样按 PCI 总线顺序枚举。FakeCUDA 不把 MIG 实例作为 CUDA 设备暴露，
+  `CUDA_VISIBLE_DEVICES` 中的 `MIG-` 项会让列表在该处结束。
 - macOS System Integrity Protection 可能删除系统程序的 `DYLD_*` 环境变量。
   原生拦截建议使用 Homebrew、conda 或 pyenv 的 Python。
 

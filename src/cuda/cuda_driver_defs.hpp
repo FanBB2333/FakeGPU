@@ -194,6 +194,8 @@ CUresult cuDeviceGetName(char *name, int len, CUdevice dev);
 CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev);
 CUresult cuDeviceTotalMem(size_t *bytes, CUdevice dev);
 CUresult cuDeviceGetUuid(CUuuid *uuid, CUdevice dev);
+CUresult cuDeviceGetPCIBusId(char *pciBusId, int len, CUdevice dev);
+CUresult cuDeviceGetByPCIBusId(CUdevice *dev, const char *pciBusId);
 
 // Context management
 CUresult cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev);

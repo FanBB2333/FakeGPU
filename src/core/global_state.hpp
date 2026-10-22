@@ -89,8 +89,29 @@ public:
     };
 
     void initialize();
+
+    // Two index spaces. CUDA ordinals follow CUDA_DEVICE_ORDER and
+    // CUDA_VISIBLE_DEVICES (CUDA Programming Guide, "Environment Variables");
+    // physical indices are the PCI-ordered inventory NVML, nvidia-smi and
+    // the reports use, which the mask never filters.
+    //
+    // Every call below that takes or returns a device, unless it says
+    // "physical", speaks CUDA ordinals: get_device_count/get_device,
+    // set/get_current_device, the allocation calls, record_memcpy_peer,
+    // record_compat_event, record_unsupported_api and resolve_device_for_ptr.
+    // Device::index, snapshot_device_report, snapshot_device_topology,
+    // snapshot_device_transfer and the MIG lookups are physical.
+    enum class CudaVisibility {
+        Visible,        // at least one CUDA device
+        NoDevice,       // empty mask or first entry invalid: cuInit fails with CUDA_ERROR_NO_DEVICE
+        InvalidDevice,  // a device listed twice: cuInit fails with CUDA_ERROR_INVALID_DEVICE
+    };
     int get_device_count() const;
-    Device& get_device(int index);
+    Device& get_device(int ordinal);
+    CudaVisibility cuda_visibility() const;
+    int physical_index(int ordinal) const;   // -1 if the ordinal is out of range
+    int get_physical_device_count() const;
+    Device& get_physical_device(int index);
     void set_current_device(int device);
     int get_current_device() const;
 
@@ -175,6 +196,11 @@ private:
     bool initialized = false;
     std::vector<Device> devices;
     std::vector<Device> mig_devices;
+    // CUDA ordinal -> physical device index, and the Device CUDA reports for
+    // that ordinal (the GPU, or the MIG instance a MIG- entry names).
+    std::vector<int> cuda_physical;
+    std::vector<Device*> cuda_devices;
+    CudaVisibility visibility = CudaVisibility::Visible;
     ModeledDeviceTopology device_topology;
     mutable LinkTrafficModel link_traffic;
     ModeledFaultModel fault_model;
@@ -189,7 +215,8 @@ private:
 
     struct AllocationRecord {
         size_t size = 0;
-        int device = 0;
+        int device = 0;   // physical index
+        int ordinal = 0;  // CUDA ordinal it was allocated on
         AllocationKind kind = AllocationKind::Device;
     };
 
@@ -197,12 +224,15 @@ private:
     std::map<void*, AllocationRecord> allocations;
 
     std::map<void*, AllocationRecord>::const_iterator find_allocation_nolock(const void* ptr) const;
+    // Physical index of the allocation holding ptr, else fallback_device.
     int resolve_device_for_ptr_nolock(const void* ptr, int fallback_device) const;
+    int physical_index_nolock(int ordinal) const;
+    int current_physical_nolock() const;
     DeviceRuntimeStats* stats_for_device_nolock(int device);
     const DeviceRuntimeStats* stats_for_device_nolock(int device) const;
     static void saturating_add_u64(uint64_t& target, uint64_t value);
 
-    bool register_allocation_nolock(void* ptr, size_t size, int device, AllocationKind kind);
+    bool register_allocation_nolock(void* ptr, size_t size, int ordinal, AllocationKind kind);
 };
 
 } // namespace fake_gpu
