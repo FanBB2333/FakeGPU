@@ -36,6 +36,11 @@ QLoRA 的 GPU 記憶體與**訓練迴圈**時間。它不會匯入訓練框架�
 - Axolotl 只在設定了 `max_grad_norm` 時才把它傳給 Trainer，未設定即採用 Trainer
   的預設值 1.0。Axolotl 的 `lora_r` 沒有預設值（PEFT 會拒絕）；未設定時估算以 8
   計算，並在 `assumptions` 中註明。
+- 沒有 `parameter_dtype` 或 `torch_dtype` 時，權重儲存精度依框架規則決定。
+  LLaMA-Factory 的 LoRA/QLoRA 凍結權重保持本機 checkpoint `config.json` 宣告的
+  dtype（`torch_dtype="auto"`），全參數微調為 FP32。Axolotl 依精度開關的 dtype
+  載入權重（先 `bf16`，再 `fp16` 或 `load_in_8bit`）。HF Trainer 設定與未宣告
+  dtype 的 checkpoint 使用 FP32。`assumptions` 會寫明採用的規則。
 
 ```bash
 python -m fakegpu estimate-finetune \

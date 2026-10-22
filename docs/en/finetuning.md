@@ -38,6 +38,12 @@ does not import the frameworks or load the weights.
   value means Trainer's default of 1.0. An unset Axolotl `lora_r` has no
   default (PEFT rejects it); the estimate assumes 8 and says so in
   `assumptions`.
+- Without `parameter_dtype` or `torch_dtype`, weight storage follows the
+  framework. LLaMA-Factory keeps LoRA/QLoRA frozen weights in the dtype of the
+  local checkpoint's `config.json` (`torch_dtype="auto"`) and full tuning in
+  FP32. Axolotl loads weights in its precision flag's dtype (`bf16`, then
+  `fp16` or `load_in_8bit`). HF Trainer configs and checkpoints without a
+  declared dtype use FP32. `assumptions` names the rule that was applied.
 
 ```bash
 python -m fakegpu estimate-finetune \

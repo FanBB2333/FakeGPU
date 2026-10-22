@@ -37,12 +37,18 @@ class FinetuneConfigError(ValueError):
 
 
 def load_finetune_config(
-    path: str | Path, *, framework: str = "auto"
+    path: str | Path,
+    *,
+    framework: str = "auto",
+    model_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Resolve local model, dataset and distributed paths against this file."""
     resolved = Path(path).expanduser().resolve()
     result = normalize_finetune_config(
-        load_mapping(resolved), framework=framework, base_dir=resolved.parent
+        load_mapping(resolved),
+        framework=framework,
+        base_dir=resolved.parent,
+        model_path=model_path,
     )
     result["source_path"] = str(resolved)
     return result
@@ -53,12 +59,16 @@ def normalize_finetune_config(
     *,
     framework: str = "auto",
     base_dir: str | Path | None = None,
+    model_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Normalize Trainer/PEFT, LLaMA-Factory or Axolotl configuration.
 
     ``num_samples`` means the effective training split *after* filtering and
     validation splitting. ``max_samples`` remains a cap, never a dataset count.
     Missing sequence length and sample count remain None for caller overrides.
+    ``model_path`` (a local directory or ``config.json``) replaces the
+    configured model when reading the checkpoint dtype that LLaMA-Factory
+    loads frozen weights in.
     """
     if not isinstance(config, Mapping):
         raise FinetuneConfigError("training configuration must be a mapping")
@@ -95,15 +105,22 @@ def normalize_finetune_config(
         checkpoint_sha256 = checkpoint_sha256.lower()
     dtype = _precision(values, source)
     storage_dtype = _alias(values, "parameter_dtype", "torch_dtype")
-    parameter_dtype = _dtype(storage_dtype) if storage_dtype is not None else "fp32"
-    if storage_dtype is None:
-        assumptions.append(
-            "Parameter storage defaults to FP32; mixed precision controls computation. "
-            "Set torch_dtype/parameter_dtype to match checkpoint loading for tighter estimates."
-        )
+    parameter_dtype = _dtype(storage_dtype) if storage_dtype is not None else None
     quant = _quantization_mapping(values)
     quantization = _quantization(values, quant, source)
     method, rank, targets = _adapter(values, peft, source, quantization)
+    if parameter_dtype is None:
+        parameter_dtype, note = _default_parameter_dtype(
+            values,
+            source,
+            method,
+            dtype,
+            quantization,
+            Path(model_path).expanduser().resolve()
+            if model_path is not None
+            else _local_path(model.strip(), root),
+        )
+        assumptions.append(note)
     adapter_options = _adapter_options(values, peft, source, rank, assumptions)
     quantization_options = _quantization_options(
         values, quant, source, quantization, dtype
@@ -563,6 +580,72 @@ def _precision(values: Mapping[str, Any], source: str) -> str:
             "Axolotl defaults to automatic precision; set bf16/fp16 or dtype explicitly"
         )
     return selected[0] if selected else "fp32"
+
+
+def _default_parameter_dtype(
+    values: Mapping[str, Any],
+    source: str,
+    method: str,
+    dtype: str,
+    bits: int | None,
+    model_path: str | Path,
+) -> tuple[str, str]:
+    """Return the framework's base-weight storage dtype and why it was chosen."""
+    if source == "axolotl":
+        # Axolotl 0.18.0 utils/config resolve_dtype sets cfg.torch_dtype from
+        # its flags (bf16, then fp16 or load_in_8bit, else fp32), and
+        # loaders/model.py loads the checkpoint with dtype=cfg.torch_dtype.
+        result = (
+            "bf16" if dtype == "bf16" else "fp16" if dtype == "fp16" or bits == 8 else "fp32"
+        )
+        note = f"Axolotl loads weights in its precision flag's dtype ({result})."
+        if method == "full" and result != "fp32":
+            note += (
+                " For full tuning without FSDP it keeps embeddings, lm_head and "
+                "norms in FP32; that difference is not budgeted."
+            )
+        return result, note
+    if source == "llamafactory":
+        # LLaMA-Factory 0.9.5 model/adapter.py casts trainable parameters to
+        # FP32 unless pure_bf16 or BAdam is used.
+        if method == "full" and not (values.get("pure_bf16") or values.get("use_badam")):
+            return "fp32", "LLaMA-Factory casts trainable parameters to FP32 for full tuning."
+        # model/loader.py loads with torch_dtype="auto": the config's dtype.
+        checkpoint = _checkpoint_dtype(model_path)
+        if checkpoint is not None:
+            return checkpoint, (
+                "LLaMA-Factory loads frozen weights with torch_dtype=auto, the "
+                f"checkpoint config's dtype ({checkpoint})."
+            )
+        return "fp32", (
+            "LLaMA-Factory loads frozen weights in the checkpoint dtype "
+            "(torch_dtype=auto), which no local model config declares here; base "
+            "weights are budgeted as FP32. Set parameter_dtype for tighter estimates."
+        )
+    return "fp32", (
+        "Parameter storage defaults to FP32; mixed precision controls computation. "
+        "Set torch_dtype/parameter_dtype to match checkpoint loading for tighter estimates."
+    )
+
+
+def _checkpoint_dtype(model_path: str | Path) -> str | None:
+    """Read the dtype Transformers' torch_dtype="auto" takes from config.json."""
+    path = Path(model_path)
+    if not path.is_absolute():
+        return None  # a Hub model ID; nothing local to read
+    config_path = path / "config.json" if path.is_dir() else path
+    if config_path.name != "config.json" or not config_path.is_file():
+        return None
+    try:
+        config = load_mapping(config_path)
+    except (OSError, ValueError):
+        return None
+    # Transformers 5 writes "dtype"; older checkpoints carry "torch_dtype".
+    value = config.get("dtype") or config.get("torch_dtype")
+    try:
+        return _dtype(value) if value is not None else None
+    except FinetuneConfigError:
+        return None
 
 
 def _attention(values: Mapping[str, Any]) -> str:

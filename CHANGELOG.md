@@ -69,6 +69,15 @@
   per-epoch windows (25 rows, micro batch 2, accumulation 4, 30 epochs: 94
   updates, not 120). Other frameworks keep Trainer's count. Packed Axolotl
   horizons now require a step count.
+- Fine-tuning configs without `parameter_dtype` or `torch_dtype` store
+  weights as their framework loads them instead of always in FP32:
+  LLaMA-Factory LoRA and QLoRA keep frozen weights in the local checkpoint
+  config's dtype (`torch_dtype="auto"`), and Axolotl uses the dtype of its
+  `bf16`/`fp16`/`load_in_8bit` flags. LLaMA-Factory full tuning (FP32) and
+  HF Trainer configs are unchanged. A BF16 LoRA base is now budgeted at half
+  the previous bytes. `assumptions` names the rule. This changes the
+  calibration workload signature of these configs; their saved probe
+  observations need a new probe.
 
 ### Fixed
 
