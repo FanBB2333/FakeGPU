@@ -1,5 +1,6 @@
 #include "cudart_defs.hpp"
 #include "cuda_driver_defs.hpp"
+#include "driver_model.hpp"
 #include "kernel_executor.hpp"
 #include "../core/global_state.hpp"
 #include "../core/logging.hpp"
@@ -166,6 +167,16 @@ static cudaError_t convertDriverError(CUresult result) {
             return cudaErrorInvalidDevice;
         case CUDA_ERROR_NO_DEVICE:
             return cudaErrorNoDevice;
+        case CUDA_ERROR_INVALID_CONTEXT:
+            return cudaErrorDeviceUninitialized;
+        case CUDA_ERROR_UNSUPPORTED_LIMIT:
+            return cudaErrorUnsupportedLimit;
+        case CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED:
+            return cudaErrorHostMemoryAlreadyRegistered;
+        case CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED:
+            return cudaErrorHostMemoryNotRegistered;
+        case CUDA_ERROR_NOT_PERMITTED:
+            return cudaErrorNotPermitted;
         case CUDA_ERROR_NOT_INITIALIZED:
             return cudaErrorInitializationError;
         case CUDA_ERROR_NOT_READY:
@@ -193,6 +204,36 @@ static cudaError_t convertDriverError(CUresult result) {
         default:
             return cudaErrorUnknown;
     }
+}
+
+// The runtime initializes CUDA on the first call that needs a device: it
+// initializes the driver and retains the device's primary context once, so
+// cuDevicePrimaryCtxGetState reports it active. Without a CUDA device those
+// calls fail with cudaErrorNoDevice (measured with CUDA_VISIBLE_DEVICES="").
+static cudaError_t retainRuntimePrimaryContext(int device) {
+    static std::once_flag driver_init;
+    std::call_once(driver_init, []() { cuInit(0); });
+    namespace model = fake_gpu::cuda::model;
+    model::SharedState& shared = model::shared_state();
+    {
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        model::DeviceContext& context = model::device_context_locked(shared, device);
+        if (context.runtime_retained) return cudaSuccess;
+        context.runtime_retained = true;
+    }
+    CUcontext context = nullptr;
+    const CUresult result = cuDevicePrimaryCtxRetain(&context, device);
+    if (result != CUDA_SUCCESS) {
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        model::device_context_locked(shared, device).runtime_retained = false;
+        return convertDriverError(result);
+    }
+    return cudaSuccess;
+}
+
+static cudaError_t runtimeActivate() {
+    if (const cudaError_t error = runtimeInitError(); error != cudaSuccess) return error;
+    return retainRuntimePrimaryContext(fake_gpu::GlobalState::instance().get_current_device());
 }
 
 static cudaError_t convertSymbolError(CUresult result) {
@@ -374,6 +415,12 @@ static const ErrorDescription& describeError(cudaError_t error) {
 }
 
 static cudaError_t allocDevice(void** out, size_t size) {
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
+    // Measured: cudaMalloc(0) succeeds and returns NULL (cuMemAlloc(0) fails).
+    if (size == 0) {
+        *out = nullptr;
+        return setLastError(cudaSuccess);
+    }
     CUdeviceptr dptr;
     const CUresult result = cuMemAlloc(&dptr, size);
     if (result == CUDA_SUCCESS) *out = (void*)dptr;
@@ -381,19 +428,22 @@ static cudaError_t allocDevice(void** out, size_t size) {
 }
 
 static cudaError_t allocManaged(void** out, size_t size, unsigned int flags) {
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
     CUdeviceptr dptr;
     const CUresult result = cuMemAllocManaged(&dptr, size, flags);
     if (result == CUDA_SUCCESS) *out = (void*)dptr;
     return setLastError(convertDriverError(result));
 }
 
-// Pinned host memory is simulated with regular malloc.
-static cudaError_t allocPinnedHost(void** out, size_t size) {
-    *out = malloc(size);
-    if (!*out) return setLastError(cudaErrorMemoryAllocation);
-    fake_gpu::GlobalState::instance().register_host_allocation(
-        *out, size, fake_gpu::GlobalState::instance().get_current_device());
-    return setLastError(cudaSuccess);
+// Pinned host memory is page-aligned host memory tracked by the driver model.
+static cudaError_t allocPinnedHost(void** out, size_t size, unsigned int flags) {
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
+    // Measured: cudaMallocHost(0) succeeds and returns NULL.
+    if (size == 0) {
+        *out = nullptr;
+        return setLastError(cudaSuccess);
+    }
+    return setLastError(convertDriverError(cuMemHostAlloc(out, size, flags)));
 }
 
 // Performs a synchronous copy in the given direction and sets last_error.
@@ -566,10 +616,15 @@ cudaError_t cudaSetDevice(int device) {
     CUresult result = cuDeviceGet(&cuDevice, device);
     if (result != CUDA_SUCCESS) return setLastError(convertDriverError(result));
 
-    // Retain primary context
+    // CUDA 12 initializes the device's primary context here. The runtime
+    // holds one reference per device however often it switches devices.
+    if (const cudaError_t error = retainRuntimePrimaryContext(cuDevice); error != cudaSuccess) {
+        return setLastError(error);
+    }
     CUcontext context;
     result = cuDevicePrimaryCtxRetain(&context, cuDevice);
     if (result != CUDA_SUCCESS) return setLastError(convertDriverError(result));
+    cuDevicePrimaryCtxRelease(cuDevice);
 
     // Set as current context
     result = cuCtxSetCurrent(context);
@@ -638,6 +693,7 @@ cudaError_t cudaDeviceReset(void) {
 }
 
 cudaError_t cudaDeviceSynchronize(void) {
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
     CUresult result = cuCtxSynchronize();
     last_error = convertDriverError(result);
     FGPU_LOG("[FakeCUDART] cudaDeviceSynchronize()\n");
@@ -658,6 +714,8 @@ cudaError_t cudaMalloc(void **devPtr, size_t size) {
 }
 
 cudaError_t cudaFree(void *devPtr) {
+    // cudaFree(NULL) is the customary way to initialize the runtime.
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
     if (!devPtr) return setLastError(cudaSuccess);
 
     CUresult result = cuMemFree((CUdeviceptr)devPtr);
@@ -752,6 +810,7 @@ cudaError_t cudaMemsetAsync(void *devPtr, int value, size_t count, cudaStream_t 
 }
 
 cudaError_t cudaMemGetInfo(size_t *free, size_t *total) {
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
     CUresult result = cuMemGetInfo(free, total);
     return setLastError(convertDriverError(result));
 }
@@ -762,6 +821,7 @@ cudaError_t cudaMemGetInfo(size_t *free, size_t *total) {
 
 cudaError_t cudaStreamCreate(cudaStream_t *pStream) {
     if (!pStream) return setLastError(cudaErrorInvalidValue);
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
 
     CUresult result = cuStreamCreate((CUstream*)pStream, 0);
     last_error = convertDriverError(result);
@@ -798,6 +858,7 @@ cudaError_t cudaStreamQuery(cudaStream_t stream) {
 
 cudaError_t cudaEventCreate(cudaEvent_t *event) {
     if (!event) return setLastError(cudaErrorInvalidValue);
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
 
     CUresult result = cuEventCreate((CUevent*)event, 0);
     last_error = convertDriverError(result);
@@ -912,6 +973,24 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
     return last_error;
 }
 
+// cuda_runtime_api.h: the driver function behind a registered kernel stub;
+// cudaErrorInvalidDeviceFunction for anything else.
+cudaError_t cudaGetFuncBySymbol(void **functionPtr, const void *symbolPtr) {
+    if (!functionPtr) return setLastError(cudaErrorInvalidValue);
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
+    auto& registry = runtimeRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    const auto found = registry.functions.find(symbolPtr);
+    if (found == registry.functions.end()) return setLastError(cudaErrorInvalidDeviceFunction);
+    const auto& loaded = currentModule(*found->second.owner);
+    if (loaded.status != CUDA_SUCCESS) return setLastError(convertDriverError(loaded.status));
+    CUfunction function = nullptr;
+    const CUresult resolved = cuModuleGetFunction(&function, loaded.module, found->second.name.c_str());
+    if (resolved != CUDA_SUCCESS) return setLastError(convertDriverError(resolved));
+    *functionPtr = function;
+    return cudaSuccess;
+}
+
 cudaError_t cudaConfigureCall(dim3 gridDim, dim3 blockDim, size_t sharedMem, cudaStream_t stream) {
     if (!validateStreamArgument(stream)) {
         return last_error;
@@ -973,43 +1052,53 @@ cudaError_t cudaLaunchHostFunc(cudaStream_t stream, void (*fn)(void *userData), 
 cudaError_t cudaMallocHost(void **ptr, size_t size) {
     if (!ptr) return setLastError(cudaErrorInvalidValue);
 
-    if (allocPinnedHost(ptr, size) == cudaSuccess) {
+    if (allocPinnedHost(ptr, size, 0) == cudaSuccess) {
         FGPU_LOG("[FakeCUDART] cudaMallocHost allocated %zu bytes\n", size);
     }
     return last_error;
 }
 
 cudaError_t cudaFreeHost(void *ptr) {
-    size_t size = 0;
-    int device = 0;
-    fake_gpu::GlobalState::instance().release_host_allocation(ptr, size, device);
-    free(ptr);
-    last_error = cudaSuccess;
-    FGPU_LOG("[FakeCUDART] cudaFreeHost\n");
+    // Only memory from cudaMallocHost/cudaHostAlloc is released; anything
+    // else is rejected without being passed to free().
+    last_error = convertDriverError(cuMemFreeHost(ptr));
+    FGPU_LOG("[FakeCUDART] cudaFreeHost(%p)\n", ptr);
     return last_error;
 }
 
 cudaError_t cudaHostAlloc(void **pHost, size_t size, unsigned int flags) {
     if (!pHost) return setLastError(cudaErrorInvalidValue);
 
-    if (allocPinnedHost(pHost, size) == cudaSuccess) {
+    if (allocPinnedHost(pHost, size, flags) == cudaSuccess) {
         FGPU_LOG("[FakeCUDART] cudaHostAlloc allocated %zu bytes\n", size);
     }
     return last_error;
 }
 
 cudaError_t cudaHostRegister(void *ptr, size_t size, unsigned int flags) {
-    // Simplified: just succeed
-    last_error = cudaSuccess;
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
+    last_error = convertDriverError(cuMemHostRegister(ptr, size, flags));
     FGPU_LOG("[FakeCUDART] cudaHostRegister ptr=%p size=%zu flags=%u\n", ptr, size, flags);
     return last_error;
 }
 
 cudaError_t cudaHostUnregister(void *ptr) {
-    // Simplified: just succeed
-    last_error = cudaSuccess;
+    last_error = convertDriverError(cuMemHostUnregister(ptr));
     FGPU_LOG("[FakeCUDART] cudaHostUnregister ptr=%p\n", ptr);
     return last_error;
+}
+
+cudaError_t cudaHostGetDevicePointer(void **pDevice, void *pHost, unsigned int flags) {
+    if (!pDevice) return setLastError(cudaErrorInvalidValue);
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
+    CUdeviceptr device = 0;
+    last_error = convertDriverError(cuMemHostGetDevicePointer(&device, pHost, flags));
+    if (last_error == cudaSuccess) *pDevice = reinterpret_cast<void*>(device);
+    return last_error;
+}
+
+cudaError_t cudaHostGetFlags(unsigned int *pFlags, void *pHost) {
+    return setLastError(convertDriverError(cuMemHostGetFlags(pFlags, pHost)));
 }
 
 // ============================================================================
@@ -1086,6 +1175,7 @@ cudaError_t cudaGetDriverEntryPoint(const char *symbol, void **funcPtr, unsigned
 
 cudaError_t cudaStreamCreateWithFlags(cudaStream_t *pStream, unsigned int flags) {
     if (!pStream) return setLastError(cudaErrorInvalidValue);
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
 
     CUresult result = cuStreamCreate((CUstream*)pStream, flags);
     last_error = convertDriverError(result);
@@ -1095,9 +1185,10 @@ cudaError_t cudaStreamCreateWithFlags(cudaStream_t *pStream, unsigned int flags)
 
 cudaError_t cudaStreamCreateWithPriority(cudaStream_t *pStream, unsigned int flags, int priority) {
     if (!pStream) return setLastError(cudaErrorInvalidValue);
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
 
-    // Simplified: ignore priority
-    CUresult result = cuStreamCreate((CUstream*)pStream, flags);
+    // Priorities are clamped to cudaDeviceGetStreamPriorityRange.
+    CUresult result = cuStreamCreateWithPriority((CUstream*)pStream, flags, priority);
     last_error = convertDriverError(result);
     FGPU_LOG("[FakeCUDART] cudaStreamCreateWithPriority flags=%u priority=%d\n", flags, priority);
     return last_error;
@@ -1115,6 +1206,22 @@ cudaError_t cudaStreamGetPriority(cudaStream_t hStream, int *priority) {
 
     CUresult result = cuStreamGetPriority((CUstream)hStream, priority);
     return setLastError(convertDriverError(result));
+}
+
+cudaError_t cudaStreamGetId(cudaStream_t hStream, unsigned long long *streamId) {
+    return setLastError(convertDriverError(cuStreamGetId((CUstream)hStream, streamId)));
+}
+
+// cudaStreamAttrID and cudaStreamAttrValue are the launch attribute ids and
+// the 64-byte value union the driver uses.
+cudaError_t cudaStreamGetAttribute(cudaStream_t hStream, int attr, void *value_out) {
+    return setLastError(convertDriverError(cuStreamGetAttribute(
+        (CUstream)hStream, static_cast<CUlaunchAttributeID>(attr), static_cast<CUlaunchAttributeValue*>(value_out))));
+}
+
+cudaError_t cudaStreamSetAttribute(cudaStream_t hStream, int attr, const void *value) {
+    return setLastError(convertDriverError(cuStreamSetAttribute(
+        (CUstream)hStream, static_cast<CUlaunchAttributeID>(attr), static_cast<const CUlaunchAttributeValue*>(value))));
 }
 
 cudaError_t cudaStreamWaitEvent(cudaStream_t stream, cudaEvent_t event, unsigned int flags) {
@@ -1154,6 +1261,7 @@ cudaError_t cudaStreamUpdateCaptureDependencies(cudaStream_t stream, cudaGraphNo
 
 cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int flags) {
     if (!event) return setLastError(cudaErrorInvalidValue);
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
 
     CUresult result = cuEventCreate((CUevent*)event, flags);
     last_error = convertDriverError(result);
@@ -1165,16 +1273,17 @@ cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int flags) {
 // Occupancy Calculation
 // ============================================================================
 
+// The same occupancy model as cuOccupancyMaxActiveBlocksPerMultiprocessor;
+// the runtime and the driver agreed on every measured configuration.
 cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessor(int *numBlocks, const void *func, int blockSize, size_t dynamicSMemSize) {
-    if (!numBlocks) return setLastError(cudaErrorInvalidValue);
-
-    // Simplified: return a reasonable fake value
-    *numBlocks = 16;
-    return setLastError(cudaSuccess);
+    return cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(numBlocks, func, blockSize, dynamicSMemSize, 0);
 }
 
 cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(int *numBlocks, const void *func, int blockSize, size_t dynamicSMemSize, unsigned int flags) {
-    return cudaOccupancyMaxActiveBlocksPerMultiprocessor(numBlocks, func, blockSize, dynamicSMemSize);
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
+    const int device = fake_gpu::GlobalState::instance().get_current_device();
+    return setLastError(convertDriverError(
+        fake_gpu::cuda::model_occupancy(numBlocks, device, blockSize, dynamicSMemSize, flags)));
 }
 
 // ============================================================================
@@ -1188,17 +1297,17 @@ cudaError_t cudaDeviceGetAttribute(int *value, int attr, int device) {
     return setLastError(convertDriverError(result));
 }
 
+// The runtime and the driver share one set of context limits (measured: a
+// cuCtxSetLimit is visible through cudaDeviceGetLimit).
 cudaError_t cudaDeviceGetLimit(size_t *pValue, int limit) {
     if (!pValue) return setLastError(cudaErrorInvalidValue);
-
-    // Simplified: return reasonable defaults
-    *pValue = 1024 * 1024 * 1024;  // 1GB
-    return setLastError(cudaSuccess);
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
+    return setLastError(convertDriverError(cuCtxGetLimit(pValue, static_cast<CUlimit>(limit))));
 }
 
 cudaError_t cudaDeviceSetLimit(int limit, size_t value) {
-    // Simplified: just succeed
-    return setLastError(cudaSuccess);
+    if (const cudaError_t error = runtimeActivate(); error != cudaSuccess) return setLastError(error);
+    return setLastError(convertDriverError(cuCtxSetLimit(static_cast<CUlimit>(limit), value)));
 }
 
 cudaError_t cudaDeviceGetCacheConfig(int *pCacheConfig) {
@@ -1223,12 +1332,9 @@ cudaError_t cudaDeviceSetSharedMemConfig(int config) {
     return setLastError(cudaSuccess);
 }
 
+// Same range as cuCtxGetStreamPriorityRange; either pointer may be NULL.
 cudaError_t cudaDeviceGetStreamPriorityRange(int *leastPriority, int *greatestPriority) {
-    if (!leastPriority || !greatestPriority) return setLastError(cudaErrorInvalidValue);
-
-    *leastPriority = 0;
-    *greatestPriority = 0;
-    return setLastError(cudaSuccess);
+    return setLastError(convertDriverError(cuCtxGetStreamPriorityRange(leastPriority, greatestPriority)));
 }
 
 // ============================================================================
@@ -1346,6 +1452,22 @@ cudaError_t cudaMemcpyFromSymbol(void *dst, const void *symbol, size_t count, si
     if (last_error != cudaSuccess) return last_error;
     if (offset > size || count > size - offset) return last_error = cudaErrorInvalidValue;
     return cudaMemcpy(dst, reinterpret_cast<void*>(pointer + offset), count, kind);
+}
+
+// The copies run synchronously, like cudaMemcpyAsync, and are recorded on
+// the stream. Errors match the synchronous calls (measured).
+cudaError_t cudaMemcpyToSymbolAsync(const void *symbol, const void *src, size_t count, size_t offset,
+                                    cudaMemcpyKind kind, cudaStream_t stream) {
+    if (!validateStreamArgument(stream)) return last_error;
+    if (cudaMemcpyToSymbol(symbol, src, count, offset, kind) == cudaSuccess) submitAsyncStreamOperation(stream);
+    return last_error;
+}
+
+cudaError_t cudaMemcpyFromSymbolAsync(void *dst, const void *symbol, size_t count, size_t offset,
+                                      cudaMemcpyKind kind, cudaStream_t stream) {
+    if (!validateStreamArgument(stream)) return last_error;
+    if (cudaMemcpyFromSymbol(dst, symbol, count, offset, kind) == cudaSuccess) submitAsyncStreamOperation(stream);
+    return last_error;
 }
 
 cudaError_t cudaGetSymbolAddress(void** pointer, const void* symbol) {
@@ -1487,43 +1609,37 @@ cudaError_t cudaDeviceGetMemPool(cudaMemPool_t *memPool, int device) {
 // Pointer Attributes
 // ============================================================================
 
+// Built on cuPointerGetAttributes. Measured for memory CUDA does not know
+// (including NULL): cudaSuccess, type unregistered, device -1, the address
+// as host pointer and, when the device has pageable memory access, as
+// device pointer. Device memory has no host pointer.
 cudaError_t cudaPointerGetAttributes(cudaPointerAttributes *attributes, const void *ptr) {
-    if (!attributes || !ptr) return setLastError(cudaErrorInvalidValue);
+    if (!attributes) return setLastError(cudaErrorInvalidValue);
+
+    CUpointer_attribute ids[] = {
+        CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
+        CU_POINTER_ATTRIBUTE_IS_MANAGED,
+        CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL,
+        CU_POINTER_ATTRIBUTE_DEVICE_POINTER,
+        CU_POINTER_ATTRIBUTE_HOST_POINTER,
+    };
+    unsigned int memory_type = 0;
+    unsigned int managed = 0;
+    int device = -1;
+    CUdeviceptr device_pointer = 0;
+    void* host_pointer = nullptr;
+    void* values[] = {&memory_type, &managed, &device, &device_pointer, &host_pointer};
+    const CUresult result = cuPointerGetAttributes(5, ids, values, reinterpret_cast<CUdeviceptr>(ptr));
+    if (result != CUDA_SUCCESS) return setLastError(convertDriverError(result));
 
     memset(attributes, 0, sizeof(cudaPointerAttributes));
-
-    size_t alloc_size = 0;
-    int alloc_device = 0;
-    fake_gpu::GlobalState::AllocationKind alloc_kind = fake_gpu::GlobalState::AllocationKind::Device;
-    bool found = fake_gpu::GlobalState::instance().get_allocation_info_ex(
-        const_cast<void*>(ptr), alloc_size, alloc_device, alloc_kind);
-
-    if (!found) {
-        attributes->type = cudaMemoryTypeUnregistered;
-        attributes->device = 0;
-    } else {
-        switch (alloc_kind) {
-            case fake_gpu::GlobalState::AllocationKind::Device:
-                attributes->type = cudaMemoryTypeDevice;
-                break;
-            case fake_gpu::GlobalState::AllocationKind::Managed:
-                attributes->type = cudaMemoryTypeManaged;
-                break;
-            case fake_gpu::GlobalState::AllocationKind::Host:
-                attributes->type = cudaMemoryTypeHost;
-                break;
-        }
-        attributes->device = alloc_device;
-    }
-    // Each alias is NULL when that side cannot access the memory directly:
-    // the host cannot dereference device memory, nor the device unregistered memory.
-    if (attributes->type != cudaMemoryTypeUnregistered) {
-        attributes->devicePointer = const_cast<void*>(ptr);
-    }
-    if (attributes->type != cudaMemoryTypeDevice) {
-        attributes->hostPointer = const_cast<void*>(ptr);
-    }
-
+    attributes->type = managed ? cudaMemoryTypeManaged
+                       : memory_type == CU_MEMORYTYPE_HOST   ? cudaMemoryTypeHost
+                       : memory_type == CU_MEMORYTYPE_DEVICE ? cudaMemoryTypeDevice
+                                                             : cudaMemoryTypeUnregistered;
+    attributes->device = device;
+    attributes->devicePointer = reinterpret_cast<void*>(device_pointer);
+    attributes->hostPointer = host_pointer;
     return setLastError(cudaSuccess);
 }
 
@@ -1531,24 +1647,105 @@ cudaError_t cudaPointerGetAttributes(cudaPointerAttributes *attributes, const vo
 // IPC (Inter-Process Communication)
 // ============================================================================
 
-cudaError_t cudaIpcGetMemHandle(void *handle, void *devPtr) {
-    return setLastError(cudaSuccess);
+// Simulated memory cannot be opened by another process: every IPC call
+// returns cudaErrorNotSupported (see cuIpcGetMemHandle).
+cudaError_t cudaIpcGetMemHandle(cudaIpcMemHandle_t *handle, void *devPtr) {
+    if (!handle) return setLastError(cudaErrorInvalidValue);
+    CUipcMemHandle driver_handle{};
+    return setLastError(convertDriverError(cuIpcGetMemHandle(&driver_handle, reinterpret_cast<CUdeviceptr>(devPtr))));
 }
 
-cudaError_t cudaIpcOpenMemHandle(void **devPtr, void *handle, unsigned int flags) {
-    return setLastError(cudaSuccess);
+cudaError_t cudaIpcOpenMemHandle(void **devPtr, cudaIpcMemHandle_t handle, unsigned int flags) {
+    if (!devPtr) return setLastError(cudaErrorInvalidValue);
+    CUipcMemHandle driver_handle{};
+    memcpy(driver_handle.reserved, handle.reserved, sizeof(driver_handle.reserved));
+    CUdeviceptr opened = 0;
+    return setLastError(convertDriverError(cuIpcOpenMemHandle_v2(&opened, driver_handle, flags)));
 }
 
 cudaError_t cudaIpcCloseMemHandle(void *devPtr) {
+    return setLastError(convertDriverError(cuIpcCloseMemHandle(reinterpret_cast<CUdeviceptr>(devPtr))));
+}
+
+cudaError_t cudaIpcGetEventHandle(cudaIpcEventHandle_t *handle, cudaEvent_t event) {
+    if (!handle) return setLastError(cudaErrorInvalidValue);
+    CUipcEventHandle driver_handle{};
+    return setLastError(convertDriverError(cuIpcGetEventHandle(&driver_handle, (CUevent)event)));
+}
+
+cudaError_t cudaIpcOpenEventHandle(cudaEvent_t *event, cudaIpcEventHandle_t handle) {
+    if (!event) return setLastError(cudaErrorInvalidValue);
+    CUipcEventHandle driver_handle{};
+    memcpy(driver_handle.reserved, handle.reserved, sizeof(driver_handle.reserved));
+    CUevent opened = nullptr;
+    return setLastError(convertDriverError(cuIpcOpenEventHandle(&opened, driver_handle)));
+}
+
+// ============================================================================
+// Device flags and initialization
+// ============================================================================
+
+static constexpr unsigned int kDeviceMapHost = 0x08;  // cudaDeviceMapHost, always on
+
+// cudaDeviceScheduleAuto/Spin/Yield/BlockingSync (one of them), MapHost,
+// LmemResizeToMax and SyncMemops (cudaDeviceMask 0xff).
+static bool validDeviceFlags(unsigned int flags) {
+    const unsigned int schedule = flags & 0x07u;
+    return (flags & ~0xFFu) == 0 && (schedule == 0 || schedule == 1 || schedule == 2 || schedule == 4);
+}
+
+// Measured: cudaSetDeviceFlags initializes the primary context and stores the
+// flags on it; cudaGetDeviceFlags reports them with cudaDeviceMapHost set
+// and does not initialize the context.
+cudaError_t cudaSetDeviceFlags(unsigned int flags) {
+    if (!validDeviceFlags(flags)) return setLastError(cudaErrorInvalidValue);
+    fake_gpu::GlobalState& state = fake_gpu::GlobalState::instance();
+    if (const cudaError_t error = runtimeInitError(); error != cudaSuccess) return setLastError(error);
+    const int device = state.get_current_device();
+    static std::once_flag driver_init;
+    std::call_once(driver_init, []() { cuInit(0); });
+    const CUresult result = cuDevicePrimaryCtxSetFlags(device, flags & ~kDeviceMapHost);
+    if (result != CUDA_SUCCESS) return setLastError(convertDriverError(result));
+    return setLastError(retainRuntimePrimaryContext(device));
+}
+
+cudaError_t cudaGetDeviceFlags(unsigned int *flags) {
+    if (!flags) return setLastError(cudaErrorInvalidValue);
+    fake_gpu::GlobalState& state = fake_gpu::GlobalState::instance();
+    if (const cudaError_t error = runtimeInitError(); error != cudaSuccess) return setLastError(error);
+    cuInit(0);
+    unsigned int context_flags = 0;
+    int active = 0;
+    const CUresult result = cuDevicePrimaryCtxGetState(state.get_current_device(), &context_flags, &active);
+    if (result != CUDA_SUCCESS) return setLastError(convertDriverError(result));
+    *flags = context_flags | kDeviceMapHost;
     return setLastError(cudaSuccess);
 }
 
-cudaError_t cudaIpcGetEventHandle(void *handle, cudaEvent_t event) {
-    return setLastError(cudaSuccess);
-}
-
-cudaError_t cudaIpcOpenEventHandle(cudaEvent_t *event, void *handle) {
-    return setLastError(cudaSuccess);
+// Measured: an invalid device returns cudaErrorInvalidDevice; deviceFlags
+// apply only with cudaInitDeviceFlagsAreValid (0x1); other flag bits are
+// accepted. The current device does not change.
+cudaError_t cudaInitDevice(int device, unsigned int deviceFlags, unsigned int flags) {
+    fake_gpu::GlobalState& state = fake_gpu::GlobalState::instance();
+    if (const cudaError_t error = runtimeInitError(); error != cudaSuccess) return setLastError(error);
+    if (device < 0 || device >= state.get_device_count()) return setLastError(cudaErrorInvalidDevice);
+    cuInit(0);
+    if (flags & 0x1u) {
+        if (!validDeviceFlags(deviceFlags)) return setLastError(cudaErrorInvalidValue);
+        const CUresult result = cuDevicePrimaryCtxSetFlags(device, deviceFlags & ~kDeviceMapHost);
+        if (result != CUDA_SUCCESS) return setLastError(convertDriverError(result));
+    }
+    const int current = state.get_current_device();
+    const cudaError_t error = retainRuntimePrimaryContext(device);
+    if (current != device) {
+        // cuDevicePrimaryCtxRetain binds the retained device; restore the caller's.
+        CUcontext context = nullptr;
+        if (cuDevicePrimaryCtxRetain(&context, current) == CUDA_SUCCESS) {
+            cuDevicePrimaryCtxRelease(current);
+            cuCtxSetCurrent(context);
+        }
+    }
+    return setLastError(error);
 }
 
 // ============================================================================

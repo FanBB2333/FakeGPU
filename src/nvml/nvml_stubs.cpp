@@ -5,12 +5,15 @@
 #include "../core/global_state.hpp"
 #include "../core/hybrid_memory_manager.hpp"
 #include "../core/logging.hpp"
+#include "../cuda/modeled_driver_version.hpp"
 #include "../monitor/monitor.hpp"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <unistd.h>
 
 using namespace fake_gpu;
 
@@ -63,7 +66,20 @@ static FakeNvmlExportTable_v570& export_table_v570() {
 }
 } // namespace
 
-static constexpr char kDriverVersion[] = "570.195.03";
+static constexpr const char* kDriverVersion = fake_gpu::kModeledDriverVersion;
+
+// NVML counts nvmlInit calls: every entry point except nvmlInit*,
+// nvmlShutdown, nvmlErrorString and nvmlSystemGetNVMLVersion returns
+// NVML_ERROR_UNINITIALIZED before the first nvmlInit and after the matching
+// last nvmlShutdown, even for invalid arguments (measured on driver 580).
+static std::atomic<int> g_nvml_init_count{0};
+
+#define NVML_REQUIRE_INIT()                                                   \
+    do {                                                                      \
+        if (g_nvml_init_count.load(std::memory_order_acquire) <= 0) {         \
+            return NVML_ERROR_UNINITIALIZED;                                  \
+        }                                                                     \
+    } while (0)
 
 static bool modeled_nvlink_peer(
     const Device* device,
@@ -271,23 +287,28 @@ nvmlReturn_t nvmlInternalGetExportTable(void **ppExportTable, const void *pExpor
 nvmlReturn_t nvmlInit() {
     FGPU_LOG("[FakeNVML] nvmlInit called\n");
     if (!nvml_bridge::enabled()) GlobalState::instance().initialize();
+    g_nvml_init_count.fetch_add(1, std::memory_order_acq_rel);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlInitWithFlags(unsigned int flags) {
     FGPU_LOG("[FakeNVML] nvmlInitWithFlags called with flags=%u\n", flags);
-    if (!nvml_bridge::enabled()) GlobalState::instance().initialize();
-    return NVML_SUCCESS;
+    return nvmlInit();
 }
 
 nvmlReturn_t nvmlShutdown() {
     FGPU_LOG("[FakeNVML] nvmlShutdown called\n");
-    // Dump the monitor report before shutdown
-    if (!nvml_bridge::enabled()) dump_monitor_report();
+    int count = g_nvml_init_count.load(std::memory_order_acquire);
+    do {
+        if (count <= 0) return NVML_ERROR_UNINITIALIZED;
+    } while (!g_nvml_init_count.compare_exchange_weak(count, count - 1, std::memory_order_acq_rel));
+    // Dump the monitor report when the last user shuts NVML down.
+    if (count == 1 && !nvml_bridge::enabled()) dump_monitor_report();
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetCount(unsigned int *deviceCount) {
+    NVML_REQUIRE_INIT();
     if (!deviceCount) return NVML_ERROR_INVALID_ARGUMENT;
     if (nvml_bridge::enabled()) return nvml_bridge::count(deviceCount);
     *deviceCount = GlobalState::instance().get_physical_device_count();
@@ -296,6 +317,7 @@ nvmlReturn_t nvmlDeviceGetCount(unsigned int *deviceCount) {
 }
 
 nvmlReturn_t nvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device) {
+    NVML_REQUIRE_INIT();
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     if (nvml_bridge::enabled()) return nvml_bridge::handle(index, device);
     if (index >= GlobalState::instance().get_physical_device_count()) {
@@ -309,16 +331,19 @@ nvmlReturn_t nvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device
 }
 
 nvmlReturn_t nvmlDeviceGetName(nvmlDevice_t device, char *name, unsigned int length) {
+    NVML_REQUIRE_INIT();
     if (!device || !name) return NVML_ERROR_INVALID_ARGUMENT;
     return copy_string(name, length, ((Device*)device)->name.c_str());
 }
 
 nvmlReturn_t nvmlDeviceGetUUID(nvmlDevice_t device, char *uuid, unsigned int length) {
+    NVML_REQUIRE_INIT();
     if (!device || !uuid) return NVML_ERROR_INVALID_ARGUMENT;
     return copy_string(uuid, length, ((Device*)device)->uuid.c_str());
 }
 
 nvmlReturn_t nvmlDeviceGetAddressingMode(nvmlDevice_t device, nvmlDeviceAddressingMode_t *mode) {
+    NVML_REQUIRE_INIT();
     if (!device || !mode) return NVML_ERROR_INVALID_ARGUMENT;
     mode->version = nvmlDeviceAddressingMode_v1;
     mode->value = NVML_DEVICE_ADDRESSING_MODE_NONE;
@@ -326,6 +351,7 @@ nvmlReturn_t nvmlDeviceGetAddressingMode(nvmlDevice_t device, nvmlDeviceAddressi
 }
 
 nvmlReturn_t nvmlDeviceGetMemoryInfo(nvmlDevice_t device, nvmlMemory_t *memory) {
+    NVML_REQUIRE_INIT();
     if (!device || !memory) return NVML_ERROR_INVALID_ARGUMENT;
     if (nvml_bridge::enabled()) return nvml_bridge::memory(device, memory);
     Device* dev = (Device*)device;
@@ -353,6 +379,7 @@ nvmlReturn_t nvmlDeviceGetMemoryInfo(nvmlDevice_t device, nvmlMemory_t *memory) 
 }
 
 nvmlReturn_t nvmlDeviceGetMemoryInfo_v2(nvmlDevice_t device, nvmlMemory_v2_t *memory) {
+    NVML_REQUIRE_INIT();
     if (!device || !memory) return NVML_ERROR_INVALID_ARGUMENT;
     nvmlMemory_t snapshot{};
     const auto status = nvmlDeviceGetMemoryInfo(device, &snapshot);
@@ -368,6 +395,7 @@ nvmlReturn_t nvmlDeviceGetMemoryInfo_v2(nvmlDevice_t device, nvmlMemory_v2_t *me
 }
 
 nvmlReturn_t nvmlDeviceGetConfComputeProtectedMemoryUsage(nvmlDevice_t device, nvmlMemory_t *memory) {
+    NVML_REQUIRE_INIT();
     if (!device || !memory) return NVML_ERROR_INVALID_ARGUMENT;
     // FakeGPU does not emulate confidential computing; report empty usage.
     memory->total = 0;
@@ -377,6 +405,7 @@ nvmlReturn_t nvmlDeviceGetConfComputeProtectedMemoryUsage(nvmlDevice_t device, n
 }
 
 nvmlReturn_t nvmlDeviceGetConfComputeMemSizeInfo(nvmlDevice_t device, void *ccMemSizeInfo) {
+    NVML_REQUIRE_INIT();
     if (!device || !ccMemSizeInfo) return NVML_ERROR_INVALID_ARGUMENT;
     struct { unsigned long long protectedMemSizeKib; unsigned long long unprotectedMemSizeKib; } *info =
         (decltype(info))ccMemSizeInfo;
@@ -386,6 +415,7 @@ nvmlReturn_t nvmlDeviceGetConfComputeMemSizeInfo(nvmlDevice_t device, void *ccMe
 }
 
 nvmlReturn_t nvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t *pci) {
+    NVML_REQUIRE_INIT();
     if (!device || !pci) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     fill_pci_info(*dev, *pci);
@@ -393,6 +423,7 @@ nvmlReturn_t nvmlDeviceGetPciInfo(nvmlDevice_t device, nvmlPciInfo_t *pci) {
 }
 
 nvmlReturn_t nvmlDeviceGetPciInfoExt(nvmlDevice_t device, nvmlPciInfoExt_v1_t *pci) {
+    NVML_REQUIRE_INIT();
     if (!device || !pci) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     nvmlPciInfo_t info;
@@ -411,6 +442,7 @@ nvmlReturn_t nvmlDeviceGetPciInfoExt(nvmlDevice_t device, nvmlPciInfoExt_v1_t *p
 }
 
 nvmlReturn_t nvmlDeviceGetPciInfo_v3(nvmlDevice_t device, nvmlPciInfo_v3_t *pci) {
+    NVML_REQUIRE_INIT();
     if (!device || !pci) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     fill_pci_info(*dev, *pci);
@@ -421,6 +453,7 @@ nvmlReturn_t nvmlDeviceGetPciInfo_v3(nvmlDevice_t device, nvmlPciInfo_v3_t *pci)
 // when building snapshots for MIG-aware layouts. We just return the device
 // index to keep it happy.
 nvmlReturn_t nvmlDeviceGetTupleIndex(nvmlDevice_t device, unsigned int *tupleIndex) {
+    NVML_REQUIRE_INIT();
     if (!device || !tupleIndex) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     *tupleIndex = dev->is_mig_device
@@ -430,6 +463,7 @@ nvmlReturn_t nvmlDeviceGetTupleIndex(nvmlDevice_t device, unsigned int *tupleInd
 }
 
 nvmlReturn_t nvmlDeviceGetUtilizationRates(nvmlDevice_t device, nvmlUtilization_t *utilization) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) {
         if (!utilization) return NVML_ERROR_INVALID_ARGUMENT;
         FakeGpuNvmlTelemetryV1 sample{};
@@ -448,14 +482,17 @@ nvmlReturn_t nvmlDeviceGetUtilizationRates(nvmlDevice_t device, nvmlUtilization_
 }
 
 nvmlReturn_t nvmlDeviceGetJpgUtilization(nvmlDevice_t device, unsigned int *utilization, unsigned int *samplingPeriodUs) {
+    NVML_REQUIRE_INIT();
     return idle_engine_utilization(device, utilization, samplingPeriodUs);
 }
 
 nvmlReturn_t nvmlDeviceGetOfaUtilization(nvmlDevice_t device, unsigned int *utilization, unsigned int *samplingPeriodUs) {
+    NVML_REQUIRE_INIT();
     return idle_engine_utilization(device, utilization, samplingPeriodUs);
 }
 
 nvmlReturn_t nvmlDeviceGetPowerUsage(nvmlDevice_t device, unsigned int *power) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) return read_telemetry(device, power, &FakeGpuNvmlTelemetryV1::power_mw);
     if (!device || !power) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetPowerUsage", device);
@@ -468,12 +505,14 @@ nvmlReturn_t nvmlDeviceGetPowerUsage(nvmlDevice_t device, unsigned int *power) {
 }
 
 nvmlReturn_t nvmlDeviceGetPowerManagementMode(nvmlDevice_t device, unsigned int *mode) {
+    NVML_REQUIRE_INIT();
     if (!device || !mode) return NVML_ERROR_INVALID_ARGUMENT;
     *mode = 1;  // Enabled
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetPowerManagementLimit(nvmlDevice_t device, unsigned int *limit) {
+    NVML_REQUIRE_INIT();
     if (!device || !limit) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetPowerManagementLimit", device);
 
@@ -484,6 +523,7 @@ nvmlReturn_t nvmlDeviceGetPowerManagementLimit(nvmlDevice_t device, unsigned int
 }
 
 nvmlReturn_t nvmlDeviceGetTemperature(nvmlDevice_t device, unsigned int sensorType, unsigned int *temp) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) return read_telemetry(device, temp, &FakeGpuNvmlTelemetryV1::temperature);
     if (!device || !temp) return NVML_ERROR_INVALID_ARGUMENT;
 
@@ -497,6 +537,7 @@ nvmlReturn_t nvmlDeviceGetTemperature(nvmlDevice_t device, unsigned int sensorTy
 }
 
 nvmlReturn_t nvmlDeviceGetTemperatureThreshold(nvmlDevice_t device, unsigned int thresholdType, unsigned int *temp) {
+    NVML_REQUIRE_INIT();
     if (!device || !temp) return NVML_ERROR_INVALID_ARGUMENT;
 
     // Threshold constants follow NVML_TEMPERATURE_THRESHOLD_* (0..7).
@@ -526,6 +567,7 @@ nvmlReturn_t nvmlDeviceGetTemperatureThreshold(nvmlDevice_t device, unsigned int
 }
 
 nvmlReturn_t nvmlDeviceGetMarginTemperature(nvmlDevice_t device, nvmlMarginTemperature_v1_t *marginTempInfo) {
+    NVML_REQUIRE_INIT();
     if (!device || !marginTempInfo) return NVML_ERROR_INVALID_ARGUMENT;
     // Most FakeGPU profiles don't model margin-to-tlimit; report not supported so
     // nvidia-smi renders N/A (matching many real consumer GPUs).
@@ -536,6 +578,7 @@ nvmlReturn_t nvmlDeviceGetMarginTemperature(nvmlDevice_t device, nvmlMarginTempe
 // It reports the same reading as nvmlDeviceGetTemperature; nvitop prefers it
 // whenever the symbol exists.
 nvmlReturn_t nvmlDeviceGetTemperatureV(nvmlDevice_t device, void *tempInfo) {
+    NVML_REQUIRE_INIT();
     struct Temperature { unsigned int version, sensor; int temperature; };
     auto* value = static_cast<Temperature*>(tempInfo);
     if (!value || value->version != 0x100000C || value->sensor != 0) return NVML_ERROR_INVALID_ARGUMENT;
@@ -546,6 +589,7 @@ nvmlReturn_t nvmlDeviceGetTemperatureV(nvmlDevice_t device, void *tempInfo) {
 }
 
 nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, unsigned int type, unsigned int *clock) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) {
         if (!clock || type > 2) return NVML_ERROR_INVALID_ARGUMENT;
         return read_telemetry(
@@ -557,6 +601,7 @@ nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, unsigned int type, unsi
 }
 
 nvmlReturn_t nvmlDeviceGetClock(nvmlDevice_t device, unsigned int clockType, unsigned int clockId, unsigned int *clockMHz) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled() && clockId == 0) return nvmlDeviceGetClockInfo(device, clockType, clockMHz);
     if (!device || !clockMHz) return NVML_ERROR_INVALID_ARGUMENT;
     // clockId: typically 0 for current clock
@@ -565,12 +610,14 @@ nvmlReturn_t nvmlDeviceGetClock(nvmlDevice_t device, unsigned int clockType, uns
 }
 
 nvmlReturn_t nvmlDeviceGetMaxClockInfo(nvmlDevice_t device, unsigned int type, unsigned int *clock) {
+    NVML_REQUIRE_INIT();
     if (!device || !clock) return NVML_ERROR_INVALID_ARGUMENT;
     *clock = profile_clock_mhz((Device*)device, type);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetFanSpeed(nvmlDevice_t device, unsigned int *speed) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !speed) return NVML_ERROR_INVALID_ARGUMENT;
 
@@ -581,6 +628,7 @@ nvmlReturn_t nvmlDeviceGetFanSpeed(nvmlDevice_t device, unsigned int *speed) {
 }
 
 nvmlReturn_t nvmlDeviceGetPerformanceState(nvmlDevice_t device, unsigned int *pState) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) return read_telemetry(device, pState, &FakeGpuNvmlTelemetryV1::pstate);
     if (!device || !pState) return NVML_ERROR_INVALID_ARGUMENT;
 
@@ -591,14 +639,17 @@ nvmlReturn_t nvmlDeviceGetPerformanceState(nvmlDevice_t device, unsigned int *pS
 }
 
 nvmlReturn_t nvmlDeviceGetEncoderUtilization(nvmlDevice_t device, unsigned int *utilization, unsigned int *samplingPeriodUs) {
+    NVML_REQUIRE_INIT();
     return idle_engine_utilization(device, utilization, samplingPeriodUs);
 }
 
 nvmlReturn_t nvmlDeviceGetDecoderUtilization(nvmlDevice_t device, unsigned int *utilization, unsigned int *samplingPeriodUs) {
+    NVML_REQUIRE_INIT();
     return idle_engine_utilization(device, utilization, samplingPeriodUs);
 }
 
 nvmlReturn_t nvmlDeviceGetEncoderStats(nvmlDevice_t device, unsigned int *sessionCount, unsigned int *averageFps, unsigned int *averageLatency) {
+    NVML_REQUIRE_INIT();
     if (!device || !sessionCount || !averageFps || !averageLatency) return NVML_ERROR_INVALID_ARGUMENT;
     *sessionCount = 0;
     *averageFps = 0;
@@ -607,6 +658,7 @@ nvmlReturn_t nvmlDeviceGetEncoderStats(nvmlDevice_t device, unsigned int *sessio
 }
 
 nvmlReturn_t nvmlDeviceGetFBCStats(nvmlDevice_t device, nvmlFBCStats_t *stats) {
+    NVML_REQUIRE_INIT();
     if (!device || !stats) return NVML_ERROR_INVALID_ARGUMENT;
     stats->sessionsCount = 0;
     stats->averageFPS = 0;
@@ -615,6 +667,7 @@ nvmlReturn_t nvmlDeviceGetFBCStats(nvmlDevice_t device, nvmlFBCStats_t *stats) {
 }
 
 nvmlReturn_t nvmlDeviceGetDramEncryptionMode(nvmlDevice_t device, nvmlDramEncryptionInfo_t *current, nvmlDramEncryptionInfo_t *pending) {
+    NVML_REQUIRE_INIT();
     if (!device || !current || !pending) return NVML_ERROR_INVALID_ARGUMENT;
     current->version = nvmlDramEncryptionInfo_v1;
     current->encryptionState = 0;  // Disabled
@@ -623,18 +676,44 @@ nvmlReturn_t nvmlDeviceGetDramEncryptionMode(nvmlDevice_t device, nvmlDramEncryp
     return NVML_SUCCESS;
 }
 
+// Texts as libnvidia-ml (driver 580) returns them for every defined code.
 const char* nvmlErrorString(nvmlReturn_t result) {
-    switch (result) {
-        case NVML_SUCCESS: return "Success";
-        case NVML_ERROR_UNINITIALIZED: return "Uninitialized";
-        case NVML_ERROR_INVALID_ARGUMENT: return "Invalid Argument";
-        case NVML_ERROR_NOT_SUPPORTED: return "Not Supported";
-        case NVML_ERROR_FUNCTION_NOT_FOUND: return "Function Not Found";
-        case NVML_ERROR_NOT_FOUND: return "Not Found";
-        case NVML_ERROR_NO_PERMISSION: return "No Permission";
-        case NVML_ERROR_INSUFFICIENT_SIZE: return "Insufficient Size";
-        default: return "Unknown Error";
-    }
+    static const char* const kTexts[] = {
+        "Success",                                                    // 0
+        "Uninitialized",                                              // 1
+        "Invalid Argument",                                           // 2
+        "Not Supported",                                              // 3
+        "Insufficient Permissions",                                   // 4
+        "Already Initialized",                                        // 5
+        "Not Found",                                                  // 6
+        "Insufficient Size",                                          // 7
+        "Insufficient External Power",                                // 8
+        "Driver Not Loaded",                                          // 9
+        "Timeout",                                                    // 10
+        "Interrupt Request Issue",                                    // 11
+        "NVML Shared Library Not Found",                              // 12
+        "Function Not Found",                                         // 13
+        "Corrupted infoROM",                                          // 14
+        "GPU is lost",                                                // 15
+        "GPU requires reset",                                         // 16
+        "GPU access blocked by the operating system",                 // 17
+        "Driver/library version mismatch",                            // 18
+        "In use by another client",                                   // 19
+        "Insufficient Memory",                                        // 20
+        "No data",                                                    // 21
+        "vGPU ECC not supported",                                     // 22
+        "Insufficient Resources",                                     // 23
+        "Invalid Frequency",                                          // 24
+        "Argument version mismatch",                                  // 25
+        "Requested functionality has been deprecated",                // 26
+        "System is not in ready state",                               // 27
+        "No supported GPUs were found",                               // 28
+        "Resource not in correct state to perform requested operation",  // 29
+        "Reset type is not supported for given device",               // 30
+    };
+    const int code = static_cast<int>(result);
+    if (code >= 0 && code < static_cast<int>(sizeof(kTexts) / sizeof(kTexts[0]))) return kTexts[code];
+    return "Unknown Error";
 }
 
 // Versioned function aliases (NVML v2 API)
@@ -643,15 +722,18 @@ nvmlReturn_t nvmlInit_v2() {
 }
 
 nvmlReturn_t nvmlDeviceGetCount_v2(unsigned int *deviceCount) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetCount(deviceCount);
 }
 
 nvmlReturn_t nvmlDeviceGetHandleByIndex_v2(unsigned int index, nvmlDevice_t *device) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetHandleByIndex(index, device);
 }
 
 // System query functions
 nvmlReturn_t nvmlSystemGetDriverVersion(char *version, unsigned int length) {
+    NVML_REQUIRE_INIT();
     if (!version) return NVML_ERROR_INVALID_ARGUMENT;
     const char* value = nvml_bridge::enabled() ? "FakeGPU" : kDriverVersion;
     FGPU_LOG("[FakeNVML] nvmlSystemGetDriverVersion returning: %s\n", value);
@@ -660,44 +742,51 @@ nvmlReturn_t nvmlSystemGetDriverVersion(char *version, unsigned int length) {
 
 nvmlReturn_t nvmlSystemGetNVMLVersion(char *version, unsigned int length) {
     if (!version) return NVML_ERROR_INVALID_ARGUMENT;
-    const char* value = nvml_bridge::enabled() ? "FakeGPU state bridge v1" : "12.570.195";
+    const char* value = nvml_bridge::enabled() ? "FakeGPU state bridge v1" : fake_gpu::kModeledNvmlVersion;
     FGPU_LOG("[FakeNVML] nvmlSystemGetNVMLVersion returning: %s\n", value);
     return copy_string(version, length, value);
 }
 
 nvmlReturn_t nvmlSystemGetCudaDriverVersion(int *cudaDriverVersion) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!cudaDriverVersion) return NVML_ERROR_INVALID_ARGUMENT;
-    *cudaDriverVersion = 12080;  // CUDA 12.8
+    // The same CUDA version cuDriverGetVersion reports.
+    *cudaDriverVersion = fake_gpu::kModeledCudaDriverVersion;
     FGPU_LOG("[FakeNVML] nvmlSystemGetCudaDriverVersion returning: %d\n", *cudaDriverVersion);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlSystemGetCudaDriverVersion_v2(int *cudaDriverVersion) {
+    NVML_REQUIRE_INIT();
     return nvmlSystemGetCudaDriverVersion(cudaDriverVersion);
 }
 
 // Additional functions required by nvitop
 
 nvmlReturn_t nvmlDeviceGetDisplayActive(nvmlDevice_t device, unsigned int *isActive) {
+    NVML_REQUIRE_INIT();
     if (!device || !isActive) return NVML_ERROR_INVALID_ARGUMENT;
     *isActive = 0;  // Display not active (server GPU)
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetPersistenceMode(nvmlDevice_t device, unsigned int *mode) {
+    NVML_REQUIRE_INIT();
     if (!device || !mode) return NVML_ERROR_INVALID_ARGUMENT;
     *mode = 0;  // Not in persistence mode
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetComputeMode(nvmlDevice_t device, unsigned int *mode) {
+    NVML_REQUIRE_INIT();
     if (!device || !mode) return NVML_ERROR_INVALID_ARGUMENT;
     *mode = 0;  // NVML_COMPUTEMODE_DEFAULT
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetEccMode(nvmlDevice_t device, unsigned int *current, unsigned int *pending) {
+    NVML_REQUIRE_INIT();
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     if (current) *current = 0;
     if (pending) *pending = 0;
@@ -705,12 +794,14 @@ nvmlReturn_t nvmlDeviceGetEccMode(nvmlDevice_t device, unsigned int *current, un
 }
 
 nvmlReturn_t nvmlDeviceGetTotalEccErrors(nvmlDevice_t device, unsigned int errorType, unsigned int counterType, unsigned long long *eccCounts) {
+    NVML_REQUIRE_INIT();
     if (!device || !eccCounts) return NVML_ERROR_INVALID_ARGUMENT;
     *eccCounts = 0;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetMigMode(nvmlDevice_t device, unsigned int *currentMode, unsigned int *pendingMode) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
@@ -726,6 +817,7 @@ nvmlReturn_t nvmlDeviceGetMigMode(nvmlDevice_t device, unsigned int *currentMode
 }
 
 nvmlReturn_t nvmlDeviceGetDriverModel(nvmlDevice_t device, unsigned int *current, unsigned int *pending) {
+    NVML_REQUIRE_INIT();
     if (!device || (!current && !pending)) return NVML_ERROR_INVALID_ARGUMENT;
     // Windows only (WDDM = 0, WDM/TCC = 1); nvml.h returns NOT_SUPPORTED on
     // other platforms, and this library is built for Linux and macOS.
@@ -733,10 +825,12 @@ nvmlReturn_t nvmlDeviceGetDriverModel(nvmlDevice_t device, unsigned int *current
 }
 
 nvmlReturn_t nvmlDeviceGetDriverModel_v2(nvmlDevice_t device, unsigned int *current, unsigned int *pending) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetDriverModel(device, current, pending);
 }
 
 nvmlReturn_t nvmlDeviceGetMinorNumber(nvmlDevice_t device, unsigned int *minorNumber) {
+    NVML_REQUIRE_INIT();
     if (!device || !minorNumber) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     *minorNumber = static_cast<unsigned int>(dev->index);
@@ -744,35 +838,41 @@ nvmlReturn_t nvmlDeviceGetMinorNumber(nvmlDevice_t device, unsigned int *minorNu
 }
 
 nvmlReturn_t nvmlDeviceGetMultiGpuBoard(nvmlDevice_t device, unsigned int *multiGpu) {
+    NVML_REQUIRE_INIT();
     if (!device || !multiGpu) return NVML_ERROR_INVALID_ARGUMENT;
     *multiGpu = 0;  // No
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetBoardPartNumber(nvmlDevice_t device, char *partNumber, unsigned int length) {
+    NVML_REQUIRE_INIT();
     if (!device || !partNumber) return NVML_ERROR_INVALID_ARGUMENT;
     snprintf(partNumber, length, "N/A");
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetModuleId(nvmlDevice_t device, unsigned int *moduleId) {
+    NVML_REQUIRE_INIT();
     if (!device || !moduleId) return NVML_ERROR_INVALID_ARGUMENT;
     *moduleId = 1;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetAccountingBufferSize(nvmlDevice_t device, unsigned int *bufferSize) {
+    NVML_REQUIRE_INIT();
     if (!device || !bufferSize) return NVML_ERROR_INVALID_ARGUMENT;
     *bufferSize = 4000;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetLastBBXFlushTime(nvmlDevice_t device, unsigned long long *timestamp, unsigned long *durationUs) {
+    NVML_REQUIRE_INIT();
     if (!device || !timestamp || !durationUs) return NVML_ERROR_INVALID_ARGUMENT;
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceGetGpuOperationMode(nvmlDevice_t device, unsigned int *current, unsigned int *pending) {
+    NVML_REQUIRE_INIT();
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     (void)current;
     (void)pending;
@@ -780,27 +880,32 @@ nvmlReturn_t nvmlDeviceGetGpuOperationMode(nvmlDevice_t device, unsigned int *cu
 }
 
 nvmlReturn_t nvmlDeviceGetC2cModeInfoV(nvmlDevice_t device, nvmlC2cModeInfo_v1_t *info) {
+    NVML_REQUIRE_INIT();
     if (!device || !info) return NVML_ERROR_INVALID_ARGUMENT;
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceGetHostVgpuMode(nvmlDevice_t device, unsigned int *mode) {
+    NVML_REQUIRE_INIT();
     if (!device || !mode) return NVML_ERROR_INVALID_ARGUMENT;
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceGetVgpuHeterogeneousMode(nvmlDevice_t device, nvmlVgpuHeterogeneousMode_v1_t *mode) {
+    NVML_REQUIRE_INIT();
     if (!device || !mode) return NVML_ERROR_INVALID_ARGUMENT;
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceGetGspFirmwareVersion(nvmlDevice_t device, char *version) {
+    NVML_REQUIRE_INIT();
     if (!device || !version) return NVML_ERROR_INVALID_ARGUMENT;
     snprintf(version, NVML_GSP_FIRMWARE_VERSION_BUF_SIZE, "%s", kDriverVersion);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetCurrentClocksThrottleReasons(nvmlDevice_t device, unsigned long long *reasons) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !reasons) return NVML_ERROR_INVALID_ARGUMENT;
     *reasons = 0x1ULL;
@@ -808,12 +913,14 @@ nvmlReturn_t nvmlDeviceGetCurrentClocksThrottleReasons(nvmlDevice_t device, unsi
 }
 
 nvmlReturn_t nvmlDeviceGetSupportedClocksThrottleReasons(nvmlDevice_t device, unsigned long long *supportedReasons) {
+    NVML_REQUIRE_INIT();
     if (!device || !supportedReasons) return NVML_ERROR_INVALID_ARGUMENT;
     *supportedReasons = 0x1ffULL;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetGpuMaxPcieLinkGeneration(nvmlDevice_t device, unsigned int *maxLinkGen) {
+    NVML_REQUIRE_INIT();
     if (!device || !maxLinkGen) return NVML_ERROR_INVALID_ARGUMENT;
     ModeledPcieLink current, gpu_max;
     const nvmlReturn_t result = modeled_pcie(device, current, gpu_max);
@@ -822,77 +929,122 @@ nvmlReturn_t nvmlDeviceGetGpuMaxPcieLinkGeneration(nvmlDevice_t device, unsigned
 }
 
 nvmlReturn_t nvmlDeviceGetVirtualizationMode(nvmlDevice_t device, nvmlGpuVirtualizationMode_t *pVirtualMode) {
+    NVML_REQUIRE_INIT();
     if (!device || !pVirtualMode) return NVML_ERROR_INVALID_ARGUMENT;
     *pVirtualMode = NVML_GPU_VIRTUALIZATION_MODE_NONE;
     return NVML_SUCCESS;
 }
 
-// Process information - return empty lists (no running processes)
-// NVML uses fixed-size arrays, returning count=0 means no processes
+// Compute processes. Without the state bridge the only process NVML can see
+// is this one: it is listed on a device while it holds simulated device
+// memory there, with that memory as usedGpuMemory. A real driver also lists
+// a process whose context holds no allocations; a context alone is not
+// modeled here. MIG instance ids are reported as 0xFFFFFFFF (not MIG),
+// as measured on a non-MIG GPU.
+struct NativeProcessV1 {
+    unsigned int pid;
+    unsigned long long usedGpuMemory;
+};
 
-nvmlReturn_t nvmlDeviceGetComputeRunningProcesses(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
-    if (!device || !infoCount) return NVML_ERROR_INVALID_ARGUMENT;
-    if (nvml_bridge::enabled()) return nvml_bridge::processes(device, infoCount, infos, true);
-    *infoCount = 0;  // No running compute processes
+struct NativeProcessV2 {
+    unsigned int pid;
+    unsigned long long usedGpuMemory;
+    unsigned int gpuInstanceId;
+    unsigned int computeInstanceId;
+};
+
+static nvmlReturn_t native_compute_processes(nvmlDevice_t device, unsigned int* infoCount, void* infos, bool legacy) {
+    const Device* dev = reinterpret_cast<const Device*>(device);
+    const unsigned long long used = static_cast<unsigned long long>(dev->used_memory);
+    const unsigned int required = used > 0 ? 1u : 0u;
+    const unsigned int capacity = *infoCount;
+    *infoCount = required;
+    if (required == 0) return NVML_SUCCESS;
+    if (!infos || capacity < required) return NVML_ERROR_INSUFFICIENT_SIZE;
+    const unsigned int pid = static_cast<unsigned int>(getpid());
+    if (legacy) {
+        static_cast<NativeProcessV1*>(infos)[0] = {pid, used};
+    } else {
+        static_cast<NativeProcessV2*>(infos)[0] = {pid, used, 0xFFFFFFFFu, 0xFFFFFFFFu};
+    }
     return NVML_SUCCESS;
 }
 
+nvmlReturn_t nvmlDeviceGetComputeRunningProcesses(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
+    NVML_REQUIRE_INIT();
+    if (!device || !infoCount) return NVML_ERROR_INVALID_ARGUMENT;
+    if (nvml_bridge::enabled()) return nvml_bridge::processes(device, infoCount, infos, true);
+    return native_compute_processes(device, infoCount, infos, true);
+}
+
 nvmlReturn_t nvmlDeviceGetComputeRunningProcesses_v2(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
+    NVML_REQUIRE_INIT();
     if (!device || !infoCount) return NVML_ERROR_INVALID_ARGUMENT;
     if (nvml_bridge::enabled()) return nvml_bridge::processes(device, infoCount, infos, false);
-    return nvmlDeviceGetComputeRunningProcesses(device, infoCount, infos);
+    return native_compute_processes(device, infoCount, infos, false);
 }
 
 nvmlReturn_t nvmlDeviceGetComputeRunningProcesses_v3(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetComputeRunningProcesses_v2(device, infoCount, infos);
 }
 
 nvmlReturn_t nvmlDeviceGetRunningProcessDetailList(nvmlDevice_t device, void* details) {
+    NVML_REQUIRE_INIT();
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceGetProcessUtilization(nvmlDevice_t device, void* samples,
                                            unsigned int* count, unsigned long long lastSeen) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) return nvml_bridge::process_utilization(device, samples, count, lastSeen);
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceGetGraphicsRunningProcesses(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
+    NVML_REQUIRE_INIT();
     if (!device || !infoCount) return NVML_ERROR_INVALID_ARGUMENT;
     *infoCount = 0;  // No running graphics processes
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetGraphicsRunningProcesses_v2(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetGraphicsRunningProcesses(device, infoCount, infos);
 }
 
 nvmlReturn_t nvmlDeviceGetGraphicsRunningProcesses_v3(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetGraphicsRunningProcesses(device, infoCount, infos);
 }
 
 nvmlReturn_t nvmlDeviceGetMPSComputeRunningProcesses(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
+    NVML_REQUIRE_INIT();
     if (!device || !infoCount) return NVML_ERROR_INVALID_ARGUMENT;
     *infoCount = 0;  // No MPS processes
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetMPSComputeRunningProcesses_v2(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetMPSComputeRunningProcesses(device, infoCount, infos);
 }
 
 nvmlReturn_t nvmlDeviceGetMPSComputeRunningProcesses_v3(nvmlDevice_t device, unsigned int *infoCount, void *infos) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetMPSComputeRunningProcesses(device, infoCount, infos);
 }
 
 // Clock-related functions
 nvmlReturn_t nvmlDeviceGetMaxCustomerBoostClock(nvmlDevice_t device, unsigned int clockType, unsigned int *clockMHz) {
+    NVML_REQUIRE_INIT();
     if (!device || !clockMHz) return NVML_ERROR_INVALID_ARGUMENT;
     *clockMHz = profile_clock_mhz((Device*)device, clockType);
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetMinMaxClockOfPState(nvmlDevice_t device, unsigned int clockType, unsigned int pState, unsigned int *minClockMHz, unsigned int *maxClockMHz) {
+    NVML_REQUIRE_INIT();
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     if (minClockMHz) *minClockMHz = 210;
     if (maxClockMHz) *maxClockMHz = profile_clock_mhz((Device*)device, clockType);
@@ -900,15 +1052,18 @@ nvmlReturn_t nvmlDeviceGetMinMaxClockOfPState(nvmlDevice_t device, unsigned int 
 }
 
 nvmlReturn_t nvmlDeviceGetApplicationsClock(nvmlDevice_t device, unsigned int clockType, unsigned int *clockMHz) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetMaxCustomerBoostClock(device, clockType, clockMHz);
 }
 
 nvmlReturn_t nvmlDeviceGetDefaultApplicationsClock(nvmlDevice_t device, unsigned int clockType, unsigned int *clockMHz) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetMaxCustomerBoostClock(device, clockType, clockMHz);
 }
 
 // Power management
 nvmlReturn_t nvmlDeviceGetEnforcedPowerLimit(nvmlDevice_t device, unsigned int *limit) {
+    NVML_REQUIRE_INIT();
     if (!device || !limit) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetEnforcedPowerLimit", device);
     const unsigned int value = default_power_limit_mw((Device*)device);
@@ -918,6 +1073,7 @@ nvmlReturn_t nvmlDeviceGetEnforcedPowerLimit(nvmlDevice_t device, unsigned int *
 }
 
 nvmlReturn_t nvmlDeviceGetPowerManagementLimitConstraints(nvmlDevice_t device, unsigned int *minLimit, unsigned int *maxLimit) {
+    NVML_REQUIRE_INIT();
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetPowerManagementLimitConstraints", device);
     unsigned int min_limit = 0, max_limit = 0;
@@ -929,6 +1085,7 @@ nvmlReturn_t nvmlDeviceGetPowerManagementLimitConstraints(nvmlDevice_t device, u
 }
 
 nvmlReturn_t nvmlDeviceGetPowerManagementDefaultLimit(nvmlDevice_t device, unsigned int *defaultLimit) {
+    NVML_REQUIRE_INIT();
     if (!device || !defaultLimit) return NVML_ERROR_INVALID_ARGUMENT;
     trace_power("nvmlDeviceGetPowerManagementDefaultLimit", device);
     const unsigned int value = default_power_limit_mw((Device*)device);
@@ -939,24 +1096,28 @@ nvmlReturn_t nvmlDeviceGetPowerManagementDefaultLimit(nvmlDevice_t device, unsig
 
 // Workload power profiles: not supported in FakeGPU.
 nvmlReturn_t nvmlDeviceWorkloadPowerProfileGetProfilesInfo(nvmlDevice_t device, void *profilesInfo) {
+    NVML_REQUIRE_INIT();
     (void)device;
     (void)profilesInfo;
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceWorkloadPowerProfileGetCurrentProfiles(nvmlDevice_t device, void *currentProfiles) {
+    NVML_REQUIRE_INIT();
     (void)device;
     (void)currentProfiles;
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceWorkloadPowerProfileSetRequestedProfiles(nvmlDevice_t device, void *requestedProfiles) {
+    NVML_REQUIRE_INIT();
     (void)device;
     (void)requestedProfiles;
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceWorkloadPowerProfileClearRequestedProfiles(nvmlDevice_t device, void *requestedProfiles) {
+    NVML_REQUIRE_INIT();
     (void)device;
     (void)requestedProfiles;
     return NVML_ERROR_NOT_SUPPORTED;
@@ -964,6 +1125,7 @@ nvmlReturn_t nvmlDeviceWorkloadPowerProfileClearRequestedProfiles(nvmlDevice_t d
 
 // Architecture info. GpuArch values follow compute capability, not NVML ids.
 nvmlReturn_t nvmlDeviceGetArchitecture(nvmlDevice_t device, unsigned int *arch) {
+    NVML_REQUIRE_INIT();
     if (!device || !arch) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     switch (dev->profile.architecture) {
@@ -981,6 +1143,7 @@ nvmlReturn_t nvmlDeviceGetArchitecture(nvmlDevice_t device, unsigned int *arch) 
 }
 
 nvmlReturn_t nvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int *major, int *minor) {
+    NVML_REQUIRE_INIT();
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     if (major) *major = dev->profile.compute_major;
@@ -990,6 +1153,7 @@ nvmlReturn_t nvmlDeviceGetCudaComputeCapability(nvmlDevice_t device, int *major,
 
 // BAR1 Memory info (for some nvidia-smi compatibility)
 nvmlReturn_t nvmlDeviceGetBAR1MemoryInfo(nvmlDevice_t device, void *bar1Memory) {
+    NVML_REQUIRE_INIT();
     if (!device || !bar1Memory) return NVML_ERROR_INVALID_ARGUMENT;
     struct { unsigned long long bar1Total; unsigned long long bar1Free; unsigned long long bar1Used; } *mem = 
         (decltype(mem))bar1Memory;
@@ -1001,17 +1165,20 @@ nvmlReturn_t nvmlDeviceGetBAR1MemoryInfo(nvmlDevice_t device, void *bar1Memory) 
 
 // Board/serial info
 nvmlReturn_t nvmlDeviceGetBoardId(nvmlDevice_t device, unsigned int *boardId) {
+    NVML_REQUIRE_INIT();
     if (!device || !boardId) return NVML_ERROR_INVALID_ARGUMENT;
     *boardId = 0;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetSerial(nvmlDevice_t device, char *serial, unsigned int length) {
+    NVML_REQUIRE_INIT();
     if (!device || !serial) return NVML_ERROR_INVALID_ARGUMENT;
     return copy_string(serial, length, "N/A");
 }
 
 nvmlReturn_t nvmlDeviceGetBrand(nvmlDevice_t device, unsigned int *type) {
+    NVML_REQUIRE_INIT();
     if (!device || !type) return NVML_ERROR_INVALID_ARGUMENT;
     *type = 0;  // NVML_BRAND_UNKNOWN
     return NVML_SUCCESS;
@@ -1019,28 +1186,33 @@ nvmlReturn_t nvmlDeviceGetBrand(nvmlDevice_t device, unsigned int *type) {
 
 // VBIOS
 nvmlReturn_t nvmlDeviceGetVbiosVersion(nvmlDevice_t device, char *version, unsigned int length) {
+    NVML_REQUIRE_INIT();
     if (!device || !version) return NVML_ERROR_INVALID_ARGUMENT;
     return copy_string(version, length, "92.00.00.00.00");
 }
 
 // Info ROM
 nvmlReturn_t nvmlDeviceGetInforomVersion(nvmlDevice_t device, unsigned int object, char *version, unsigned int length) {
+    NVML_REQUIRE_INIT();
     if (!device || !version) return NVML_ERROR_INVALID_ARGUMENT;
     return copy_string(version, length, "N/A");
 }
 
 nvmlReturn_t nvmlDeviceGetInforomImageVersion(nvmlDevice_t device, char *version, unsigned int length) {
+    NVML_REQUIRE_INIT();
     if (!device || !version) return NVML_ERROR_INVALID_ARGUMENT;
     return copy_string(version, length, "N/A");
 }
 
 nvmlReturn_t nvmlDeviceValidateInforom(nvmlDevice_t device) {
+    NVML_REQUIRE_INIT();
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     return NVML_SUCCESS;
 }
 
 // NVLink
 nvmlReturn_t nvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, unsigned int *isActive) {
+    NVML_REQUIRE_INIT();
     if (!device || !isActive) return NVML_ERROR_INVALID_ARGUMENT;
     ModeledNvLinkPeer peer;
     *isActive = modeled_nvlink_peer(
@@ -1051,6 +1223,7 @@ nvmlReturn_t nvmlDeviceGetNvLinkState(nvmlDevice_t device, unsigned int link, un
 }
 
 nvmlReturn_t nvmlDeviceGetNvLinkCapability(nvmlDevice_t device, unsigned int link, unsigned int capability, unsigned int *capResult) {
+    NVML_REQUIRE_INIT();
     if (!device || !capResult) return NVML_ERROR_INVALID_ARGUMENT;
     (void)capability;
     ModeledNvLinkPeer peer;
@@ -1065,6 +1238,7 @@ nvmlReturn_t nvmlDeviceGetNvLinkRemoteDeviceType(
     nvmlDevice_t device,
     unsigned int link,
     nvmlIntNvLinkDeviceType_t *remoteDeviceType) {
+    NVML_REQUIRE_INIT();
     if (!device || !remoteDeviceType) return NVML_ERROR_INVALID_ARGUMENT;
     ModeledNvLinkPeer peer;
     if (!modeled_nvlink_peer(reinterpret_cast<Device*>(device), link, peer)) {
@@ -1081,6 +1255,7 @@ nvmlReturn_t nvmlDeviceGetNvLinkRemotePciInfo_v2(
     nvmlDevice_t device,
     unsigned int link,
     nvmlPciInfo_t *pci) {
+    NVML_REQUIRE_INIT();
     if (!device || !pci) return NVML_ERROR_INVALID_ARGUMENT;
     ModeledNvLinkPeer peer;
     if (!modeled_nvlink_peer(
@@ -1107,6 +1282,7 @@ nvmlReturn_t nvmlDeviceGetNvLinkRemotePciInfo_v2(
 }
 
 nvmlReturn_t nvmlDeviceGetGpuFabricInfoV(nvmlDevice_t device, void *gpuFabricInfo) {
+    NVML_REQUIRE_INIT();
     if (!device || !gpuFabricInfo) return NVML_ERROR_INVALID_ARGUMENT;
 
     // Versioned structs: v2/v3 begin with a version field.
@@ -1126,6 +1302,7 @@ nvmlReturn_t nvmlDeviceGetGpuFabricInfoV(nvmlDevice_t device, void *gpuFabricInf
 }
 
 nvmlReturn_t nvmlDeviceGetBridgeChipInfo(nvmlDevice_t device, nvmlBridgeChipHierarchy_t *bridgeHierarchy) {
+    NVML_REQUIRE_INIT();
     if (!device || !bridgeHierarchy) return NVML_ERROR_INVALID_ARGUMENT;
     bridgeHierarchy->bridgeCount = 0;
     return NVML_SUCCESS;
@@ -1133,16 +1310,19 @@ nvmlReturn_t nvmlDeviceGetBridgeChipInfo(nvmlDevice_t device, nvmlBridgeChipHier
 
 // Retired pages
 nvmlReturn_t nvmlDeviceGetRetiredPages(nvmlDevice_t device, unsigned int cause, unsigned int *pageCount, unsigned long long *addresses) {
+    NVML_REQUIRE_INIT();
     if (!device || !pageCount) return NVML_ERROR_INVALID_ARGUMENT;
     *pageCount = 0;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetRetiredPages_v2(nvmlDevice_t device, unsigned int cause, unsigned int *pageCount, unsigned long long *addresses, unsigned long long *timestamps) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetRetiredPages(device, cause, pageCount, addresses);
 }
 
 nvmlReturn_t nvmlDeviceGetRetiredPagesPendingStatus(nvmlDevice_t device, unsigned int *isPending) {
+    NVML_REQUIRE_INIT();
     if (!device || !isPending) return NVML_ERROR_INVALID_ARGUMENT;
     *isPending = 0;
     return NVML_SUCCESS;
@@ -1151,6 +1331,7 @@ nvmlReturn_t nvmlDeviceGetRetiredPagesPendingStatus(nvmlDevice_t device, unsigne
 // PCIe throughput
 // KB/s over the last second of the modeled link schedule (fakegpu.link_traffic).
 nvmlReturn_t nvmlDeviceGetPcieThroughput(nvmlDevice_t device, unsigned int counter, unsigned int *value) {
+    NVML_REQUIRE_INIT();
     if (!device || !value || counter > 1) return NVML_ERROR_INVALID_ARGUMENT;
     // counter: 0 = TX (sent by the GPU), 1 = RX
     uint64_t bytes_per_second = 0;
@@ -1175,12 +1356,14 @@ nvmlReturn_t nvmlDeviceGetPcieThroughput(nvmlDevice_t device, unsigned int count
 }
 
 nvmlReturn_t nvmlDeviceGetPcieReplayCounter(nvmlDevice_t device, unsigned int *value) {
+    NVML_REQUIRE_INIT();
     if (!device || !value) return NVML_ERROR_INVALID_ARGUMENT;
     *value = 0;
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetPcieLinkGeneration(nvmlDevice_t device, unsigned int *currLinkGen) {
+    NVML_REQUIRE_INIT();
     if (!device || !currLinkGen) return NVML_ERROR_INVALID_ARGUMENT;
     ModeledPcieLink current, gpu_max;
     const nvmlReturn_t result = modeled_pcie(device, current, gpu_max);
@@ -1189,6 +1372,7 @@ nvmlReturn_t nvmlDeviceGetPcieLinkGeneration(nvmlDevice_t device, unsigned int *
 }
 
 nvmlReturn_t nvmlDeviceGetPcieLinkWidth(nvmlDevice_t device, unsigned int *currLinkWidth) {
+    NVML_REQUIRE_INIT();
     if (!device || !currLinkWidth) return NVML_ERROR_INVALID_ARGUMENT;
     ModeledPcieLink current, gpu_max;
     const nvmlReturn_t result = modeled_pcie(device, current, gpu_max);
@@ -1197,20 +1381,24 @@ nvmlReturn_t nvmlDeviceGetPcieLinkWidth(nvmlDevice_t device, unsigned int *currL
 }
 
 nvmlReturn_t nvmlDeviceGetCurrPcieLinkGeneration(nvmlDevice_t device, unsigned int *currLinkGen) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetPcieLinkGeneration(device, currLinkGen);
 }
 
 nvmlReturn_t nvmlDeviceGetCurrPcieLinkWidth(nvmlDevice_t device, unsigned int *currLinkWidth) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetPcieLinkWidth(device, currLinkWidth);
 }
 
 // The maximum the device and system allow: the trained link, since the
 // model has no power-saving downtraining.
 nvmlReturn_t nvmlDeviceGetMaxPcieLinkGeneration(nvmlDevice_t device, unsigned int *maxLinkGen) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetPcieLinkGeneration(device, maxLinkGen);
 }
 
 nvmlReturn_t nvmlDeviceGetMaxPcieLinkWidth(nvmlDevice_t device, unsigned int *maxLinkWidth) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetPcieLinkWidth(device, maxLinkWidth);
 }
 
@@ -1235,6 +1423,7 @@ nvmlReturn_t nvmlDeviceGetTopologyCommonAncestor(
     nvmlDevice_t device1,
     nvmlDevice_t device2,
     nvmlGpuTopologyLevel_t *pathInfo) {
+    NVML_REQUIRE_INIT();
     if (!pathInfo) return NVML_ERROR_INVALID_ARGUMENT;
     ModeledDeviceTopology topology;
     int first = -1, second = -1;
@@ -1255,6 +1444,7 @@ nvmlReturn_t nvmlDeviceGetP2PStatus(
     nvmlDevice_t device2,
     nvmlGpuP2PCapsIndex_t p2pIndex,
     nvmlGpuP2PStatus_t *p2pStatus) {
+    NVML_REQUIRE_INIT();
     if (!p2pStatus) return NVML_ERROR_INVALID_ARGUMENT;
     ModeledDeviceTopology topology;
     int first = -1, second = -1;
@@ -1291,6 +1481,7 @@ nvmlReturn_t nvmlDeviceGetP2PStatus(
 
 // Display mode
 nvmlReturn_t nvmlDeviceGetDisplayMode(nvmlDevice_t device, unsigned int *display) {
+    NVML_REQUIRE_INIT();
     if (!device || !display) return NVML_ERROR_INVALID_ARGUMENT;
     *display = 0;  // Display disabled (server GPU)
     return NVML_SUCCESS;
@@ -1298,6 +1489,7 @@ nvmlReturn_t nvmlDeviceGetDisplayMode(nvmlDevice_t device, unsigned int *display
 
 // Handle by UUID and PCI Bus ID
 nvmlReturn_t nvmlDeviceGetHandleByUUID(const char *uuid, nvmlDevice_t *device) {
+    NVML_REQUIRE_INIT();
     if (!uuid || !device) return NVML_ERROR_INVALID_ARGUMENT;
     if (nvml_bridge::enabled()) return nvml_bridge::lookup(uuid, true, device);
     GlobalState& state = GlobalState::instance();
@@ -1326,6 +1518,7 @@ nvmlReturn_t nvmlDeviceGetHandleByUUID(const char *uuid, nvmlDevice_t *device) {
 }
 
 nvmlReturn_t nvmlDeviceGetHandleByPciBusId(const char *pciBusId, nvmlDevice_t *device) {
+    NVML_REQUIRE_INIT();
     if (!pciBusId || !device) return NVML_ERROR_INVALID_ARGUMENT;
     if (nvml_bridge::enabled()) return nvml_bridge::lookup(pciBusId, false, device);
     GlobalState& state = GlobalState::instance();
@@ -1342,10 +1535,12 @@ nvmlReturn_t nvmlDeviceGetHandleByPciBusId(const char *pciBusId, nvmlDevice_t *d
 }
 
 nvmlReturn_t nvmlDeviceGetHandleByPciBusId_v2(const char *pciBusId, nvmlDevice_t *device) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetHandleByPciBusId(pciBusId, device);
 }
 
 nvmlReturn_t nvmlDeviceGetIndex(nvmlDevice_t device, unsigned int *index) {
+    NVML_REQUIRE_INIT();
     if (!device || !index) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     *index = dev->index;
@@ -1354,6 +1549,7 @@ nvmlReturn_t nvmlDeviceGetIndex(nvmlDevice_t device, unsigned int *index) {
 
 // Unit queries (for compute clusters)
 nvmlReturn_t nvmlUnitGetCount(unsigned int *unitCount) {
+    NVML_REQUIRE_INIT();
     if (!unitCount) return NVML_ERROR_INVALID_ARGUMENT;
     *unitCount = 0;
     return NVML_SUCCESS;
@@ -1361,23 +1557,27 @@ nvmlReturn_t nvmlUnitGetCount(unsigned int *unitCount) {
 
 // Event set (stub implementations)
 nvmlReturn_t nvmlEventSetCreate(void **set) {
+    NVML_REQUIRE_INIT();
     if (!set) return NVML_ERROR_INVALID_ARGUMENT;
     *set = (void*)0x1;  // Fake handle
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlEventSetFree(void *set) {
+    NVML_REQUIRE_INIT();
     return NVML_SUCCESS;
 }
 
 // Accounting (stub)
 nvmlReturn_t nvmlDeviceGetAccountingMode(nvmlDevice_t device, unsigned int *mode) {
+    NVML_REQUIRE_INIT();
     if (!device || !mode) return NVML_ERROR_INVALID_ARGUMENT;
     *mode = 0;  // Disabled
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceGetAccountingPids(nvmlDevice_t device, unsigned int *count, unsigned int *pids) {
+    NVML_REQUIRE_INIT();
     if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
     *count = 0;
     return NVML_SUCCESS;
@@ -1385,6 +1585,7 @@ nvmlReturn_t nvmlDeviceGetAccountingPids(nvmlDevice_t device, unsigned int *coun
 
 // MIG-related functions
 nvmlReturn_t nvmlDeviceGetMaxMigDeviceCount(nvmlDevice_t device, unsigned int *count) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
@@ -1397,6 +1598,7 @@ nvmlReturn_t nvmlDeviceGetMaxMigDeviceCount(nvmlDevice_t device, unsigned int *c
 }
 
 nvmlReturn_t nvmlDeviceGetMigDeviceHandleByIndex(nvmlDevice_t device, unsigned int index, nvmlDevice_t *migDevice) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device || !migDevice) return NVML_ERROR_INVALID_ARGUMENT;
     Device* parent = (Device*)device;
@@ -1422,15 +1624,18 @@ nvmlReturn_t nvmlDeviceGetMigDeviceHandleByIndex(nvmlDevice_t device, unsigned i
 }
 
 nvmlReturn_t nvmlDeviceGetGpuInstanceById(nvmlDevice_t device, unsigned int id, void *gpuInstance) {
+    NVML_REQUIRE_INIT();
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceGetGpuInstances(nvmlDevice_t device, unsigned int profileId, void *gpuInstances, unsigned int *count) {
+    NVML_REQUIRE_INIT();
     if (count) *count = 0;
     return NVML_ERROR_NOT_SUPPORTED;
 }
 
 nvmlReturn_t nvmlDeviceIsMigDeviceHandle(nvmlDevice_t device, unsigned int *isMigDevice) {
+    NVML_REQUIRE_INIT();
     if (!device || !isMigDevice) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     *isMigDevice = dev->is_mig_device ? 1U : 0U;
@@ -1438,6 +1643,7 @@ nvmlReturn_t nvmlDeviceIsMigDeviceHandle(nvmlDevice_t device, unsigned int *isMi
 }
 
 nvmlReturn_t nvmlDeviceGetDeviceHandleFromMigDeviceHandle(nvmlDevice_t migDevice, nvmlDevice_t *device) {
+    NVML_REQUIRE_INIT();
     if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!migDevice || !device) return NVML_ERROR_INVALID_ARGUMENT;
     Device* mig = (Device*)migDevice;
@@ -1454,6 +1660,7 @@ nvmlReturn_t nvmlDeviceGetDeviceHandleFromMigDeviceHandle(nvmlDevice_t migDevice
 nvmlReturn_t nvmlDeviceGetGpuInstanceId(
     nvmlDevice_t device,
     unsigned int *id) {
+    NVML_REQUIRE_INIT();
     if (!device || !id) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     if (!dev->is_mig_device) {
@@ -1466,6 +1673,7 @@ nvmlReturn_t nvmlDeviceGetGpuInstanceId(
 nvmlReturn_t nvmlDeviceGetComputeInstanceId(
     nvmlDevice_t device,
     unsigned int *id) {
+    NVML_REQUIRE_INIT();
     if (!device || !id) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     if (!dev->is_mig_device) {
@@ -1481,10 +1689,12 @@ nvmlReturn_t nvmlDeviceGetComputeInstanceId(
 
 // Additional power functions
 nvmlReturn_t nvmlDeviceGetPowerState(nvmlDevice_t device, unsigned int *pState) {
+    NVML_REQUIRE_INIT();
     return nvmlDeviceGetPerformanceState(device, pState);
 }
 
 nvmlReturn_t nvmlDeviceGetPowerSource(nvmlDevice_t device, unsigned int *powerSource) {
+    NVML_REQUIRE_INIT();
     if (!device || !powerSource) return NVML_ERROR_INVALID_ARGUMENT;
     *powerSource = 0;  // AC power
     return NVML_SUCCESS;
@@ -1503,6 +1713,7 @@ static nvmlReturn_t single_supported_clock(unsigned int clock, unsigned int *cou
 }
 
 nvmlReturn_t nvmlDeviceGetSupportedGraphicsClocks(nvmlDevice_t device, unsigned int memoryClockMHz, unsigned int *count, unsigned int *clocksMHz) {
+    NVML_REQUIRE_INIT();
     if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
     if (memoryClockMHz != profile_clock_mhz(dev, 2)) return NVML_ERROR_NOT_FOUND;
@@ -1510,21 +1721,25 @@ nvmlReturn_t nvmlDeviceGetSupportedGraphicsClocks(nvmlDevice_t device, unsigned 
 }
 
 nvmlReturn_t nvmlDeviceGetSupportedMemoryClocks(nvmlDevice_t device, unsigned int *count, unsigned int *clocksMHz) {
+    NVML_REQUIRE_INIT();
     if (!device || !count) return NVML_ERROR_INVALID_ARGUMENT;
     return single_supported_clock(profile_clock_mhz((Device*)device, 2), count, clocksMHz);
 }
 
 // Lock clocks (no-op)
 nvmlReturn_t nvmlDeviceSetGpuLockedClocks(nvmlDevice_t device, unsigned int minGpuClockMHz, unsigned int maxGpuClockMHz) {
+    NVML_REQUIRE_INIT();
     return NVML_SUCCESS;
 }
 
 nvmlReturn_t nvmlDeviceResetGpuLockedClocks(nvmlDevice_t device) {
+    NVML_REQUIRE_INIT();
     return NVML_SUCCESS;
 }
 
 // Auto-boost
 nvmlReturn_t nvmlDeviceGetAutoBoostedClocksEnabled(nvmlDevice_t device, unsigned int *isEnabled, unsigned int *defaultIsEnabled) {
+    NVML_REQUIRE_INIT();
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     if (isEnabled) *isEnabled = 1;
     if (defaultIsEnabled) *defaultIsEnabled = 1;
@@ -1533,6 +1748,7 @@ nvmlReturn_t nvmlDeviceGetAutoBoostedClocksEnabled(nvmlDevice_t device, unsigned
 
 // Remapped rows
 nvmlReturn_t nvmlDeviceGetRemappedRows(nvmlDevice_t device, unsigned int *corrRows, unsigned int *uncRows, unsigned int *isPending, unsigned int *failureOccurred) {
+    NVML_REQUIRE_INIT();
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     if (corrRows) *corrRows = 0;
     if (uncRows) *uncRows = 0;
@@ -1542,6 +1758,7 @@ nvmlReturn_t nvmlDeviceGetRemappedRows(nvmlDevice_t device, unsigned int *corrRo
 }
 
 nvmlReturn_t nvmlDeviceGetRowRemapperHistogram(nvmlDevice_t device, nvmlRowRemapperHistogramValues_t *values) {
+    NVML_REQUIRE_INIT();
     if (!device || !values) return NVML_ERROR_INVALID_ARGUMENT;
     values->max = 192;
     values->high = 0;
@@ -1553,6 +1770,7 @@ nvmlReturn_t nvmlDeviceGetRowRemapperHistogram(nvmlDevice_t device, nvmlRowRemap
 
 // FieldValues (for batch queries)
 nvmlReturn_t nvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvmlFieldValue_t *values) {
+    NVML_REQUIRE_INIT();
     if (!device || !values || valuesCount < 0) return NVML_ERROR_INVALID_ARGUMENT;
 
     // Implement the subset required by nvidia-smi power readings.
@@ -1647,6 +1865,7 @@ nvmlReturn_t nvmlDeviceGetFieldValues(nvmlDevice_t device, int valuesCount, nvml
 
 // Samples
 nvmlReturn_t nvmlDeviceGetSamples(nvmlDevice_t device, unsigned int type, unsigned long long lastSeenTimeStamp, unsigned int *sampleValType, unsigned int *sampleCount, void *samples) {
+    NVML_REQUIRE_INIT();
     if (!device || !sampleCount) return NVML_ERROR_INVALID_ARGUMENT;
     *sampleCount = 0;
     return NVML_SUCCESS;

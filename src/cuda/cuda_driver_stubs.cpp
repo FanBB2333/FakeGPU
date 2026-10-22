@@ -1,7 +1,9 @@
 #include "cuda_driver_defs.hpp"
 #include "cuda_driver_passthrough.hpp"
+#include "driver_model.hpp"
 #include "kernel_executor.hpp"
 #include "kernel_image.hpp"
+#include "modeled_driver_version.hpp"
 #include "../core/backend_config.hpp"
 #include "../core/global_state.hpp"
 #include "../core/hybrid_memory_manager.hpp"
@@ -16,9 +18,11 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 using namespace fake_gpu;
+namespace model = fake_gpu::cuda::model;
 
 // Track current context (simplified - just track device)
 static thread_local int current_context_device = 0;
@@ -276,7 +280,9 @@ CUresult real_mem_alloc_async(CUdeviceptr* dptr, size_t bytesize, CUstream strea
 
 std::mutex g_ctx_mutex;
 std::unordered_map<CUcontext, int> g_ctx_to_virtual_device;
-std::atomic<std::uintptr_t> g_next_stream_handle{1};
+// Simulated stream handles start above cudaStreamLegacy (0x1) and
+// cudaStreamPerThread (0x2), which name the default stream.
+std::atomic<std::uintptr_t> g_next_stream_handle{0x10};
 std::atomic<std::uintptr_t> g_next_event_handle{1};
 std::atomic<std::uint64_t> g_next_timeline_tick{1};
 std::mutex g_stream_mutex;
@@ -285,14 +291,38 @@ std::uint64_t g_default_stream_completed_tick = 0;
 bool g_default_stream_auto_complete_next_event_record = false;
 std::mutex g_event_mutex;
 
+// Stream attributes (cuStreamGetAttribute). Defaults are what one Ampere
+// GPU (sm_80) reported for a new stream; -1 is the synchronization policy the
+// driver reports before one is set.
+struct StreamAttributes {
+    int priority = 0;
+    int sync_policy = -1;
+    CUaccessPolicyWindow access_policy_window{};
+    unsigned char mem_sync_domain_default = 0;
+    unsigned char mem_sync_domain_remote = 0;
+    int mem_sync_domain = 0;
+};
+
 struct StreamState {
     unsigned int flags = 0;
     std::uint64_t submitted_tick = 0;
     std::uint64_t completed_tick = 0;
     bool auto_complete_next_event_record = false;
+    StreamAttributes attributes;
 };
 
 std::unordered_map<CUstream, StreamState> g_stream_states;
+StreamAttributes g_default_stream_attributes;
+
+// cudaStreamLegacy and cudaStreamPerThread (driver_types.h) both name the
+// default stream here; per-thread default streams are not modeled separately.
+constexpr std::uintptr_t kStreamLegacy = 0x1;
+constexpr std::uintptr_t kStreamPerThread = 0x2;
+
+CUstream canonical_stream(CUstream stream) {
+    const auto value = reinterpret_cast<std::uintptr_t>(stream);
+    return value == kStreamLegacy || value == kStreamPerThread ? nullptr : stream;
+}
 
 struct EventState {
     unsigned int flags = 0;
@@ -367,6 +397,7 @@ CUresult bind_context(CUcontext* pctx, CUdevice dev, const char* api_name, RealC
 }
 
 bool lookup_stream_flags(CUstream stream, unsigned int& flags) {
+    stream = canonical_stream(stream);
     if (stream == nullptr) {
         flags = CU_STREAM_DEFAULT;
         return true;
@@ -379,6 +410,7 @@ bool lookup_stream_flags(CUstream stream, unsigned int& flags) {
 }
 
 bool lookup_stream_state_locked(CUstream stream, StreamState& state) {
+    stream = canonical_stream(stream);
     if (stream == nullptr) {
         state.flags = CU_STREAM_DEFAULT;
         state.submitted_tick = g_default_stream_submitted_tick;
@@ -395,6 +427,7 @@ bool lookup_stream_state_locked(CUstream stream, StreamState& state) {
 }
 
 bool erase_stream_handle(CUstream stream) {
+    stream = canonical_stream(stream);
     if (stream == nullptr) {
         return false;
     }
@@ -454,6 +487,7 @@ std::uint64_t reserve_next_tick(std::uint64_t floor_tick) {
 }
 
 bool submit_stream_operation_locked(CUstream stream, std::uint64_t& tick) {
+    stream = canonical_stream(stream);
     StreamState state;
     if (!lookup_stream_state_locked(stream, state)) {
         return false;
@@ -477,6 +511,7 @@ bool submit_stream_operation_locked(CUstream stream, std::uint64_t& tick) {
 }
 
 bool mark_stream_synchronized_locked(CUstream stream) {
+    stream = canonical_stream(stream);
     if (stream == nullptr) {
         g_default_stream_completed_tick = g_default_stream_submitted_tick;
         return true;
@@ -490,6 +525,7 @@ bool mark_stream_synchronized_locked(CUstream stream) {
 }
 
 void mark_stream_completed_through_tick_locked(CUstream stream, std::uint64_t tick) {
+    stream = canonical_stream(stream);
     if (stream == nullptr) {
         g_default_stream_submitted_tick = std::max(g_default_stream_submitted_tick, tick);
         g_default_stream_completed_tick = std::max(g_default_stream_completed_tick, tick);
@@ -501,6 +537,7 @@ void mark_stream_completed_through_tick_locked(CUstream stream, std::uint64_t ti
 }
 
 void mark_stream_auto_complete_next_event_record_locked(CUstream stream) {
+    stream = canonical_stream(stream);
     if (stream == nullptr) {
         g_default_stream_auto_complete_next_event_record = true;
         return;
@@ -509,6 +546,7 @@ void mark_stream_auto_complete_next_event_record_locked(CUstream stream) {
 }
 
 bool consume_stream_auto_complete_next_event_record_locked(CUstream stream) {
+    stream = canonical_stream(stream);
     if (stream == nullptr) {
         const bool should_auto_complete = g_default_stream_auto_complete_next_event_record;
         g_default_stream_auto_complete_next_event_record = false;
@@ -524,6 +562,7 @@ bool consume_stream_auto_complete_next_event_record_locked(CUstream stream) {
 }
 
 std::uint64_t stream_completed_tick(CUstream stream) {
+    stream = canonical_stream(stream);
     std::lock_guard<std::mutex> lock(g_stream_mutex);
     if (stream == nullptr) {
         return g_default_stream_completed_tick;
@@ -536,6 +575,7 @@ std::uint64_t stream_completed_tick(CUstream stream) {
 }
 
 bool mark_event_recorded(CUevent event, CUstream stream) {
+    stream = canonical_stream(stream);
     EventState existing;
     if (!lookup_event_state(event, existing)) {
         return false;
@@ -609,6 +649,84 @@ CUresult mark_stream_host_function_complete(CUstream stream) {
     return CUDA_SUCCESS;
 }
 
+void* real_driver_entry(const char* name) {
+    if (!real_driver_available()) return nullptr;
+    return CudaDriverPassthrough::instance().getRealFunction(name);
+}
+
+CUresult free_device_allocation(void* ptr) {
+    GlobalState& state = GlobalState::instance();
+    std::size_t size = 0;
+    int device = 0;
+    if (state.release_allocation(ptr, size, device)) {
+        free(ptr);
+        FGPU_LOG("[FakeCUDA-Driver] released %zu bytes at %p from device %d\n", size, ptr, device);
+        return CUDA_SUCCESS;
+    }
+    // Measured: cuMemFree and cudaFree reject interior pointers, pinned or
+    // registered host memory and VMM mappings with CUDA_ERROR_INVALID_VALUE.
+    {
+        model::SharedState& shared = model::shared_state();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        model::VmmAddress vmm;
+        if (model::find_vmm_address_locked(shared, reinterpret_cast<std::uintptr_t>(ptr), vmm)) {
+            return CUDA_ERROR_INVALID_VALUE;
+        }
+    }
+    GlobalState::AllocationKind kind = GlobalState::AllocationKind::Device;
+    if (state.get_allocation_info_ex(ptr, size, device, kind)) return CUDA_ERROR_INVALID_VALUE;
+    // The real driver also rejects addresses it never returned, including a
+    // second free. Simulate mode accepts them unless FAKEGPU_UNSUPPORTED_API
+    // is error, so programs that free foreign or stale pointers keep running.
+    if (record_unsupported_api("cuMemFree", "untracked_pointer_ignored")) return CUDA_ERROR_INVALID_VALUE;
+    FGPU_LOG("[FakeCUDA-Driver] free of untracked pointer %p ignored\n", ptr);
+    return CUDA_SUCCESS;
+}
+
+// Blocks per multiprocessor limited by threads, the block limit and dynamic
+// shared memory. On one Ampere GPU (sm_80) a trivial kernel gave
+// min(maxBlocksPerSM, floor(maxThreadsPerSM / (warps * 32))) and
+// floor(sharedMemPerSM / (dynamic + reserved per block)), and 0 once the block
+// or the dynamic shared memory exceeded the per-block limit. Register and
+// static shared memory use are not modeled (function attributes report 0).
+CUresult model_occupancy(int* num_blocks, int device, int block_size, size_t dynamic_smem, unsigned int flags) {
+    if (!num_blocks) return CUDA_ERROR_INVALID_VALUE;
+    // CU_OCCUPANCY_DEFAULT (0) and CU_OCCUPANCY_DISABLE_CACHING_OVERRIDE (1).
+    if (flags & ~1u) return CUDA_ERROR_INVALID_VALUE;
+    if (block_size <= 0) return CUDA_ERROR_INVALID_VALUE;
+    int max_threads_block = 0, warp_size = 0, max_threads_sm = 0, max_blocks_sm = 0;
+    int smem_block = 0, smem_sm = 0, reserved_smem = 0;
+    const std::pair<int*, CUdevice_attribute> queries[] = {
+        {&max_threads_block, CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK},
+        {&warp_size, CU_DEVICE_ATTRIBUTE_WARP_SIZE},
+        {&max_threads_sm, CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR},
+        {&max_blocks_sm, CU_DEVICE_ATTRIBUTE_MAX_BLOCKS_PER_MULTIPROCESSOR},
+        {&smem_block, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK},
+        {&smem_sm, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR},
+        {&reserved_smem, CU_DEVICE_ATTRIBUTE_RESERVED_SHARED_MEMORY_PER_BLOCK},
+    };
+    for (const auto& [value, attribute] : queries) {
+        const CUresult result = cuDeviceGetAttribute(value, attribute, device);
+        if (result != CUDA_SUCCESS) return result;
+    }
+    if (block_size > max_threads_block || warp_size <= 0) {
+        *num_blocks = 0;
+        return CUDA_SUCCESS;
+    }
+    const int warps = (block_size + warp_size - 1) / warp_size;
+    int blocks = std::min(max_blocks_sm, max_threads_sm / (warps * warp_size));
+    if (dynamic_smem > static_cast<size_t>(smem_block)) {
+        blocks = 0;
+    } else {
+        const size_t per_block = dynamic_smem + static_cast<size_t>(std::max(reserved_smem, 0));
+        if (per_block > 0) {
+            blocks = static_cast<int>(std::min<size_t>(static_cast<size_t>(blocks), static_cast<size_t>(smem_sm) / per_block));
+        }
+    }
+    *num_blocks = std::max(blocks, 0);
+    return CUDA_SUCCESS;
+}
+
 }  // namespace fake_gpu::cuda
 
 extern "C" {
@@ -624,6 +742,11 @@ CUresult cuInit(unsigned int Flags) {
 
     // Always initialize the fake state: hybrid/simulate virtualize device info using GlobalState.
     GlobalState::instance().initialize();
+    {
+        model::SharedState& shared = model::shared_state();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        shared.driver_initialized = true;
+    }
 
     if (real_driver_available()) {
         if (config.mode() == FakeGpuMode::Hybrid) {
@@ -648,9 +771,9 @@ CUresult cuDriverGetVersion(int *driverVersion) {
         }
     }
 
-    // Fallback: Report CUDA 12.0 (12000)
-    *driverVersion = 12000;
-    FGPU_LOG("[FakeCUDA-Driver] cuDriverGetVersion (fake) returning 12000\n");
+    // The modeled driver release NVML reports as well.
+    *driverVersion = kModeledCudaDriverVersion;
+    FGPU_LOG("[FakeCUDA-Driver] cuDriverGetVersion (fake) returning %d\n", *driverVersion);
     return CUDA_SUCCESS;
 }
 
@@ -714,6 +837,12 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
         return CudaDriverPassthrough::instance().cuDeviceGetAttribute(pi, attrib, real_device(dev));
     }
 
+    // CUDA 12.8 cuda.h: valid attributes are 1 .. CU_DEVICE_ATTRIBUTE_MAX - 1
+    // (143). Others return CUDA_ERROR_INVALID_VALUE and leave *pi unchanged.
+    constexpr int kDeviceAttributeMax = 144;
+    if (static_cast<int>(attrib) <= 0 || static_cast<int>(attrib) >= kDeviceAttributeMax) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
     if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
 
     Device& device = GlobalState::instance().get_device(dev);
@@ -1044,7 +1173,16 @@ CUresult cuCtxSynchronize(void) {
     if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuCtxSynchronize();
     }
-    FGPU_LOG("[FakeCUDA-Driver] cuCtxSynchronize (no-op)\n");
+    // Work runs when it is submitted; synchronizing completes every stream,
+    // so events recorded on them become ready (cuEventQuery, elapsed time).
+    {
+        std::lock_guard<std::mutex> lock(g_stream_mutex);
+        g_default_stream_completed_tick = g_default_stream_submitted_tick;
+        for (auto& entry : g_stream_states) {
+            entry.second.completed_tick = entry.second.submitted_tick;
+        }
+    }
+    FGPU_LOG("[FakeCUDA-Driver] cuCtxSynchronize completed all streams\n");
     return CUDA_SUCCESS;
 }
 
@@ -1073,8 +1211,14 @@ CUresult cuMemAlloc(CUdeviceptr *dptr, size_t bytesize) {
 
     // Simulate mode: allocate in host memory.
     GlobalState::instance().initialize();
-    void* ptr = malloc(bytesize);
-    if (!ptr) {
+    *dptr = 0;
+    // Without a CUDA device cuInit fails, and later Driver calls report
+    // CUDA_ERROR_NOT_INITIALIZED.
+    if (GlobalState::instance().get_device_count() == 0) return CUDA_ERROR_NOT_INITIALIZED;
+    // Measured: cuMemAlloc(0) returns CUDA_ERROR_INVALID_VALUE and sets *dptr to 0.
+    if (bytesize == 0) return CUDA_ERROR_INVALID_VALUE;
+    void* ptr = nullptr;
+    if (posix_memalign(&ptr, model::kDeviceAlignment, bytesize) != 0 || !ptr) {
         return CUDA_ERROR_OUT_OF_MEMORY;
     }
 
@@ -1125,21 +1269,7 @@ CUresult cuMemFree(CUdeviceptr dptr) {
         return CudaDriverPassthrough::instance().cuMemFree(dptr);
     }
 
-    void* ptr = (void*)dptr;
-    size_t size;
-    int device;
-
-    if (GlobalState::instance().release_allocation(ptr, size, device)) {
-        free(ptr);
-        FGPU_LOG("[FakeCUDA-Driver] cuMemFree(0x%llx) released %zu bytes from device %d\n",
-               dptr, size, device);
-        return CUDA_SUCCESS;
-    }
-
-    // PyTorch's CachingAllocator may try to free pointers it doesn't own
-    // Return success to avoid crashes, but log a warning
-    FGPU_LOG("[FakeCUDA-Driver] cuMemFree(0x%llx) - pointer not tracked, assuming already freed\n", dptr);
-    return CUDA_SUCCESS;
+    return fake_gpu::cuda::free_device_allocation(reinterpret_cast<void*>(dptr));
 }
 
 CUresult cuMemcpyDtoH(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount) {
@@ -1234,11 +1364,20 @@ CUresult cuMemcpyDtoD(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteC
 }
 
 // Primary context management
+// Simulated primary contexts count retains per device: the context is active
+// while the count is positive, and releasing an inactive one fails with
+// CUDA_ERROR_INVALID_CONTEXT, as measured on one Ampere GPU (sm_80).
 CUresult cuDevicePrimaryCtxRetain(CUcontext *pctx, CUdevice dev) {
     if (!pctx) return CUDA_ERROR_INVALID_VALUE;
-    return bind_context(pctx, dev, "cuDevicePrimaryCtxRetain", [&](CUdevice device) {
+    const CUresult result = bind_context(pctx, dev, "cuDevicePrimaryCtxRetain", [&](CUdevice device) {
         return CudaDriverPassthrough::instance().cuDevicePrimaryCtxRetain(pctx, device);
     });
+    if (result == CUDA_SUCCESS && !real_driver_available()) {
+        model::SharedState& shared = model::shared_state();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        ++model::device_context_locked(shared, dev).primary_retains;
+    }
+    return result;
 }
 
 CUresult cuDevicePrimaryCtxRelease(CUdevice dev) {
@@ -1255,6 +1394,11 @@ CUresult cuDevicePrimaryCtxRelease(CUdevice dev) {
         return CudaDriverPassthrough::instance().cuDevicePrimaryCtxRelease(real_dev);
     }
 
+    model::SharedState& shared = model::shared_state();
+    std::lock_guard<std::mutex> lock(shared.mutex);
+    model::DeviceContext& context = model::device_context_locked(shared, dev);
+    if (context.primary_retains == 0) return CUDA_ERROR_INVALID_CONTEXT;
+    --context.primary_retains;
     FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxRelease for device %d\n", dev);
     return CUDA_SUCCESS;
 }
@@ -1267,11 +1411,19 @@ CUresult cuDevicePrimaryCtxGetState(CUdevice dev, unsigned int *flags, int *acti
         return real_fn(real_device(dev), flags, active);
     }
 
+    // Measured: CUDA_ERROR_NOT_INITIALIZED before cuInit. The runtime
+    // initializes the driver on its first call (cudaGetDeviceCount too), and
+    // PyTorch queries the state after runtime calls only, so devices set up
+    // by any FakeGPU call also count as an initialized driver.
+    const bool devices_ready = GlobalState::instance().get_device_count() > 0;
+    model::SharedState& shared = model::shared_state();
+    std::lock_guard<std::mutex> lock(shared.mutex);
+    if (!shared.driver_initialized && !devices_ready) return CUDA_ERROR_NOT_INITIALIZED;
+    if (!flags || !active) return CUDA_ERROR_INVALID_VALUE;
     if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
-
-    if (flags) *flags = 0;
-    if (active) *active = 1;  // Always report as active
-    FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxGetState for device %d, flags=0, active=1\n", dev);
+    const model::DeviceContext& context = model::device_context_locked(shared, dev);
+    *flags = context.primary_flags;
+    *active = context.primary_retains > 0 ? 1 : 0;
     return CUDA_SUCCESS;
 }
 
@@ -1284,7 +1436,19 @@ CUresult cuDevicePrimaryCtxSetFlags(CUdevice dev, unsigned int flags) {
     }
 
     if (!is_virtual_device(dev)) return CUDA_ERROR_INVALID_DEVICE;
-
+    // cuda.h: one scheduling mode (AUTO, SPIN, YIELD or BLOCKING_SYNC) plus
+    // MAP_HOST, LMEM_RESIZE_TO_MAX, COREDUMP_ENABLE, USER_COREDUMP_ENABLE
+    // and SYNC_MEMOPS. MAP_HOST is always on and is not stored.
+    constexpr unsigned int kKnownFlags = 0xFF;
+    const unsigned int schedule = flags & 0x07u;
+    if ((flags & ~kKnownFlags) || (schedule != 0 && schedule != 1 && schedule != 2 && schedule != 4)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    {
+        model::SharedState& shared = model::shared_state();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        model::device_context_locked(shared, dev).primary_flags = flags & ~static_cast<unsigned int>(CU_CTX_MAP_HOST);
+    }
     FGPU_LOG("[FakeCUDA-Driver] cuDevicePrimaryCtxSetFlags for device %d, flags=%u\n", dev, flags);
     return CUDA_SUCCESS;
 }
@@ -1540,6 +1704,7 @@ CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags)
     if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuStreamWaitEvent(hStream, hEvent, Flags);
     }
+    hStream = canonical_stream(hStream);
     std::lock_guard<std::mutex> stream_lock(g_stream_mutex);
     EventState event_state;
     if (!lookup_event_state(hEvent, event_state)) {
@@ -1564,11 +1729,11 @@ CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags)
 
 CUresult cuStreamGetPriority(CUstream hStream, int *priority) {
     FORWARD_TO_REAL(cuStreamGetPriority, hStream, priority);
-    unsigned int flags = 0;
-    if (!lookup_stream_flags(hStream, flags)) {
-        return CUDA_ERROR_INVALID_VALUE;
-    }
-    if (priority) *priority = 0;
+    if (!priority) return CUDA_ERROR_INVALID_VALUE;
+    std::lock_guard<std::mutex> lock(g_stream_mutex);
+    StreamState state;
+    if (!lookup_stream_state_locked(hStream, state)) return CUDA_ERROR_INVALID_VALUE;
+    *priority = canonical_stream(hStream) ? state.attributes.priority : g_default_stream_attributes.priority;
     return CUDA_SUCCESS;
 }
 
@@ -1686,11 +1851,17 @@ CUresult cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUevent hEnd) 
         ((start_state.flags | end_state.flags) & CU_EVENT_DISABLE_TIMING)) {
         return CUDA_ERROR_INVALID_HANDLE;
     }
-    const std::uint64_t delta_ticks =
-        end_state.timeline_tick > start_state.timeline_tick
-            ? (end_state.timeline_tick - start_state.timeline_tick)
-            : 0;
-    if (pMilliseconds) *pMilliseconds = static_cast<float>(delta_ticks) * 0.1f;
+    // cuda.h: CUDA_ERROR_NOT_READY while either event is still pending, as
+    // cuEventQuery would report it.
+    const auto completed = [](const EventState& state) {
+        return state.completed || stream_completed_tick(state.last_stream) >= state.timeline_tick;
+    };
+    if (!completed(start_state) || !completed(end_state)) return CUDA_ERROR_NOT_READY;
+    // Measured: an end event recorded before the start event gives a
+    // negative time.
+    const double delta_ticks = static_cast<double>(end_state.timeline_tick) -
+                               static_cast<double>(start_state.timeline_tick);
+    *pMilliseconds = static_cast<float>(delta_ticks * 0.1);
     return CUDA_SUCCESS;
 }
 
@@ -1717,36 +1888,24 @@ CUresult cuCtxGetFlags(unsigned int *flags) {
     return CUDA_SUCCESS;
 }
 
+// Context limits are kept per device and shared with cudaDeviceGetLimit and
+// cudaDeviceSetLimit (driver_model.cpp has the defaults and rounding rules).
 CUresult cuCtxGetLimit(size_t *pvalue, CUlimit limit) {
     if (!pvalue) return CUDA_ERROR_INVALID_VALUE;
     FORWARD_TO_REAL(cuCtxGetLimit, pvalue, limit);
-    switch (limit) {
-        case CU_LIMIT_STACK_SIZE:
-            *pvalue = 8192;
-            break;
-        case CU_LIMIT_PRINTF_FIFO_SIZE:
-            *pvalue = 1048576;
-            break;
-        case CU_LIMIT_MALLOC_HEAP_SIZE:
-            *pvalue = 8388608;
-            break;
-        default:
-            *pvalue = 0;
-            break;
-    }
-    return CUDA_SUCCESS;
+    return model::get_context_limit(current_context_device, static_cast<int>(limit), pvalue);
 }
 
 CUresult cuCtxSetLimit(CUlimit limit, size_t value) {
     FORWARD_TO_REAL(cuCtxSetLimit, limit, value);
-    FGPU_LOG("[FakeCUDA-Driver] cuCtxSetLimit (no-op)\n");
-    return CUDA_SUCCESS;
+    return model::set_context_limit(current_context_device, static_cast<int>(limit), value);
 }
 
 CUresult cuCtxGetStreamPriorityRange(int *leastPriority, int *greatestPriority) {
     FORWARD_TO_REAL(cuCtxGetStreamPriorityRange, leastPriority, greatestPriority);
-    if (leastPriority) *leastPriority = 0;
-    if (greatestPriority) *greatestPriority = -1;
+    // Either pointer may be NULL.
+    if (leastPriority) *leastPriority = model::kLeastStreamPriority;
+    if (greatestPriority) *greatestPriority = model::kGreatestStreamPriority;
     return CUDA_SUCCESS;
 }
 
@@ -1765,6 +1924,7 @@ CUresult cuMemGetInfo(size_t *free, size_t *total) {
     }
 
     GlobalState::instance().initialize();
+    if (GlobalState::instance().get_device_count() == 0) return CUDA_ERROR_NOT_INITIALIZED;
     Device& dev = GlobalState::instance().get_device(current_context_device);
 
     if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
@@ -1786,8 +1946,10 @@ CUresult cuMemGetInfo(size_t *free, size_t *total) {
         // For non-clamp policies, report virtual memory info to allow oversubscription.
     }
 
+    // Free memory also excludes the modeled CUDA context (FAKEGPU_CUDA_CONTEXT_BYTES).
+    const std::uint64_t reserved = static_cast<std::uint64_t>(dev.used_memory) + model::context_bytes();
     if (total) *total = dev.total_memory;
-    if (free) *free = (dev.total_memory > dev.used_memory) ? (dev.total_memory - dev.used_memory) : 0;
+    if (free) *free = dev.total_memory > reserved ? static_cast<size_t>(dev.total_memory - reserved) : 0;
     FGPU_LOG("[FakeCUDA-Driver] cuMemGetInfo: free=%zu, total=%zu\n",
            free ? *free : 0, total ? *total : 0);
     return CUDA_SUCCESS;
@@ -2088,11 +2250,15 @@ CUresult cuMemAllocManaged(CUdeviceptr *dptr, size_t bytesize, unsigned int flag
         return CUDA_SUCCESS;
     }
 
+    // cuda.h: flags must be CU_MEM_ATTACH_GLOBAL (1) or CU_MEM_ATTACH_HOST
+    // (2); 0, 3 and 4 were measured to return CUDA_ERROR_INVALID_VALUE.
+    if (flags != 1 && flags != 2) return CUDA_ERROR_INVALID_VALUE;
     if (bytesize == 0) return CUDA_ERROR_INVALID_VALUE;
 
     GlobalState::instance().initialize();
-    void* ptr = malloc(bytesize);
-    if (!ptr) {
+    if (GlobalState::instance().get_device_count() == 0) return CUDA_ERROR_NOT_INITIALIZED;
+    void* ptr = nullptr;
+    if (posix_memalign(&ptr, model::kHostAlignment, bytesize) != 0 || !ptr) {
         return CUDA_ERROR_OUT_OF_MEMORY;
     }
 
@@ -2108,29 +2274,322 @@ CUresult cuMemAllocManaged(CUdeviceptr *dptr, size_t bytesize, unsigned int flag
     return CUDA_SUCCESS;
 }
 
+}  // extern "C"
+
+namespace {
+
+// CU_MEMHOSTALLOC_DEVICEMAP and CU_MEMHOSTREGISTER_DEVICEMAP. With unified
+// addressing every pinned or registered range is mapped; cuMemHostGetFlags
+// reports the bit even when the caller did not pass it (measured).
+constexpr unsigned int kHostDeviceMap = 0x02;
+
+bool pageable_memory_access(int device) {
+    int value = 0;
+    return cuDeviceGetAttribute(&value, CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS, device) == CUDA_SUCCESS &&
+           value == 1;
+}
+
+CUresult allocate_pinned_host(void** pp, size_t bytesize, unsigned int flags) {
+    GlobalState& global = GlobalState::instance();
+    global.initialize();
+    if (global.get_device_count() == 0) return CUDA_ERROR_NOT_INITIALIZED;
+    const size_t size = bytesize ? bytesize : 1;
+    void* ptr = nullptr;
+    if (posix_memalign(&ptr, model::kHostAlignment, size) != 0 || !ptr) return CUDA_ERROR_OUT_OF_MEMORY;
+    {
+        model::SharedState& shared = model::shared_state();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        model::HostRange& range = shared.host_ranges[reinterpret_cast<std::uintptr_t>(ptr)];
+        range = model::HostRange{};
+        range.size = size;
+        range.flags = flags | kHostDeviceMap;
+        range.device = current_context_device;
+        range.pinned_allocation = true;
+    }
+    global.register_host_allocation(ptr, size, current_context_device);
+    *pp = ptr;
+    return CUDA_SUCCESS;
+}
+
+// Measured: an overlapping registration returns
+// CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED, a zero size or NULL pointer
+// CUDA_ERROR_INVALID_VALUE; unaligned ranges register exactly as given.
+CUresult register_host_range(void* p, size_t bytesize, unsigned int flags) {
+    // CU_MEMHOSTREGISTER_PORTABLE, DEVICEMAP, IOMEMORY and READ_ONLY.
+    if (!p || bytesize == 0 || (flags & ~0x0Fu)) return CUDA_ERROR_INVALID_VALUE;
+    const auto start = reinterpret_cast<std::uintptr_t>(p);
+    if (start + bytesize < start) return CUDA_ERROR_INVALID_VALUE;
+    const std::uintptr_t end = start + bytesize;
+    GlobalState& global = GlobalState::instance();
+    global.initialize();
+    if (global.get_device_count() == 0) return CUDA_ERROR_NOT_INITIALIZED;
+    // Simulated device and managed memory is not host memory to register.
+    size_t size = 0;
+    int device = 0;
+    GlobalState::AllocationKind kind = GlobalState::AllocationKind::Host;
+    for (const std::uintptr_t probe : {start, end - 1}) {
+        if (global.get_allocation_info_ex(reinterpret_cast<void*>(probe), size, device, kind) &&
+            kind != GlobalState::AllocationKind::Host) {
+            return CUDA_ERROR_INVALID_VALUE;
+        }
+    }
+    {
+        model::SharedState& shared = model::shared_state();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        model::VmmAddress vmm;
+        if (model::find_vmm_address_locked(shared, start, vmm) || model::find_vmm_address_locked(shared, end - 1, vmm)) {
+            return CUDA_ERROR_INVALID_VALUE;
+        }
+        auto next = shared.host_ranges.lower_bound(end);
+        if (next != shared.host_ranges.begin()) {
+            const auto previous = std::prev(next);
+            if (previous->first + previous->second.size > start) return CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED;
+        }
+        model::HostRange& range = shared.host_ranges[start];
+        range = model::HostRange{};
+        range.size = bytesize;
+        range.flags = flags | kHostDeviceMap;
+        range.device = current_context_device;
+    }
+    global.register_host_allocation(p, bytesize, current_context_device);
+    return CUDA_SUCCESS;
+}
+
+struct PointerInfo {
+    enum class Kind { Unknown, Device, Managed, Host, Vmm } kind = Kind::Unknown;
+    int device = -1;
+    std::uintptr_t range_base = 0;
+    size_t range_size = 0;
+    std::uintptr_t mapping_base = 0;
+    size_t mapping_size = 0;
+    unsigned long long handle_types = 0;
+    unsigned long long memory_block = 0;
+    unsigned int access_flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+    int rdma_capable = 0;
+};
+
+// What the simulation knows about an address. A reserved but unmapped VMM
+// address is Unknown, like memory CUDA never handed out (measured).
+PointerInfo describe_pointer(CUdeviceptr ptr) {
+    PointerInfo info;
+    const auto address = static_cast<std::uintptr_t>(ptr);
+    {
+        model::SharedState& shared = model::shared_state();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        model::VmmAddress vmm;
+        if (model::find_vmm_address_locked(shared, address, vmm)) {
+            if (!vmm.mapping) return info;
+            info.kind = PointerInfo::Kind::Vmm;
+            info.device = vmm.allocation && vmm.allocation->device >= 0 ? vmm.allocation->device : current_context_device;
+            // Measured: the range attributes describe the whole reservation.
+            info.range_base = vmm.reservation_base;
+            info.range_size = vmm.reservation_size;
+            info.mapping_base = vmm.mapping_base;
+            info.mapping_size = vmm.mapping->size;
+            info.memory_block = vmm.mapping->handle;
+            if (vmm.allocation) {
+                info.handle_types = static_cast<unsigned int>(vmm.allocation->prop.requestedHandleTypes);
+                info.rdma_capable = vmm.allocation->prop.allocFlags.gpuDirectRDMACapable ? 1 : 0;
+            }
+            const auto access = vmm.mapping->access.find(current_context_device);
+            info.access_flags = access == vmm.mapping->access.end() ? CU_MEM_ACCESS_FLAGS_PROT_NONE
+                                                                    : static_cast<unsigned int>(access->second);
+            return info;
+        }
+        std::uintptr_t base = 0;
+        if (const model::HostRange* range = model::find_host_range_locked(shared, address, base)) {
+            info.kind = PointerInfo::Kind::Host;
+            info.device = range->device;
+            info.range_base = info.mapping_base = info.memory_block = base;
+            info.range_size = info.mapping_size = range->size;
+            return info;
+        }
+    }
+    GlobalState& global = GlobalState::instance();
+    global.initialize();
+    void* base = nullptr;
+    size_t size = 0;
+    int device = 0;
+    GlobalState::AllocationKind kind = GlobalState::AllocationKind::Device;
+    if (!global.get_allocation_range(reinterpret_cast<void*>(address), base, size) ||
+        !global.get_allocation_info_ex(reinterpret_cast<void*>(address), size, device, kind)) {
+        return info;
+    }
+    info.kind = kind == GlobalState::AllocationKind::Managed ? PointerInfo::Kind::Managed
+                : kind == GlobalState::AllocationKind::Host  ? PointerInfo::Kind::Host
+                                                             : PointerInfo::Kind::Device;
+    info.device = device;
+    info.range_base = info.mapping_base = info.memory_block = reinterpret_cast<std::uintptr_t>(base);
+    info.range_size = info.mapping_size = size;
+    return info;
+}
+
+// cuPointerGetAttributes: an address CUDA does not know gets default values
+// instead of an error. Measured: no context, memory type 0, ordinal -1,
+// buffer id 0, not mapped, the address itself as host pointer and, with
+// pageable memory access, as device pointer; the range attributes are left
+// unchanged.
+CUresult write_unknown_pointer_attribute(CUpointer_attribute attribute, CUdeviceptr ptr, void* data) {
+    switch (attribute) {
+        case CU_POINTER_ATTRIBUTE_CONTEXT:
+            *static_cast<CUcontext*>(data) = nullptr;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_MEMORY_TYPE:
+        case CU_POINTER_ATTRIBUTE_IS_MANAGED:
+        case CU_POINTER_ATTRIBUTE_MAPPED:
+            *static_cast<unsigned int*>(data) = 0;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_DEVICE_POINTER:
+            *static_cast<CUdeviceptr*>(data) = pageable_memory_access(current_context_device) ? ptr : 0;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_HOST_POINTER:
+            *static_cast<void**>(data) = reinterpret_cast<void*>(ptr);
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL:
+            *static_cast<int*>(data) = -1;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_BUFFER_ID:
+            *static_cast<unsigned long long*>(data) = 0;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_SYNC_MEMOPS:
+        case CU_POINTER_ATTRIBUTE_IS_LEGACY_CUDA_IPC_CAPABLE:
+        case CU_POINTER_ATTRIBUTE_RANGE_START_ADDR:
+        case CU_POINTER_ATTRIBUTE_RANGE_SIZE:
+        case CU_POINTER_ATTRIBUTE_ALLOWED_HANDLE_TYPES:
+        case CU_POINTER_ATTRIBUTE_IS_GPU_DIRECT_RDMA_CAPABLE:
+        case CU_POINTER_ATTRIBUTE_ACCESS_FLAGS:
+        case CU_POINTER_ATTRIBUTE_MEMPOOL_HANDLE:
+        case CU_POINTER_ATTRIBUTE_MAPPING_SIZE:
+        case CU_POINTER_ATTRIBUTE_MAPPING_BASE_ADDR:
+        case CU_POINTER_ATTRIBUTE_MEMORY_BLOCK_ID:
+            return CUDA_SUCCESS;
+        default:
+            return CUDA_ERROR_INVALID_VALUE;
+    }
+}
+
+// cuda.h (cuPointerGetAttribute): device memory has no host pointer, so the
+// single-attribute query fails with CUDA_ERROR_INVALID_VALUE while
+// cuPointerGetAttributes reports NULL.
+CUresult write_pointer_attribute(
+    const PointerInfo& info, CUpointer_attribute attribute, CUdeviceptr ptr, void* data, bool lenient) {
+    const bool device_only = info.kind == PointerInfo::Kind::Device || info.kind == PointerInfo::Kind::Vmm;
+    switch (attribute) {
+        case CU_POINTER_ATTRIBUTE_CONTEXT:
+            *static_cast<CUcontext*>(data) = fake_context(info.device < 0 ? current_context_device : info.device);
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_MEMORY_TYPE:
+            *static_cast<unsigned int*>(data) = info.kind == PointerInfo::Kind::Host      ? CU_MEMORYTYPE_HOST
+                                                : info.kind == PointerInfo::Kind::Managed ? CU_MEMORYTYPE_UNIFIED
+                                                                                          : CU_MEMORYTYPE_DEVICE;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_DEVICE_POINTER:
+            *static_cast<CUdeviceptr*>(data) = ptr;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_HOST_POINTER:
+            if (device_only && !lenient) return CUDA_ERROR_INVALID_VALUE;
+            *static_cast<void**>(data) = device_only ? nullptr : reinterpret_cast<void*>(ptr);
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_SYNC_MEMOPS:
+        case CU_POINTER_ATTRIBUTE_IS_LEGACY_CUDA_IPC_CAPABLE:
+            *static_cast<int*>(data) = 0;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_BUFFER_ID:
+        case CU_POINTER_ATTRIBUTE_MEMORY_BLOCK_ID:
+            *static_cast<unsigned long long*>(data) = info.memory_block;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_IS_MANAGED:
+            *static_cast<unsigned int*>(data) = info.kind == PointerInfo::Kind::Managed ? 1 : 0;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL:
+            *static_cast<int*>(data) = info.device;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_RANGE_START_ADDR:
+            *static_cast<CUdeviceptr*>(data) = info.range_base;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_RANGE_SIZE:
+            *static_cast<size_t*>(data) = info.range_size;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_MAPPED:
+            *static_cast<unsigned int*>(data) = 1;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_ALLOWED_HANDLE_TYPES:
+            *static_cast<unsigned long long*>(data) = info.handle_types;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_IS_GPU_DIRECT_RDMA_CAPABLE:
+            *static_cast<int*>(data) = info.rdma_capable;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_ACCESS_FLAGS:
+            *static_cast<unsigned int*>(data) = info.access_flags;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_MEMPOOL_HANDLE:
+            *static_cast<CUmemoryPool*>(data) = nullptr;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_MAPPING_SIZE:
+            *static_cast<size_t*>(data) = info.mapping_size;
+            return CUDA_SUCCESS;
+        case CU_POINTER_ATTRIBUTE_MAPPING_BASE_ADDR:
+            *static_cast<void**>(data) = reinterpret_cast<void*>(info.mapping_base);
+            return CUDA_SUCCESS;
+        default:
+            return CUDA_ERROR_INVALID_VALUE;
+    }
+}
+
+}  // namespace
+
+extern "C" {
+
 CUresult cuMemAllocHost(void **pp, size_t bytesize) {
     if (!pp) return CUDA_ERROR_INVALID_VALUE;
 
     if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuMemAllocHost(pp, bytesize);
     }
-
-    GlobalState::instance().initialize();
-    *pp = malloc(bytesize);
-    if (!*pp) return CUDA_ERROR_OUT_OF_MEMORY;
-    GlobalState::instance().register_host_allocation(*pp, bytesize, current_context_device);
-    return CUDA_SUCCESS;
+    return allocate_pinned_host(pp, bytesize, 0);
 }
 
 CUresult cuMemFreeHost(void *p) {
     if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuMemFreeHost(p);
     }
+    if (!p) return CUDA_SUCCESS;
 
+    bool pinned = false;
+    bool known = false;
+    {
+        model::SharedState& shared = model::shared_state();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        const auto address = reinterpret_cast<std::uintptr_t>(p);
+        auto it = shared.host_ranges.find(address);
+        if (it != shared.host_ranges.end() && it->second.pinned_allocation) {
+            pinned = true;
+            shared.host_ranges.erase(it);
+        } else {
+            std::uintptr_t base = 0;
+            model::VmmAddress vmm;
+            known = model::find_host_range_locked(shared, address, base) != nullptr ||
+                    model::find_vmm_address_locked(shared, address, vmm);
+        }
+    }
+    if (pinned) {
+        size_t size = 0;
+        int device = 0;
+        GlobalState::instance().release_host_allocation(p, size, device);
+        free(p);
+        return CUDA_SUCCESS;
+    }
+    // Measured: cudaFreeHost rejects addresses it did not allocate.
+    // Registered ranges, VMM mappings and device memory are known; for
+    // anything else FAKEGPU_UNSUPPORTED_API decides, and the memory is never
+    // passed to free().
     size_t size = 0;
     int device = 0;
-    GlobalState::instance().release_host_allocation(p, size, device);
-    free(p);
+    GlobalState::AllocationKind kind = GlobalState::AllocationKind::Host;
+    if (known || GlobalState::instance().get_allocation_info_ex(p, size, device, kind)) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if (record_unsupported_api("cuMemFreeHost", "untracked_pointer_ignored")) return CUDA_ERROR_INVALID_VALUE;
     return CUDA_SUCCESS;
 }
 
@@ -2140,17 +2599,38 @@ CUresult cuMemHostAlloc(void **pp, size_t bytesize, unsigned int Flags) {
     if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuMemHostAlloc(pp, bytesize, Flags);
     }
-
-    return cuMemAllocHost(pp, bytesize);
+    // CU_MEMHOSTALLOC_PORTABLE, DEVICEMAP and WRITECOMBINED.
+    if (Flags & ~0x07u) return CUDA_ERROR_INVALID_VALUE;
+    return allocate_pinned_host(pp, bytesize, Flags);
 }
 
 CUresult cuMemHostRegister(void *p, size_t bytesize, unsigned int Flags) {
     FORWARD_TO_REAL(cuMemHostRegister, p, bytesize, Flags);
-    return CUDA_SUCCESS;
+    return register_host_range(p, bytesize, Flags);
 }
 
 CUresult cuMemHostUnregister(void *p) {
     FORWARD_TO_REAL(cuMemHostUnregister, p);
+    if (!p) return CUDA_ERROR_INVALID_VALUE;
+    {
+        model::SharedState& shared = model::shared_state();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        const auto address = reinterpret_cast<std::uintptr_t>(p);
+        auto it = shared.host_ranges.find(address);
+        if (it == shared.host_ranges.end() || it->second.pinned_allocation) {
+            // Measured: an address inside a registration is
+            // CUDA_ERROR_INVALID_VALUE, an unregistered one
+            // CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED.
+            std::uintptr_t base = 0;
+            const bool interior = it == shared.host_ranges.end() &&
+                                  model::find_host_range_locked(shared, address, base) != nullptr;
+            return interior ? CUDA_ERROR_INVALID_VALUE : CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED;
+        }
+        shared.host_ranges.erase(it);
+    }
+    size_t size = 0;
+    int device = 0;
+    GlobalState::instance().release_host_allocation(p, size, device);
     return CUDA_SUCCESS;
 }
 
@@ -2160,14 +2640,31 @@ CUresult cuMemHostGetDevicePointer(CUdeviceptr *pdptr, void *p, unsigned int Fla
     if (real_driver_available()) {
         return CudaDriverPassthrough::instance().cuMemHostGetDevicePointer(pdptr, p, Flags);
     }
-
+    // cuda.h: Flags must be 0.
+    if (Flags != 0 || !p) return CUDA_ERROR_INVALID_VALUE;
+    bool registered = false;
+    {
+        model::SharedState& shared = model::shared_state();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        std::uintptr_t base = 0;
+        registered = model::find_host_range_locked(shared, reinterpret_cast<std::uintptr_t>(p), base) != nullptr;
+    }
+    // Pinned and registered memory is mapped at the same address. Measured:
+    // with pageable memory access, unregistered memory is too.
+    if (!registered && !pageable_memory_access(current_context_device)) return CUDA_ERROR_INVALID_VALUE;
     *pdptr = (CUdeviceptr)p;
     return CUDA_SUCCESS;
 }
 
 CUresult cuMemHostGetFlags(unsigned int *pFlags, void *p) {
     FORWARD_TO_REAL(cuMemHostGetFlags, pFlags, p);
-    if (pFlags) *pFlags = 0;
+    if (!pFlags) return CUDA_ERROR_INVALID_VALUE;
+    model::SharedState& shared = model::shared_state();
+    std::lock_guard<std::mutex> lock(shared.mutex);
+    std::uintptr_t base = 0;
+    const model::HostRange* range = model::find_host_range_locked(shared, reinterpret_cast<std::uintptr_t>(p), base);
+    if (!range) return CUDA_ERROR_INVALID_VALUE;
+    *pFlags = range->flags;
     return CUDA_SUCCESS;
 }
 
@@ -2184,60 +2681,11 @@ CUresult cuPointerGetAttribute(void *data, CUpointer_attribute attribute, CUdevi
         }
     }
 
-    GlobalState::instance().initialize();
-
-    size_t alloc_size = 0;
-    int alloc_device = current_context_device;
-    GlobalState::AllocationKind alloc_kind = GlobalState::AllocationKind::Device;
-    bool found = GlobalState::instance().get_allocation_info_ex((void*)ptr, alloc_size, alloc_device, alloc_kind);
-
-    CUmemorytype mem_type = CU_MEMORYTYPE_HOST;
-    unsigned int is_managed = 0;
-    if (found) {
-        switch (alloc_kind) {
-            case GlobalState::AllocationKind::Device:
-                mem_type = CU_MEMORYTYPE_DEVICE;
-                break;
-            case GlobalState::AllocationKind::Managed:
-                mem_type = CU_MEMORYTYPE_UNIFIED;
-                is_managed = 1;
-                break;
-            case GlobalState::AllocationKind::Host:
-                mem_type = CU_MEMORYTYPE_HOST;
-                break;
-        }
-    }
-
-    switch (attribute) {
-        case CU_POINTER_ATTRIBUTE_CONTEXT:
-            *(CUcontext*)data = fake_context(alloc_device);
-            break;
-        case CU_POINTER_ATTRIBUTE_MEMORY_TYPE:
-            *(CUmemorytype*)data = mem_type;
-            break;
-        case CU_POINTER_ATTRIBUTE_DEVICE_POINTER:
-            *(CUdeviceptr*)data = ptr;
-            break;
-        case CU_POINTER_ATTRIBUTE_HOST_POINTER:
-            *(void**)data = (void*)ptr;
-            break;
-        case CU_POINTER_ATTRIBUTE_IS_MANAGED:
-            *(unsigned int*)data = is_managed;
-            break;
-        case CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL:
-            *(int*)data = alloc_device;
-            break;
-        case CU_POINTER_ATTRIBUTE_SYNC_MEMOPS:
-            *(int*)data = 0;
-            break;
-        case CU_POINTER_ATTRIBUTE_BUFFER_ID:
-            *(unsigned long long*)data = 0;
-            break;
-        default:
-            break;
-    }
-
-    return CUDA_SUCCESS;
+    // Measured: every attribute of an address CUDA did not allocate or
+    // register returns CUDA_ERROR_INVALID_VALUE and leaves *data unchanged.
+    const PointerInfo info = describe_pointer(ptr);
+    if (info.kind == PointerInfo::Kind::Unknown) return CUDA_ERROR_INVALID_VALUE;
+    return write_pointer_attribute(info, attribute, ptr, data, false);
 }
 
 CUresult cuPointerGetAttributes(unsigned int numAttributes, CUpointer_attribute *attributes, void **data, CUdeviceptr ptr) {
@@ -2253,8 +2701,13 @@ CUresult cuPointerGetAttributes(unsigned int numAttributes, CUpointer_attribute 
         }
     }
 
+    const PointerInfo info = describe_pointer(ptr);
     for (unsigned int i = 0; i < numAttributes; ++i) {
-        cuPointerGetAttribute(data[i], attributes[i], ptr);
+        if (!data[i]) return CUDA_ERROR_INVALID_VALUE;
+        const CUresult result = info.kind == PointerInfo::Kind::Unknown
+                                    ? write_unknown_pointer_attribute(attributes[i], ptr, data[i])
+                                    : write_pointer_attribute(info, attributes[i], ptr, data[i], true);
+        if (result != CUDA_SUCCESS) return result;
     }
     return CUDA_SUCCESS;
 }
@@ -2479,17 +2932,126 @@ CUresult cuMemcpyPeerAsync(CUdeviceptr dstDevice, CUcontext dstContext, CUdevice
     return cuMemcpyPeer(dstDevice, dstContext, srcDevice, srcContext, ByteCount);
 }
 
+// Measured: priorities outside [greatest, least] = [-5, 0] are clamped.
 CUresult cuStreamCreateWithPriority(CUstream *phStream, unsigned int flags, int priority) {
-    return cuStreamCreate(phStream, flags);
+    FORWARD_TO_REAL(cuStreamCreateWithPriority, phStream, flags, priority);
+    const CUresult result = cuStreamCreate(phStream, flags);
+    if (result != CUDA_SUCCESS) return result;
+    std::lock_guard<std::mutex> lock(g_stream_mutex);
+    auto it = g_stream_states.find(*phStream);
+    if (it != g_stream_states.end()) it->second.attributes.priority = model::clamp_stream_priority(priority);
+    return CUDA_SUCCESS;
 }
 
 CUresult cuStreamGetId(CUstream hStream, unsigned long long *streamId) {
+    FORWARD_TO_REAL(cuStreamGetId, hStream, streamId);
+    if (!streamId) return CUDA_ERROR_INVALID_VALUE;
     unsigned int flags = 0;
     if (!lookup_stream_flags(hStream, flags)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    if (streamId) *streamId = (unsigned long long)(uintptr_t)hStream;
+    // Created streams use their handle value, which never repeats. The
+    // default stream, cudaStreamLegacy and cudaStreamPerThread report the
+    // fixed ids 1 and 2.
+    const auto value = reinterpret_cast<std::uintptr_t>(hStream);
+    *streamId = value == kStreamPerThread ? kStreamPerThread
+                : canonical_stream(hStream) ? static_cast<unsigned long long>(value)
+                                            : kStreamLegacy;
     return CUDA_SUCCESS;
+}
+
+// Stream attributes (cuda.h: CU_STREAM_ATTRIBUTE_*, the launch attributes
+// valid for streams). Other ids return CUDA_ERROR_INVALID_VALUE, as measured.
+CUresult cuStreamGetAttribute(CUstream hStream, CUlaunchAttributeID attr, CUlaunchAttributeValue *value_out) {
+    FORWARD_TO_REAL(cuStreamGetAttribute, hStream, attr, value_out);
+    if (!value_out) return CUDA_ERROR_INVALID_VALUE;
+    std::lock_guard<std::mutex> lock(g_stream_mutex);
+    StreamState state;
+    if (!lookup_stream_state_locked(hStream, state)) return CUDA_ERROR_INVALID_VALUE;
+    const StreamAttributes& attributes = canonical_stream(hStream) ? state.attributes : g_default_stream_attributes;
+    switch (attr) {
+        case CU_LAUNCH_ATTRIBUTE_ACCESS_POLICY_WINDOW:
+            value_out->accessPolicyWindow = attributes.access_policy_window;
+            return CUDA_SUCCESS;
+        case CU_LAUNCH_ATTRIBUTE_SYNCHRONIZATION_POLICY:
+            value_out->syncPolicy = attributes.sync_policy;
+            return CUDA_SUCCESS;
+        case CU_LAUNCH_ATTRIBUTE_PRIORITY:
+            value_out->priority = attributes.priority;
+            return CUDA_SUCCESS;
+        case CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN_MAP:
+            value_out->memSyncDomainMap.default_ = attributes.mem_sync_domain_default;
+            value_out->memSyncDomainMap.remote = attributes.mem_sync_domain_remote;
+            return CUDA_SUCCESS;
+        case CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN:
+            value_out->memSyncDomain = attributes.mem_sync_domain;
+            return CUDA_SUCCESS;
+        default:
+            return CUDA_ERROR_INVALID_VALUE;
+    }
+}
+
+CUresult cuStreamSetAttribute(CUstream hStream, CUlaunchAttributeID attr, const CUlaunchAttributeValue *value) {
+    FORWARD_TO_REAL(cuStreamSetAttribute, hStream, attr, value);
+    if (!value) return CUDA_ERROR_INVALID_VALUE;
+    std::lock_guard<std::mutex> lock(g_stream_mutex);
+    StreamState state;
+    if (!lookup_stream_state_locked(hStream, state)) return CUDA_ERROR_INVALID_VALUE;
+    const CUstream stream = canonical_stream(hStream);
+    StreamAttributes& attributes = stream ? g_stream_states[stream].attributes : g_default_stream_attributes;
+    switch (attr) {
+        case CU_LAUNCH_ATTRIBUTE_ACCESS_POLICY_WINDOW:
+            attributes.access_policy_window = value->accessPolicyWindow;
+            return CUDA_SUCCESS;
+        case CU_LAUNCH_ATTRIBUTE_SYNCHRONIZATION_POLICY:
+            // CUsynchronizationPolicy: AUTO 1, SPIN 2, YIELD 3, BLOCKING_SYNC 4.
+            if (value->syncPolicy < 1 || value->syncPolicy > 4) return CUDA_ERROR_INVALID_VALUE;
+            attributes.sync_policy = value->syncPolicy;
+            return CUDA_SUCCESS;
+        case CU_LAUNCH_ATTRIBUTE_PRIORITY:
+            attributes.priority = model::clamp_stream_priority(value->priority);
+            return CUDA_SUCCESS;
+        case CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN_MAP:
+            attributes.mem_sync_domain_default = value->memSyncDomainMap.default_;
+            attributes.mem_sync_domain_remote = value->memSyncDomainMap.remote;
+            return CUDA_SUCCESS;
+        case CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN:
+            // CUlaunchMemSyncDomain: DEFAULT 0, REMOTE 1.
+            if (value->memSyncDomain < 0 || value->memSyncDomain > 1) return CUDA_ERROR_INVALID_VALUE;
+            attributes.mem_sync_domain = value->memSyncDomain;
+            return CUDA_SUCCESS;
+        default:
+            return CUDA_ERROR_INVALID_VALUE;
+    }
+}
+
+// cuda.h maps cuStreamWriteValue32 to cuStreamWriteValue32_v2 from CUDA 12.0.
+// Measured: unaligned or NULL addresses and unknown flags return
+// CUDA_ERROR_INVALID_VALUE; the v2 entry point also rejects
+// CU_STREAM_WRITE_VALUE_NO_MEMORY_BARRIER (0x1).
+static CUresult write_value32(CUstream stream, CUdeviceptr addr, uint32_t value, unsigned int flags,
+                              unsigned int allowed_flags) {
+    if (flags & ~allowed_flags) return CUDA_ERROR_INVALID_VALUE;
+    if (addr == 0 || addr % sizeof(uint32_t) != 0) return CUDA_ERROR_INVALID_VALUE;
+    if (!fake_gpu::cuda::is_stream_handle_live(stream)) return CUDA_ERROR_INVALID_VALUE;
+    void* base = nullptr;
+    size_t size = 0;
+    bool addressable = GlobalState::instance().get_allocation_range(reinterpret_cast<void*>(addr), base, size) &&
+                       addr + sizeof(uint32_t) <= reinterpret_cast<std::uintptr_t>(base) + size;
+    if (!addressable) return CUDA_ERROR_INVALID_VALUE;
+    const CUresult submitted = fake_gpu::cuda::submit_stream_operation(stream);
+    if (submitted != CUDA_SUCCESS) return submitted;
+    return static_cast<CUresult>(kernel::fill(reinterpret_cast<void*>(addr), value, 1, sizeof(uint32_t)));
+}
+
+CUresult cuStreamWriteValue32(CUstream stream, CUdeviceptr addr, uint32_t value, unsigned int flags) {
+    FORWARD_TO_REAL(cuStreamWriteValue32, stream, addr, value, flags);
+    return write_value32(stream, addr, value, flags, 0x1);
+}
+
+CUresult cuStreamWriteValue32_v2(CUstream stream, CUdeviceptr addr, uint32_t value, unsigned int flags) {
+    FORWARD_TO_REAL(cuStreamWriteValue32_v2, stream, addr, value, flags);
+    return write_value32(stream, addr, value, flags, 0x0);
 }
 
 CUresult cuStreamAddCallback(CUstream hStream, void *callback, void *userData, unsigned int flags) {
@@ -2547,26 +3109,44 @@ CUresult cuMemcpyDtoDAsync_v2(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size
     return cuMemcpyDtoDAsync(dstDevice, srcDevice, ByteCount, hStream);
 }
 
-CUresult cuIpcGetMemHandle(void *pHandle, CUdeviceptr dptr) {
-    return CUDA_SUCCESS;
+// Interprocess memory and event handles. Simulated memory lives in this
+// process's address space, so other processes cannot open it; every call
+// returns CUDA_ERROR_NOT_SUPPORTED instead of a handle that maps nothing.
+// The handles are 64-byte structs passed by value (cuda.h).
+CUresult cuIpcGetMemHandle(CUipcMemHandle *pHandle, CUdeviceptr dptr) {
+    FORWARD_TO_REAL(cuIpcGetMemHandle, pHandle, dptr);
+    if (!pHandle) return CUDA_ERROR_INVALID_VALUE;
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
-CUresult cuIpcOpenMemHandle(CUdeviceptr *pdptr, void *handle, unsigned int Flags) {
-    if (pdptr) *pdptr = 0;
-    return CUDA_SUCCESS;
+CUresult cuIpcOpenMemHandle(CUdeviceptr *pdptr, CUipcMemHandle handle, unsigned int Flags) {
+    FORWARD_TO_REAL(cuIpcOpenMemHandle, pdptr, handle, Flags);
+    if (!pdptr) return CUDA_ERROR_INVALID_VALUE;
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+// cuda.h (CUDA 11.0+) defines cuIpcOpenMemHandle as cuIpcOpenMemHandle_v2.
+CUresult cuIpcOpenMemHandle_v2(CUdeviceptr *pdptr, CUipcMemHandle handle, unsigned int Flags) {
+    FORWARD_TO_REAL(cuIpcOpenMemHandle_v2, pdptr, handle, Flags);
+    if (!pdptr) return CUDA_ERROR_INVALID_VALUE;
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 CUresult cuIpcCloseMemHandle(CUdeviceptr dptr) {
-    return CUDA_SUCCESS;
+    FORWARD_TO_REAL(cuIpcCloseMemHandle, dptr);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
-CUresult cuIpcGetEventHandle(void *pHandle, CUevent event) {
-    return CUDA_SUCCESS;
+CUresult cuIpcGetEventHandle(CUipcEventHandle *pHandle, CUevent event) {
+    FORWARD_TO_REAL(cuIpcGetEventHandle, pHandle, event);
+    if (!pHandle) return CUDA_ERROR_INVALID_VALUE;
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
-CUresult cuIpcOpenEventHandle(CUevent *phEvent, void *handle) {
-    if (phEvent) *phEvent = (CUevent)(uintptr_t)1;
-    return CUDA_SUCCESS;
+CUresult cuIpcOpenEventHandle(CUevent *phEvent, CUipcEventHandle handle) {
+    FORWARD_TO_REAL(cuIpcOpenEventHandle, phEvent, handle);
+    if (!phEvent) return CUDA_ERROR_INVALID_VALUE;
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 // Memory pool functions
@@ -2718,7 +3298,20 @@ CUresult cuMemGetAddressRange(CUdeviceptr *pbase, size_t *psize, CUdeviceptr dpt
         static const auto real_fn = real_entry_v2<decltype(&cuMemGetAddressRange)>("cuMemGetAddressRange");
         if (real_fn) return real_fn(pbase, psize, dptr);
     }
-    // cuda.h: base and size of the allocation that contains dptr.
+    // cuda.h: base and size of the allocation that contains dptr. For a VMM
+    // address that is the mapping; a reserved but unmapped address is
+    // CUDA_ERROR_NOT_FOUND (measured).
+    {
+        model::SharedState& shared = model::shared_state();
+        std::lock_guard<std::mutex> lock(shared.mutex);
+        model::VmmAddress vmm;
+        if (model::find_vmm_address_locked(shared, static_cast<std::uintptr_t>(dptr), vmm)) {
+            if (!vmm.mapping) return CUDA_ERROR_NOT_FOUND;
+            if (pbase) *pbase = static_cast<CUdeviceptr>(vmm.mapping_base);
+            if (psize) *psize = vmm.mapping->size;
+            return CUDA_SUCCESS;
+        }
+    }
     void* base = nullptr;
     size_t size = 0;
     if (!GlobalState::instance().get_allocation_range(reinterpret_cast<void*>(dptr), base, size)) {
@@ -2942,8 +3535,7 @@ CUresult cuLaunchKernelEx(const void *config, CUfunction f, void **kernelParams,
 CUresult cuOccupancyMaxActiveBlocksPerMultiprocessor(
     int *numBlocks, CUfunction func, int blockSize, size_t dynamicSMemSize) {
     FORWARD_TO_REAL(cuOccupancyMaxActiveBlocksPerMultiprocessor, numBlocks, func, blockSize, dynamicSMemSize);
-    if (numBlocks) *numBlocks = 1;
-    return CUDA_SUCCESS;
+    return fake_gpu::cuda::model_occupancy(numBlocks, current_context_device, blockSize, dynamicSMemSize, 0);
 }
 
 CUresult cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
@@ -2955,7 +3547,7 @@ CUresult cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
         blockSize,
         dynamicSMemSize,
         flags);
-    return cuOccupancyMaxActiveBlocksPerMultiprocessor(numBlocks, func, blockSize, dynamicSMemSize);
+    return fake_gpu::cuda::model_occupancy(numBlocks, current_context_device, blockSize, dynamicSMemSize, flags);
 }
 
 CUresult cuMemcpy2DAsync_v2(const void *copy, CUstream stream) {
@@ -2995,7 +3587,7 @@ CUresult cuMemHostGetDevicePointer_v2(CUdeviceptr *pdptr, void *p, unsigned int 
 
 CUresult cuMemHostRegister_v2(void *p, size_t bytesize, unsigned int Flags) {
     FORWARD_TO_REAL(cuMemHostRegister_v2, p, bytesize, Flags);
-    return CUDA_SUCCESS;
+    return register_host_range(p, bytesize, Flags);
 }
 
 CUresult cuDevicePrimaryCtxRelease_v2(CUdevice dev) {
@@ -3214,6 +3806,8 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
     MAP_VERSIONED(cuGetProcAddress, 12000, cuGetProcAddress_v2)
     MAP_VERSIONED(cuCtxCreate, 11040, cuCtxCreate_v3)
     MAP_VERSIONED(cuStreamBeginCapture, 10010, cuStreamBeginCapture_v2)
+    MAP_VERSIONED(cuStreamWriteValue32, 12000, cuStreamWriteValue32_v2)
+    MAP_VERSIONED(cuIpcOpenMemHandle, 11000, cuIpcOpenMemHandle_v2)
     #undef MAP_VERSIONED
 
     // Core functions
@@ -3397,6 +3991,27 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion, unsig
     MAP_FUNC(cuMemsetD32_v2)
     MAP_FUNC(cuMemPrefetchAsync)
     MAP_FUNC(cuStreamWaitValue32)
+    MAP_FUNC(cuStreamWriteValue32)
+    MAP_FUNC(cuStreamWriteValue32_v2)
+    MAP_FUNC(cuStreamGetAttribute)
+    MAP_FUNC(cuStreamSetAttribute)
+
+    // Virtual memory management (PyTorch expandable segments).
+    MAP_FUNC(cuMemGetAllocationGranularity)
+    MAP_FUNC(cuMemCreate)
+    MAP_FUNC(cuMemRelease)
+    MAP_FUNC(cuMemAddressReserve)
+    MAP_FUNC(cuMemAddressFree)
+    MAP_FUNC(cuMemMap)
+    MAP_FUNC(cuMemUnmap)
+    MAP_FUNC(cuMemSetAccess)
+    MAP_FUNC(cuMemGetAccess)
+    MAP_FUNC(cuMemRetainAllocationHandle)
+    MAP_FUNC(cuMemGetAllocationPropertiesFromHandle)
+    MAP_FUNC(cuMemExportToShareableHandle)
+    MAP_FUNC(cuMemImportFromShareableHandle)
+    MAP_FUNC(cuMemHostRegister_v2)
+    MAP_FUNC(cuIpcOpenMemHandle_v2)
     MAP_FUNC(cuStreamBatchMemOp)
     MAP_FUNC(cuStreamBeginCapture)
     MAP_FUNC(cuStreamBeginCapture_v2)

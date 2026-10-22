@@ -767,7 +767,7 @@ def main() -> int:
     dptr = ctypes.c_ulonglong()
     _cu_check(int(libcuda.cuMemAlloc(ctypes.byref(dptr), ctypes.c_size_t(4096))), what="cuMemAlloc")
     mptr = ctypes.c_ulonglong()
-    _cu_check(int(libcuda.cuMemAllocManaged(ctypes.byref(mptr), ctypes.c_size_t(4096), ctypes.c_uint(0))), what="cuMemAllocManaged")
+    _cu_check(int(libcuda.cuMemAllocManaged(ctypes.byref(mptr), ctypes.c_size_t(4096), ctypes.c_uint(1))), what="cuMemAllocManaged")
     hptr = ctypes.c_void_p()
     _cu_check(int(libcuda.cuMemAllocHost(ctypes.byref(hptr), ctypes.c_size_t(4096))), what="cuMemAllocHost")
 

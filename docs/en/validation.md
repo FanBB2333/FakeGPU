@@ -77,7 +77,7 @@ Transformers 5.14.1).
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
 | FakeGPU-SMI diagnostics | Bounded state, topology/NVLink/MIG views, NVML peer/MIG queries, health fields, and event reporting | **Passed** |
 | Monitoring exporter | Prometheus/JSON snapshots, bounded history/cardinality, malformed-state degradation, and HTTP endpoints | **Passed** |
-| Native capability inventory (updated 2026-10-21) | 5 groups, 107 explicit APIs, 94 policy-enforced APIs | **Passed** |
+| Native capability inventory (updated 2026-10-22) | 5 groups, 109 explicit APIs, 96 policy-enforced APIs | **Passed** |
 | GPU profile catalog | 307 profiles across 16 compute capabilities (catalog updated 2026-10-16) | **Passed** |
 | CPU numerical simulation | GEMM, cuBLASLt, batched GEMM, BLAS1/2, and FP16: 8 maintained test groups | **Passed** |
 | CUDA-enabled PyTorch native matmul | Requires a CUDA build of PyTorch | **Not run on this CPU-only host** |

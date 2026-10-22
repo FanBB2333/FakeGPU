@@ -43,12 +43,15 @@ def main():
     assert setter(3, len(devices), devices, len(processes), processes) == 0, "catalog telemetry rejected"
     library.nvmlDeviceGetHandleByIndex_v2.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)]
     library.nvmlDeviceGetPowerUsage.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+    # NVML answers queries only between nvmlInit and the last nvmlShutdown.
+    assert library.nvmlInit_v2() == 0
     for index, device in enumerate(devices):
         handle, power = ctypes.c_void_p(), ctypes.c_uint()
         assert library.nvmlDeviceGetHandleByIndex_v2(index, ctypes.byref(handle)) == 0
         assert library.nvmlDeviceGetPowerUsage(handle, ctypes.byref(power)) == 0
         assert power.value == device.telemetry.power_mw
         assert device.telemetry.valid == 1 and device.telemetry.gpu == 100
+    assert library.nvmlShutdown() == 0
     print(f"PASS: full-load modeled telemetry for {len(devices)} catalog profiles via native NVML")
 
 

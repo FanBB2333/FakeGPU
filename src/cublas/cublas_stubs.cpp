@@ -473,9 +473,12 @@ cublasStatus_t cpu_asum(int n, const T* x, int incx, T* result) {
     return CUBLAS_STATUS_SUCCESS;
 }
 
+// axpy and copy walk the elements in order, so an increment of 0 reuses one
+// element: x broadcasts, and y accumulates (axpy) or keeps the last element
+// written (copy). cuBLAS returns success for every increment (measured on an
+// Ampere GPU with cuBLAS 12.4 and 12.8).
 template<class T>
 cublasStatus_t cpu_axpy(int n, T a, const T* x, int incx, T* y, int incy) {
-    if (incx == 0 || incy == 0) return CUBLAS_STATUS_INVALID_VALUE;
     const T* x0 = strided_start(x, n, incx);
     T* y0 = strided_start(y, n, incy);
     for (int i = 0; i < n; ++i) {
@@ -486,7 +489,6 @@ cublasStatus_t cpu_axpy(int n, T a, const T* x, int incx, T* y, int incy) {
 
 template<class T>
 cublasStatus_t cpu_copy(int n, const T* x, int incx, T* y, int incy) {
-    if (incx == 0 || incy == 0) return CUBLAS_STATUS_INVALID_VALUE;
     const T* x0 = strided_start(x, n, incx);
     T* y0 = strided_start(y, n, incy);
     for (int i = 0; i < n; ++i) {
@@ -521,9 +523,10 @@ cublasStatus_t cpu_nrm2(int n, const T* x, int incx, T* result) {
     return CUBLAS_STATUS_SUCCESS;
 }
 
+// scal leaves x untouched when incx <= 0, like the reference BLAS.
 template<class T>
 cublasStatus_t cpu_scal(int n, T a, T* x, int incx) {
-    if (incx == 0) return CUBLAS_STATUS_INVALID_VALUE;
+    if (n <= 0 || incx <= 0) return CUBLAS_STATUS_SUCCESS;
     T* x0 = strided_start(x, n, incx);
     for (int i = 0; i < n; ++i) {
         x0[static_cast<ptrdiff_t>(i) * incx] *= a;
@@ -1174,7 +1177,7 @@ cublasStatus_t cublasDnrm2_v2(cublasHandle_t handle, int n, const double *x, int
 }
 
 cublasStatus_t cublasSscal_v2(cublasHandle_t handle, int n, const float *alpha, float *x, int incx) {
-    if (n <= 0) {
+    if (n <= 0 || incx <= 0) {
         return CUBLAS_STATUS_SUCCESS;
     }
     if (!alpha || !x) {
@@ -1192,7 +1195,7 @@ cublasStatus_t cublasSscal_v2(cublasHandle_t handle, int n, const float *alpha, 
 }
 
 cublasStatus_t cublasDscal_v2(cublasHandle_t handle, int n, const double *alpha, double *x, int incx) {
-    if (n <= 0) {
+    if (n <= 0 || incx <= 0) {
         return CUBLAS_STATUS_SUCCESS;
     }
     if (!alpha || !x) {
