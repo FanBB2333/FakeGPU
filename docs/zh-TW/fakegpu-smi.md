@@ -68,6 +68,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 - `-L` 輸出 nvidia-smi 格式的 `GPU 0: NAME (UUID: GPU-...)` 列，MIG 裝置縮排
   列在所屬 GPU 下方。只有同時顯示多台主機時，索引後才帶主機名稱。profile、
   compute capability 與 PCI Bus ID 見 `-q` 與 `--json`。
+- `topo -m` 輸出 nvidia-smi 格式的定位字元分隔矩陣與圖例。FakeGPU 的主機、平台與
+  拓撲來源說明位於圖例之後，讀取 `Legend` 之前內容的工具（如 PyTorch 的 NVLink
+  偵測）只會看到矩陣。CPU Affinity 與 GPU NUMA ID 輸出 `N/A`。
 - `-i` 依裝置索引、UUID、PCI Bus ID 或 profile ID 篩選；沒有相符的 GPU 時與
   nvidia-smi 一樣輸出 `No devices were found` 並以狀態 6 結束。`--json`
   輸出完整的標準化資料。FakeGPU 寫入 state schema v2，仍可讀取 v1。

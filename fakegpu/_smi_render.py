@@ -160,111 +160,89 @@ def render_gpu_list(inventory: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# nvidia-smi topo -m's legend, as nvidia-smi 580.178.04 prints it.
+_TOPOLOGY_LEGEND = (
+    "Legend:",
+    "",
+    "  X    = Self",
+    "  SYS  = Connection traversing PCIe as well as the SMP interconnect "
+    "between NUMA nodes (e.g., QPI/UPI)",
+    "  NODE = Connection traversing PCIe as well as the interconnect between "
+    "PCIe Host Bridges within a NUMA node",
+    "  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge "
+    "(typically the CPU)",
+    "  PXB  = Connection traversing multiple PCIe bridges (without "
+    "traversing the PCIe Host Bridge)",
+    "  PIX  = Connection traversing at most a single PCIe bridge",
+    "  NV#  = Connection traversing a bonded set of # NVLinks",
+)
+
+
 def render_topology_matrix(inventory: Mapping[str, Any]) -> str:
+    """Render ``nvidia-smi topo -m``'s matrix and legend, then FakeGPU's notes.
+
+    nvidia-smi 580 separates cells with tabs and underlines the header row
+    with ANSI escapes even when stdout is not a terminal. The self cell is
+    " X ", and an empty cell follows NUMA Affinity. Callers split the output
+    on "Legend": torch's inductor looks for "NV" before it to detect NVLink,
+    so FakeGPU's host, platform and source notes come after the legend.
+    """
+
     devices = list(inventory.get("devices") or [])
-    lines = ["FakeGPU modeled topology matrix"]
     if not devices:
-        lines.append("No published FakeCUDA GPUs found.")
-    else:
-        devices_by_host: dict[str, list[Mapping[str, Any]]] = {}
-        for device in devices:
-            devices_by_host.setdefault(device["host"], []).append(device)
-        for host, host_devices in sorted(devices_by_host.items()):
-            host_devices.sort(key=lambda item: (item["index"], item["uuid"]))
-            if len(devices_by_host) > 1 or lines[-1] != lines[0]:
-                lines.append("")
-            lines.append(f"Host: {host}")
-            platforms = sorted(
-                {
-                    str(device["topology"].get("platform") or "")
-                    for device in host_devices
-                }
-                - {""}
-            )
-            for platform in platforms:
-                lines.append(f"Platform: {_platform_label(platform)}")
-            labels = _topology_labels(host_devices)
-            placed = any(
-                device["topology"].get("slot") for device in host_devices
-            )
-            rows = [["", *labels, *(["NUMA Affinity"] if placed else [])]]
-            for row_index, device in enumerate(host_devices):
-                slot = device["topology"].get("slot") or {}
-                rows.append(
-                    [
-                        labels[row_index],
-                        *[
-                            _topology_relation(device, target)
-                            for target in host_devices
-                        ],
-                        *(
-                            [str(slot.get("numa_node", "N/A")) if slot else "N/A"]
-                            if placed
-                            else []
-                        ),
-                    ]
-                )
-            widths = [
-                max(len(str(row[column])) for row in rows)
-                for column in range(len(rows[0]))
-            ]
-            for row in rows:
-                lines.append(
-                    "  ".join(
-                        str(value).ljust(widths[column])
-                        for column, value in enumerate(row)
-                    ).rstrip()
-                )
-            source_values = sorted(
-                {device["topology"]["source"] for device in host_devices}
-            )
-            lines.append(
-                "Topology source: "
-                + ", ".join(source_values)
-                + " (modeled, not measured)"
-            )
-            config_errors = sorted(
-                {
-                    str(device["topology"].get("error") or "")
-                    for device in host_devices
-                    if device["topology"].get("error")
-                }
-            )
-            for config_error in config_errors:
-                lines.append(f"Configuration error: {config_error}")
-        lines.extend(
-            [
-                "",
-                "Legend:",
-                "",
-                "  X    = Self",
-                (
-                    "  SYS  = Connection traversing PCIe as well as the "
-                    "SMP interconnect between NUMA nodes"
-                ),
-                (
-                    "  NODE = Connection traversing PCIe as well as the "
-                    "interconnect between PCIe Host Bridges within a "
-                    "NUMA node"
-                ),
-                (
-                    "  PHB  = Connection traversing PCIe as well as a "
-                    "PCIe Host Bridge (typically the CPU)"
-                ),
-                (
-                    "  PXB  = Connection traversing multiple PCIe bridges "
-                    "(without traversing the PCIe Host Bridge)"
-                ),
-                (
-                    "  PIX  = Connection traversing at most a single "
-                    "PCIe bridge"
-                ),
-                (
-                    "  NV#  = Connection traversing a bonded set of # "
-                    "NVLinks"
-                ),
-            ]
+        return "No published FakeCUDA GPUs found."
+    labels = _topology_labels(devices)
+    header = [*labels, "CPU Affinity", "NUMA Affinity", "GPU NUMA ID"]
+    lines = ["\t\x1b[4m" + "\t".join(header) + "\x1b[0m"]
+    for label, device in zip(labels, devices):
+        slot = device["topology"].get("slot") or {}
+        numa = slot.get("numa_node") if slot else None
+        cells = [
+            " X " if target is device else _topology_relation(device, target)
+            for target in devices
+        ]
+        # CPU affinity and the GPU's own NUMA ID are not modeled.
+        numa_text = "N/A" if numa is None else str(numa)
+        lines.append("\t".join([label, *cells, "N/A", numa_text, "", "N/A"]))
+    lines.extend(["", *_TOPOLOGY_LEGEND, "", "FakeGPU modeled topology matrix"])
+    devices_by_host: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
+    for label, device in zip(labels, devices):
+        devices_by_host.setdefault(str(device["host"]), []).append(
+            (label, device)
         )
+    for host, entries in devices_by_host.items():
+        host_devices = [device for _label, device in entries]
+        host_labels = ", ".join(label for label, _device in entries)
+        lines.append(f"Host: {host} ({host_labels})")
+        platforms = sorted(
+            {
+                str(device["topology"].get("platform") or "")
+                for device in host_devices
+            }
+            - {""}
+        )
+        for platform in platforms:
+            lines.append(f"Platform: {_platform_label(platform)}")
+        source_values = sorted(
+            {device["topology"]["source"] for device in host_devices}
+        )
+        lines.append(
+            "Topology source: "
+            + ", ".join(source_values)
+            + " (modeled, not measured)"
+        )
+        config_errors = sorted(
+            {
+                str(device["topology"].get("error") or "")
+                for device in host_devices
+                if device["topology"].get("error")
+            }
+        )
+        for config_error in config_errors:
+            lines.append(f"Configuration error: {config_error}")
+    if len(devices_by_host) > 1:
+        lines.append("GPUs on different hosts show SYS.")
+    lines.append("CPU Affinity and GPU NUMA ID are not modeled.")
     return "\n".join(lines)
 
 

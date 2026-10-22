@@ -287,10 +287,23 @@ def test_virtual_smi_models_topology_nvlink_views_and_queries(
 
     assert main(["topo", "-m", "--state", str(path)]) == 0
     matrix = capsys.readouterr().out
-    assert "FakeGPU modeled topology matrix" in matrix
-    assert "GPU0  X" in matrix
-    assert "NV1" in matrix
-    assert "modeled, not measured" in matrix
+    lines = matrix.splitlines()
+    # nvidia-smi 580.178.04 topo -m: tab-separated cells, a header row
+    # underlined with ANSI escapes, " X " on the diagonal and an empty cell
+    # after NUMA Affinity.
+    assert lines[0] == (
+        "\t\x1b[4mGPU0\tGPU1\tGPU2\tGPU3\tCPU Affinity\tNUMA Affinity"
+        "\tGPU NUMA ID\x1b[0m"
+    )
+    assert lines[1] == "GPU0\t X \tNV1\tPIX\tPIX\tN/A\t0\t\tN/A"
+    assert lines[3] == "GPU2\tPIX\tPIX\t X \tNV1\tN/A\t0\t\tN/A"
+    assert lines[5:8] == ["", "Legend:", ""]
+    # torch._inductor.comm_analysis._has_nvlink reads the part before
+    # "Legend"; FakeGPU's notes follow the legend.
+    before_legend, after_legend = matrix.split("Legend")
+    assert "NV" in before_legend and "FakeGPU" not in before_legend
+    assert "FakeGPU modeled topology matrix" in after_legend
+    assert "modeled, not measured" in after_legend
 
     assert main(["nvlink", "-s", "--state", str(path)]) == 0
     status = capsys.readouterr().out
@@ -1835,3 +1848,27 @@ def test_virtual_smi_memory_reserved_is_the_driver_reserve(
     )
     assert "not modeled" in reserved
     assert "memory.allocator_reserved" in reserved
+
+
+def test_virtual_smi_topology_notes_cannot_fake_an_nvlink(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FAKEGPU_NVLINK_GROUPS", raising=False)
+    monkeypatch.delenv("FAKEGPU_PLATFORM", raising=False)
+    for host in ("NVDGX-01", "NVDGX-02"):
+        monkeypatch.setattr(smi_module.socket, "gethostname", lambda host=host: host)
+        SmiStatePublisher(tmp_path / f"{host}.json", _snapshot).publish_once(running=True)
+
+    # torch._inductor.comm_analysis._has_nvlink runs `nvidia-smi topo -m`
+    # and checks `"NV" in out.split("Legend")[0]`. A host name that contains
+    # "NV" must not read as an NVLink.
+    assert main(["topo", "-m", "--state-dir", str(tmp_path)]) == 0
+    matrix = capsys.readouterr().out
+    assert "NV" not in matrix.split("Legend")[0]
+    lines = matrix.splitlines()
+    assert lines[1] == "GPU0#1\t X \tSYS\tN/A\t0\t\tN/A"
+    assert lines[2] == "GPU0#2\tSYS\t X \tN/A\t0\t\tN/A"
+    assert "Host: NVDGX-01 (GPU0#1)" in matrix
+    assert "Host: NVDGX-02 (GPU0#2)" in matrix

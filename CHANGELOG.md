@@ -79,6 +79,12 @@
   reserve (total = reserved + used + free), which FakeGPU does not model.
   The caching allocator's reserved memory that it reported before is now
   `memory.allocator_reserved`; `--help-query-gpu` notes the move.
+- `fakegpu nvidia-smi topo -m` prints nvidia-smi's tab-separated matrix
+  with the CPU Affinity, NUMA Affinity and GPU NUMA ID columns and its full
+  legend. FakeGPU's banner, host, platform and source notes moved after the
+  legend: PyTorch's inductor looks for `NV` before `Legend`, so a host name
+  or configuration error containing `NV` read as an NVLink. GPUs of several
+  hosts share one matrix, labeled `GPU0#1`, `GPU0#2`.
 
 ### Fixed
 

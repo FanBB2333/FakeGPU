@@ -73,6 +73,10 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   devices indented below their GPU. A host name follows the index only when
   several hosts are shown. Profile, compute capability and PCI bus ID are in
   `-q` and `--json`.
+- `topo -m` prints nvidia-smi's tab-separated matrix and legend. FakeGPU's
+  host, platform and topology-source notes follow the legend, so tools
+  that read the part before `Legend`, like PyTorch's NVLink check, see
+  only the matrix. CPU Affinity and GPU NUMA ID print `N/A`.
 - `-i` selects devices by index, UUID, PCI bus ID, or profile ID. When it
   matches no GPU, the command prints `No devices were found` and exits 6,
   like nvidia-smi. `--json` prints the full normalized inventory. FakeGPU
