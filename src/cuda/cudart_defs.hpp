@@ -20,6 +20,7 @@ typedef enum cudaError_enum {
     cudaErrorInvalidSymbol = 13,
     cudaErrorNotReady = 600,
     cudaErrorNotSupported = 801,
+    cudaErrorNoDevice = 100,
     cudaErrorInvalidDevice = 101,
     cudaErrorInvalidDeviceFunction = 98,
     cudaErrorInvalidKernelImage = 200,
@@ -31,6 +32,11 @@ typedef enum cudaError_enum {
     cudaErrorLaunchFailure = 719,
     cudaErrorPeerAccessUnsupported = 217,
     cudaErrorInvalidMemcpyDirection = 21,
+    cudaErrorDeviceUninitialized = 201,
+    cudaErrorUnsupportedLimit = 215,
+    cudaErrorHostMemoryAlreadyRegistered = 712,
+    cudaErrorHostMemoryNotRegistered = 713,
+    cudaErrorNotPermitted = 800,
     cudaErrorUnknown = 999
 } cudaError_t;
 
@@ -288,6 +294,7 @@ cudaError_t cudaDriverGetVersion(int *driverVersion);
 cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
                              void **args, size_t sharedMem, cudaStream_t stream);
 cudaError_t cudaLaunchKernelExC(const void *config, const void *func, void **args);
+cudaError_t cudaGetFuncBySymbol(void **functionPtr, const void *symbolPtr);
 cudaError_t cudaLaunchHostFunc(cudaStream_t stream, void (*fn)(void *userData), void *userData);
 cudaError_t cudaConfigureCall(dim3 gridDim, dim3 blockDim, size_t sharedMem, cudaStream_t stream);
 cudaError_t cudaSetupArgument(const void *arg, size_t size, size_t offset);
@@ -390,12 +397,35 @@ typedef struct cudaPointerAttributes {
 
 cudaError_t cudaPointerGetAttributes(cudaPointerAttributes *attributes, const void *ptr);
 
-// IPC (Inter-Process Communication)
-cudaError_t cudaIpcGetMemHandle(void *handle, void *devPtr);
-cudaError_t cudaIpcOpenMemHandle(void **devPtr, void *handle, unsigned int flags);
+// IPC (Inter-Process Communication). Handles are 64-byte structs passed by
+// value (driver_types.h, CUDA_IPC_HANDLE_SIZE).
+typedef struct cudaIpcMemHandle_st {
+    char reserved[64];
+} cudaIpcMemHandle_t;
+
+typedef struct cudaIpcEventHandle_st {
+    char reserved[64];
+} cudaIpcEventHandle_t;
+
+cudaError_t cudaIpcGetMemHandle(cudaIpcMemHandle_t *handle, void *devPtr);
+cudaError_t cudaIpcOpenMemHandle(void **devPtr, cudaIpcMemHandle_t handle, unsigned int flags);
 cudaError_t cudaIpcCloseMemHandle(void *devPtr);
-cudaError_t cudaIpcGetEventHandle(void *handle, cudaEvent_t event);
-cudaError_t cudaIpcOpenEventHandle(cudaEvent_t *event, void *handle);
+cudaError_t cudaIpcGetEventHandle(cudaIpcEventHandle_t *handle, cudaEvent_t event);
+cudaError_t cudaIpcOpenEventHandle(cudaEvent_t *event, cudaIpcEventHandle_t handle);
+
+// Device flags, initialization and stream attributes (cuda_runtime_api.h).
+cudaError_t cudaSetDeviceFlags(unsigned int flags);
+cudaError_t cudaGetDeviceFlags(unsigned int *flags);
+cudaError_t cudaInitDevice(int device, unsigned int deviceFlags, unsigned int flags);
+cudaError_t cudaStreamGetId(cudaStream_t hStream, unsigned long long *streamId);
+cudaError_t cudaStreamGetAttribute(cudaStream_t hStream, int attr, void *value_out);
+cudaError_t cudaStreamSetAttribute(cudaStream_t hStream, int attr, const void *value);
+cudaError_t cudaHostGetDevicePointer(void **pDevice, void *pHost, unsigned int flags);
+cudaError_t cudaHostGetFlags(unsigned int *pFlags, void *pHost);
+cudaError_t cudaMemcpyToSymbolAsync(const void *symbol, const void *src, size_t count, size_t offset,
+                                    cudaMemcpyKind kind, cudaStream_t stream);
+cudaError_t cudaMemcpyFromSymbolAsync(void *dst, const void *symbol, size_t count, size_t offset,
+                                      cudaMemcpyKind kind, cudaStream_t stream);
 
 // CUDA Graph API
 typedef struct CUgraph_st *cudaGraph_t;

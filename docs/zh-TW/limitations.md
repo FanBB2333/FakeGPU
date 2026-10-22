@@ -13,6 +13,9 @@
 - 原生 cuBLAS 中沒有數值實作的演算法、不支援的 GEMM/Lt dtype、layout 或 pointer
   mode，以及略過的 CPU 計算，都依 `FAKEGPU_UNSUPPORTED_API` 處理。設為 `warn` 時
   會記錄警告。設為 `error` 時，呼叫會在寫入輸出前傳回 `CUBLAS_STATUS_NOT_SUPPORTED`。
+- 模擬的裝置記憶體無法與其他行程共用：CUDA IPC 呼叫以及 VMM 可共用 handle 的匯出
+  與匯入都會傳回 not supported。釋放 FakeGPU 從未配置過的指標時預設傳回成功；
+  只有設為 `FAKEGPU_UNSUPPORTED_API=error` 時才會像驅動程式一樣回報錯誤。
 - 對帶有 vision encoder 的模型，`estimate-llm` 與 `plan-serving` 只計入 checkpoint
   權重，不含 vision/projector activation 與 FLOP，報告會標示這一點。decoder token
   數需已包含視覺 token。

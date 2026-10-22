@@ -16,6 +16,10 @@
   GEMM/Lt dtypes, layouts, or pointer modes, and skipped CPU computation all
   follow `FAKEGPU_UNSUPPORTED_API`. With `warn` a warning is recorded. With
   `error` the call returns `CUBLAS_STATUS_NOT_SUPPORTED` before writing output.
+- Simulated device memory cannot be shared with another process: CUDA IPC
+  calls and VMM shareable-handle export and import return not supported.
+  Freeing a pointer FakeGPU never allocated returns success unless
+  `FAKEGPU_UNSUPPORTED_API=error`, where it fails like the driver.
 - For models with a vision encoder, `estimate-llm` and `plan-serving` count
   checkpoint weights but not vision or projector activations and FLOPs. The
   reports flag this. Decoder token counts must already include visual tokens.

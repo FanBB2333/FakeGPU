@@ -123,6 +123,20 @@
       "policy_enforced": true
     },
     {
+      "api": "cuMemFree",
+      "library": "cuda_driver",
+      "classification": "untracked_pointer_ignored",
+      "simulate_behavior": "Freeing an address FakeGPU never allocated, including a second free, is ignored and returns success; the real driver returns invalid value, which the error policy reproduces. cudaFree uses the same path. Interior pointers, host memory and VMM mappings are always rejected.",
+      "policy_enforced": true
+    },
+    {
+      "api": "cuMemFreeHost",
+      "library": "cuda_driver",
+      "classification": "untracked_pointer_ignored",
+      "simulate_behavior": "Freeing a host address FakeGPU never allocated is ignored and returns success; the real driver returns invalid value, which the error policy reproduces. cudaFreeHost uses the same path. Registered or device memory is always rejected.",
+      "policy_enforced": true
+    },
+    {
       "api": "cudaStreamUpdateCaptureDependencies",
       "library": "cudart",
       "classification": "state_not_materialized",

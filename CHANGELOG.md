@@ -30,6 +30,18 @@
 - Execute nested device-side child launches through direct PTX and linked
   SASS modules; accept nvcc linked fatbin wrapper v2. Cubin globals share
   their CUDA address with host backing for CPU library interoperability.
+- Native CUDA virtual memory management: `cuMemCreate`,
+  `cuMemAddressReserve`, `cuMemMap`, `cuMemSetAccess` and the other `cuMem*`
+  VMM calls that PyTorch's `expandable_segments` allocator uses. A physical
+  allocation counts against device memory from `cuMemCreate` until its last
+  handle and mapping are gone, and mapped ranges work with copies, memsets
+  and CPU kernels. Exporting or importing shareable handles returns
+  `CUDA_ERROR_NOT_SUPPORTED`.
+- Native `cuStreamWriteValue32` (and `_v2`), `cudaGetFuncBySymbol`,
+  `cudaSetDeviceFlags`, `cudaGetDeviceFlags`, `cudaInitDevice`,
+  `cudaStreamGetId`, `cudaStreamGetAttribute`/`cudaStreamSetAttribute` with
+  their driver forms, `cudaHostGetDevicePointer`, `cudaMemcpyToSymbolAsync`
+  and `cudaMemcpyFromSymbolAsync`.
 
 ### Changed
 
@@ -55,6 +67,17 @@
 - Mixed-precision training plans size Adam and momentum state in FP32 next
   to the master copy, as DeepSpeed and PyTorch AMP keep it: 4 more bytes per
   parameter than before.
+- Native `cuMemGetInfo` and `cudaMemGetInfo` leave a modeled CUDA context
+  out of free memory, `FAKEGPU_CUDA_CONTEXT_BYTES` (default 601.5 MiB), as
+  FakeCUDA does.
+- Freeing a pointer FakeGPU never allocated with `cudaFree`, `cuMemFree`,
+  `cudaFreeHost` or `cuMemFreeHost` still succeeds by default, but now
+  follows `FAKEGPU_UNSUPPORTED_API`: `warn` prints a warning and `error`
+  returns invalid value like the driver. Interior pointers, host memory
+  passed to a device free and VMM mappings are always rejected.
+- Native CUDA IPC returns not supported, because simulated memory cannot be
+  opened by another process. `cuIpcOpenMemHandle` takes its handle by value
+  and `cuIpcOpenMemHandle_v2` is exported.
 
 ### Fixed
 
@@ -396,6 +419,19 @@
   Accelerate's `Accelerator().device` and transformers'
   `TrainingArguments.device` chose MPS before CUDA, so single-process
   training ran on MPS and bypassed the simulated GPUs.
+- Native CUDA answers that differed from an Ampere GPU (sm_80): device
+  allocations are 256-byte aligned; `cudaMalloc(0)` returns NULL while
+  `cuMemAlloc(0)` fails; managed allocations accept only the global or host
+  attach flag; runtime calls return `cudaErrorNoDevice` when no device is
+  visible; `cuEventElapsedTime` returns not ready for pending events and a
+  negative time for reversed events; context limits have per-limit defaults,
+  rounding and errors shared by the runtime and the driver; stream
+  priorities range from 0 to -5 with clamping on both APIs; both occupancy
+  APIs use one model of the thread, block and shared memory limits;
+  `cuDeviceGetAttribute` rejects unknown attributes; primary contexts are
+  inactive until retained and keep their flags; host registration tracks
+  ranges and their flags; pointer attributes describe unregistered,
+  registered, pinned and VMM memory.
 
 ## v1.6.0 - 2026-10-17
 

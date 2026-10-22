@@ -22,6 +22,7 @@ typedef enum CUresult_enum {
     CUDA_ERROR_INVALID_IMAGE = 200,
     CUDA_ERROR_INVALID_CONTEXT = 201,
     CUDA_ERROR_NO_BINARY_FOR_GPU = 209,
+    CUDA_ERROR_UNSUPPORTED_LIMIT = 215,
     CUDA_ERROR_PEER_ACCESS_UNSUPPORTED = 217,
     CUDA_ERROR_INVALID_PTX = 218,
     CUDA_ERROR_FILE_NOT_FOUND = 301,
@@ -29,7 +30,10 @@ typedef enum CUresult_enum {
     CUDA_ERROR_NOT_FOUND = 500,
     CUDA_ERROR_ILLEGAL_ADDRESS = 700,
     CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES = 701,
+    CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED = 712,
+    CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED = 713,
     CUDA_ERROR_LAUNCH_FAILED = 719,
+    CUDA_ERROR_NOT_PERMITTED = 800,
     CUDA_ERROR_NOT_SUPPORTED = 801,
     CUDA_ERROR_UNKNOWN = 999
 } CUresult;
@@ -57,7 +61,10 @@ typedef enum CUlimit_enum {
     CU_LIMIT_DEV_RUNTIME_SYNC_DEPTH = 0x03,
     CU_LIMIT_DEV_RUNTIME_PENDING_LAUNCH_COUNT = 0x04,
     CU_LIMIT_MAX_L2_FETCH_GRANULARITY = 0x05,
-    CU_LIMIT_PERSISTING_L2_CACHE_SIZE = 0x06
+    CU_LIMIT_PERSISTING_L2_CACHE_SIZE = 0x06,
+    CU_LIMIT_SHMEM_SIZE = 0x07,
+    CU_LIMIT_CIG_ENABLED = 0x08,
+    CU_LIMIT_CIG_SHMEM_FALLBACK_ENABLED = 0x09
 } CUlimit;
 
 // Stream flags
@@ -91,7 +98,18 @@ typedef enum CUpointer_attribute_enum {
     CU_POINTER_ATTRIBUTE_SYNC_MEMOPS = 6,
     CU_POINTER_ATTRIBUTE_BUFFER_ID = 7,
     CU_POINTER_ATTRIBUTE_IS_MANAGED = 8,
-    CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL = 9
+    CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL = 9,
+    CU_POINTER_ATTRIBUTE_IS_LEGACY_CUDA_IPC_CAPABLE = 10,
+    CU_POINTER_ATTRIBUTE_RANGE_START_ADDR = 11,
+    CU_POINTER_ATTRIBUTE_RANGE_SIZE = 12,
+    CU_POINTER_ATTRIBUTE_MAPPED = 13,
+    CU_POINTER_ATTRIBUTE_ALLOWED_HANDLE_TYPES = 14,
+    CU_POINTER_ATTRIBUTE_IS_GPU_DIRECT_RDMA_CAPABLE = 15,
+    CU_POINTER_ATTRIBUTE_ACCESS_FLAGS = 16,
+    CU_POINTER_ATTRIBUTE_MEMPOOL_HANDLE = 17,
+    CU_POINTER_ATTRIBUTE_MAPPING_SIZE = 18,
+    CU_POINTER_ATTRIBUTE_MAPPING_BASE_ADDR = 19,
+    CU_POINTER_ATTRIBUTE_MEMORY_BLOCK_ID = 20
 } CUpointer_attribute;
 
 // Device attributes (extended list)
@@ -184,6 +202,108 @@ typedef enum CUctx_flags_enum {
     CU_CTX_MAP_HOST = 0x08,
     CU_CTX_LMEM_RESIZE_TO_MAX = 0x10
 } CUctx_flags;
+
+// Virtual memory management (cuda.h, CUDA 12.4).
+typedef unsigned long long CUmemGenericAllocationHandle;
+
+typedef enum CUmemAllocationHandleType_enum {
+    CU_MEM_HANDLE_TYPE_NONE = 0x0,
+    CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR = 0x1,
+    CU_MEM_HANDLE_TYPE_WIN32 = 0x2,
+    CU_MEM_HANDLE_TYPE_WIN32_KMT = 0x4,
+    CU_MEM_HANDLE_TYPE_FABRIC = 0x8,
+    CU_MEM_HANDLE_TYPE_MAX = 0x7FFFFFFF
+} CUmemAllocationHandleType;
+
+typedef enum CUmemLocationType_enum {
+    CU_MEM_LOCATION_TYPE_INVALID = 0x0,
+    CU_MEM_LOCATION_TYPE_DEVICE = 0x1,
+    CU_MEM_LOCATION_TYPE_HOST = 0x2,
+    CU_MEM_LOCATION_TYPE_HOST_NUMA = 0x3,
+    CU_MEM_LOCATION_TYPE_HOST_NUMA_CURRENT = 0x4,
+    CU_MEM_LOCATION_TYPE_MAX = 0x7FFFFFFF
+} CUmemLocationType;
+
+typedef enum CUmemAllocationType_enum {
+    CU_MEM_ALLOCATION_TYPE_INVALID = 0x0,
+    CU_MEM_ALLOCATION_TYPE_PINNED = 0x1,
+    CU_MEM_ALLOCATION_TYPE_MAX = 0x7FFFFFFF
+} CUmemAllocationType;
+
+typedef enum CUmemAllocationGranularity_flags_enum {
+    CU_MEM_ALLOC_GRANULARITY_MINIMUM = 0x0,
+    CU_MEM_ALLOC_GRANULARITY_RECOMMENDED = 0x1
+} CUmemAllocationGranularity_flags;
+
+typedef enum CUmemAccess_flags_enum {
+    CU_MEM_ACCESS_FLAGS_PROT_NONE = 0x0,
+    CU_MEM_ACCESS_FLAGS_PROT_READ = 0x1,
+    CU_MEM_ACCESS_FLAGS_PROT_READWRITE = 0x3,
+    CU_MEM_ACCESS_FLAGS_PROT_MAX = 0x7FFFFFFF
+} CUmemAccess_flags;
+
+typedef struct CUmemLocation_st {
+    CUmemLocationType type;
+    int id;
+} CUmemLocation;
+
+typedef struct CUmemAllocationProp_st {
+    CUmemAllocationType type;
+    CUmemAllocationHandleType requestedHandleTypes;
+    CUmemLocation location;
+    void *win32HandleMetaData;
+    struct {
+        unsigned char compressionType;
+        unsigned char gpuDirectRDMACapable;
+        unsigned short usage;
+        unsigned char reserved[4];
+    } allocFlags;
+} CUmemAllocationProp;
+
+typedef struct CUmemAccessDesc_st {
+    CUmemLocation location;
+    CUmemAccess_flags flags;
+} CUmemAccessDesc;
+
+// Interprocess handles are passed by value (cuda.h: CU_IPC_HANDLE_SIZE 64).
+typedef struct CUipcMemHandle_st {
+    char reserved[64];
+} CUipcMemHandle;
+
+typedef struct CUipcEventHandle_st {
+    char reserved[64];
+} CUipcEventHandle;
+
+// Stream attributes share the launch attribute ids and 64-byte value union.
+typedef enum CUlaunchAttributeID_enum {
+    CU_LAUNCH_ATTRIBUTE_ACCESS_POLICY_WINDOW = 1,
+    CU_LAUNCH_ATTRIBUTE_COOPERATIVE = 2,
+    CU_LAUNCH_ATTRIBUTE_SYNCHRONIZATION_POLICY = 3,
+    CU_LAUNCH_ATTRIBUTE_PRIORITY = 8,
+    CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN_MAP = 9,
+    CU_LAUNCH_ATTRIBUTE_MEM_SYNC_DOMAIN = 10
+} CUlaunchAttributeID;
+
+typedef struct CUaccessPolicyWindow_st {
+    void *base_ptr;
+    size_t num_bytes;
+    float hitRatio;
+    int hitProp;
+    int missProp;
+} CUaccessPolicyWindow;
+
+typedef union CUlaunchAttributeValue_union {
+    char pad[64];
+    CUaccessPolicyWindow accessPolicyWindow;
+    int cooperative;
+    int syncPolicy;
+    int priority;
+    struct {
+        unsigned char default_;
+        unsigned char remote;
+    } memSyncDomainMap;
+    int memSyncDomain;
+} CUlaunchAttributeValue;
 
 // Function declarations
 CUresult cuInit(unsigned int Flags);
@@ -295,6 +415,46 @@ CUresult cuLaunchKernel(CUfunction function, unsigned gridX, unsigned gridY, uns
                        unsigned blockX, unsigned blockY, unsigned blockZ,
                        unsigned sharedBytes, CUstream stream, void** arguments, void** extra);
 
+// Occupancy, stream attributes and stream memory operations.
+CUresult cuOccupancyMaxActiveBlocksPerMultiprocessor(int *numBlocks, CUfunction func, int blockSize, size_t dynamicSMemSize);
+CUresult cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
+    int *numBlocks, CUfunction func, int blockSize, size_t dynamicSMemSize, unsigned int flags);
+CUresult cuStreamCreateWithPriority(CUstream *phStream, unsigned int flags, int priority);
+CUresult cuStreamGetAttribute(CUstream hStream, CUlaunchAttributeID attr, CUlaunchAttributeValue *value_out);
+CUresult cuStreamSetAttribute(CUstream hStream, CUlaunchAttributeID attr, const CUlaunchAttributeValue *value);
+CUresult cuStreamWriteValue32(CUstream stream, CUdeviceptr addr, uint32_t value, unsigned int flags);
+CUresult cuStreamWriteValue32_v2(CUstream stream, CUdeviceptr addr, uint32_t value, unsigned int flags);
+CUresult cuMemGetAddressRange(CUdeviceptr *pbase, size_t *psize, CUdeviceptr dptr);
+
+// Virtual memory management.
+CUresult cuMemGetAllocationGranularity(
+    size_t *granularity, const CUmemAllocationProp *prop, CUmemAllocationGranularity_flags option);
+CUresult cuMemCreate(CUmemGenericAllocationHandle *handle, size_t size, const CUmemAllocationProp *prop,
+                     unsigned long long flags);
+CUresult cuMemRelease(CUmemGenericAllocationHandle handle);
+CUresult cuMemAddressReserve(CUdeviceptr *ptr, size_t size, size_t alignment, CUdeviceptr addr,
+                             unsigned long long flags);
+CUresult cuMemAddressFree(CUdeviceptr ptr, size_t size);
+CUresult cuMemMap(CUdeviceptr ptr, size_t size, size_t offset, CUmemGenericAllocationHandle handle,
+                  unsigned long long flags);
+CUresult cuMemUnmap(CUdeviceptr ptr, size_t size);
+CUresult cuMemSetAccess(CUdeviceptr ptr, size_t size, const CUmemAccessDesc *desc, size_t count);
+CUresult cuMemGetAccess(unsigned long long *flags, const CUmemLocation *location, CUdeviceptr ptr);
+CUresult cuMemRetainAllocationHandle(CUmemGenericAllocationHandle *handle, void *addr);
+CUresult cuMemGetAllocationPropertiesFromHandle(CUmemAllocationProp *prop, CUmemGenericAllocationHandle handle);
+CUresult cuMemExportToShareableHandle(void *shareableHandle, CUmemGenericAllocationHandle handle,
+                                      CUmemAllocationHandleType handleType, unsigned long long flags);
+CUresult cuMemImportFromShareableHandle(CUmemGenericAllocationHandle *handle, void *osHandle,
+                                        CUmemAllocationHandleType shHandleType);
+
+// Interprocess communication.
+CUresult cuIpcGetMemHandle(CUipcMemHandle *pHandle, CUdeviceptr dptr);
+CUresult cuIpcOpenMemHandle(CUdeviceptr *pdptr, CUipcMemHandle handle, unsigned int Flags);
+CUresult cuIpcOpenMemHandle_v2(CUdeviceptr *pdptr, CUipcMemHandle handle, unsigned int Flags);
+CUresult cuIpcCloseMemHandle(CUdeviceptr dptr);
+CUresult cuIpcGetEventHandle(CUipcEventHandle *pHandle, CUevent event);
+CUresult cuIpcOpenEventHandle(CUevent *phEvent, CUipcEventHandle handle);
+
 #ifdef __cplusplus
 }
 
@@ -304,6 +464,17 @@ bool is_stream_handle_live(CUstream stream);
 CUresult submit_stream_operation(CUstream stream);
 CUresult mark_stream_synchronized(CUstream stream);
 CUresult mark_stream_host_function_complete(CUstream stream);
+
+// Real driver entry point when a real driver backs the current mode, else nullptr.
+void* real_driver_entry(const char* name);
+
+// Releases a simulated allocation the CUDA APIs handed out. Returns
+// CUDA_ERROR_INVALID_VALUE for addresses that are known but not freeable
+// with this call, and applies FAKEGPU_UNSUPPORTED_API to unknown ones.
+CUresult free_device_allocation(void* ptr);
+
+// Modeled occupancy shared by the Driver and Runtime entry points.
+CUresult model_occupancy(int* num_blocks, int device, int block_size, size_t dynamic_smem, unsigned int flags);
 
 }  // namespace fake_gpu::cuda
 #endif

@@ -14,6 +14,9 @@
 - cuBLAS 中没有数值实现的算法、GEMM/Lt 不支持的 dtype、布局和指针模式，以及
   跳过 CPU 计算的分支，都受 `FAKEGPU_UNSUPPORTED_API` 控制。设为 `warn` 时记录
   警告。设为 `error` 时，调用会在写入输出前返回 `CUBLAS_STATUS_NOT_SUPPORTED`。
+- 模拟的设备内存不能与其他进程共享：CUDA IPC 调用以及 VMM 可共享句柄的导出和
+  导入都返回 not supported。释放一个 FakeGPU 从未分配过的指针时默认返回成功；
+  只有设为 `FAKEGPU_UNSUPPORTED_API=error` 时才会像驱动一样报错。
 - 对带视觉编码器的模型，`estimate-llm` 和 `plan-serving` 只计入 checkpoint
   权重，不含 vision/projector 激活与 FLOP。报告中会标注这一点。decoder token
   数需要已经包含视觉 token。
