@@ -103,6 +103,10 @@
   calculations subtract per block. NVIDIA's deviceQuery
   outputs set A100 PCIe 40GB to 3 copy engines and Jetson T5000 to 1 copy
   engine with ECC off.
+- `nvmlDeviceGetMigMode` returns `NVML_ERROR_NOT_SUPPORTED` for GPUs without
+  MIG, and `nvmlDeviceGetMaxMigDeviceCount` returns the profile's maximum
+  (7 on A100) while a MIG layout is configured and 0 otherwise, as nvml.h
+  documents. It returned the configured instance count before.
 
 ### Fixed
 

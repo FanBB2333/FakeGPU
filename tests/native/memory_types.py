@@ -611,7 +611,9 @@ def _validate_modeled_mig_nvml() -> None:
                 )
             )
             != NVML_SUCCESS
-            or int(count.value) != 2
+            # nvml.h: the maximum number of MIG devices the parent can hold,
+            # the default a100 profile's 7, not the 2 configured instances.
+            or int(count.value) != 7
         ):
             _die(
                 "NVML modeled MIG device count mismatch: "

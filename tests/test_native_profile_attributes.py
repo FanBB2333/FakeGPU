@@ -154,3 +154,21 @@ def test_device_attributes_follow_the_profile(tmp_path: Path) -> None:
         assert values == [ecc, engines, ratio, pageable, flush, persisting, window, reserved], profile_id
         assert persisting < catalog[profile_id].l2_cache_bytes or persisting == 0
 
+
+def test_mig_mode_and_maximum_follow_the_profile(tmp_path: Path) -> None:
+    # nvml.h: GetMigMode returns NOT_SUPPORTED (3) for a GPU without MIG;
+    # GetMaxMigDeviceCount returns the maximum number of MIG devices, and zero
+    # when MIG is not supported or not enabled.
+    body = """
+    result = []
+    for index in range(3):
+        current, pending, count = ctypes.c_uint(9), ctypes.c_uint(9), ctypes.c_uint(9)
+        mode = nvml.nvmlDeviceGetMigMode(handle(index), ctypes.byref(current), ctypes.byref(pending))
+        assert nvml.nvmlDeviceGetMaxMigDeviceCount(handle(index), ctypes.byref(count)) == 0
+        result.append([mode, current.value if mode == 0 else None, count.value])
+    """
+    profiles = "a100,h100,rtx3090"
+    assert _run(tmp_path, body, FAKEGPU_PROFILES=profiles) == [[0, 0, 0], [0, 0, 0], [3, None, 0]]
+    assert _run(
+        tmp_path, body, FAKEGPU_PROFILES=profiles, FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2"
+    ) == [[0, 1, 7], [0, 0, 0], [3, None, 0]]
