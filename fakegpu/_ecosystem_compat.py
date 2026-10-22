@@ -244,6 +244,140 @@ def _patch_fsdp_device_handling() -> None:
         if hasattr(_fsdp_mod, "_get_device_from_device_id"):
             _fsdp_mod._get_device_from_device_id = _patched_get_device
 
+    # A module still on the CPU computes on torch.device(current_device()),
+    # which is mps:N on Apple Silicon, so FSDP(cpu_module, device_id=cuda:0)
+    # failed its consistency check. Resolve the device, then check as FSDP does.
+    _orig_get_compute_device = getattr(_fsdp_init, "_get_compute_device", None)
+    if _orig_get_compute_device is not None:
+
+        @functools.wraps(_orig_get_compute_device)
+        def _patched_get_compute_device(module, ignored_params, device_from_device_id, rank, device_handle):
+            compute_device = _orig_get_compute_device(module, ignored_params, None, rank, device_handle)
+            if compute_device.type not in ("cuda", "cpu", "meta"):
+                import torch as _torch
+
+                compute_device = _torch.device("cuda", compute_device.index or 0)
+            if device_from_device_id is not None and compute_device != device_from_device_id:
+                raise ValueError(
+                    f"Inconsistent compute device and `device_id` on rank {rank}: "
+                    f"{compute_device} vs {device_from_device_id}"
+                )
+            return compute_device
+
+        _fsdp_init._get_compute_device = _patched_get_compute_device
+
+
+def _patch_default_accelerator(torch_mod: Any) -> None:
+    """Report CUDA as the machine's accelerator, as on a CUDA build with GPUs.
+
+    ``torch._C._get_accelerator()`` picks the device of FSDP2's default mesh,
+    of FSDP1's device handle and of ``barrier``. On Apple Silicon it returns
+    ``mps`` even while FakeCUDA hides the MPS backend, so ``fully_shard``
+    without a mesh failed on the missing ``torch.mps.current_device``.
+    """
+
+    def _get_accelerator(check: bool = False) -> Any:
+        return torch_mod.device("cuda")
+
+    torch_mod._C._get_accelerator = _get_accelerator
+
+
+def _patch_fsdp2_post_backward(upstream: Any) -> None:
+    """Keep FSDP2's post-backward hook on the autograd graph FakeCUDA builds.
+
+    FakeCUDA records autograd on the CPU tensors behind each simulated GPU
+    tensor, while ``torch.autograd.Function.apply`` records it on the tensors
+    it receives. ``RegisterPostBackwardFunction`` therefore cut the graph
+    between FSDP2 modules: the earlier module's parameters got no gradient and
+    the later module reduced its gradients only in the final callback. Apply
+    it to the CPU tensors and hand the simulated GPU tensors on, so the
+    gradients and their reduce-scatter happen during backward, as on a GPU.
+    """
+    try:
+        from torch.distributed.fsdp._fully_shard._fsdp_param_group import (
+            RegisterPostBackwardFunction,
+        )
+    except ImportError:
+        return
+    fake_tensor_cls = upstream.FakeCudaTensor
+    # A bound classmethod, a C descriptor on newer PyTorch.
+    original = RegisterPostBackwardFunction.apply
+
+    def _apply(cls: Any, param_group: Any, *inputs: Any) -> Any:
+        devices = [
+            tensor.device_index if isinstance(tensor, fake_tensor_cls) else None
+            for tensor in inputs
+        ]
+        if all(device is None for device in devices):
+            return original(param_group, *inputs)
+        outputs = original(param_group, *(upstream.unwrap_tensor(t) for t in inputs))
+        return tuple(
+            output if device is None else upstream.wrap_tensor(output, device_index=device)
+            for output, device in zip(outputs, devices)
+        )
+
+    RegisterPostBackwardFunction.apply = classmethod(_apply)
+
+
+def _patch_fsdp_state_moves(upstream: Any, torch_mod: Any) -> None:
+    """Move CPU parameters and buffers onto the simulated GPU when FSDP does.
+
+    FSDP1 with ``device_id`` and FSDP2's ``fully_shard`` move a module that is
+    still on the CPU with ``tensor.data = tensor.to(device)``, which leaves a
+    simulated GPU tensor's CPU storage in a plain CPU tensor. Move those tensors
+    the way ``Module.to("cuda")`` does under FakeCUDA, in place, and leave the
+    rest to FSDP.
+    """
+    fake_tensor_cls = upstream.FakeCudaTensor
+
+    def _move(tensors: list[Any], device: Any) -> None:
+        holder = torch_mod.nn.Module()
+        for index, tensor in enumerate(tensors):
+            if isinstance(tensor, torch_mod.nn.Parameter):
+                holder._parameters[f"p{index}"] = tensor
+            else:
+                holder._buffers[f"b{index}"] = tensor
+        # FakeCUDA's Module.to swaps each moved tensor in place.
+        holder.to(device)
+
+    def _wrap(original: Any) -> Any:
+        @functools.wraps(original)
+        def _move_states_to_device(params: Any, buffers: Any, device: Any) -> Any:
+            if device is not None and torch_mod.device(device).type == "cuda":
+                on_cpu = [t for t in (*params, *buffers) if not isinstance(t, fake_tensor_cls) and t.device.type == "cpu"]
+                if on_cpu:
+                    _move(on_cpu, device)
+                params = [t for t in params if not isinstance(t, fake_tensor_cls)]
+                buffers = [t for t in buffers if not isinstance(t, fake_tensor_cls)]
+            return original(params, buffers, device)
+
+        _move_states_to_device.__fakegpu_patched__ = True
+        return _move_states_to_device
+
+    import importlib
+
+    for name in (
+        "torch.distributed.fsdp._init_utils",
+        "torch.distributed.fsdp._fully_shard._fsdp_init",
+        "torch.distributed.fsdp._fully_shard._fully_shard",
+        "torch.distributed._composable.replicate_with_fsdp",
+    ):
+        try:
+            module = importlib.import_module(name)
+        except Exception:
+            continue
+        original = getattr(module, "_move_states_to_device", None)
+        if original is not None and not getattr(original, "__fakegpu_patched__", False):
+            module._move_states_to_device = _wrap(original)
+
+
+def _patch_fsdp_simulated_gpu(upstream: Any, torch_mod: Any) -> None:
+    """Let FSDP1 and FSDP2 place, shard and reduce on the simulated GPUs."""
+
+    _patch_default_accelerator(torch_mod)
+    _patch_fsdp2_post_backward(upstream)
+    _patch_fsdp_state_moves(upstream, torch_mod)
+
 
 def _patch_fsdp_runtime_compat(fake_tensor_cls: type) -> None:
     try:
@@ -285,6 +419,7 @@ def _patch_fsdp_runtime_compat(fake_tensor_cls: type) -> None:
 __all__ = [
     "_patch_accelerate_utils",
     "_patch_fsdp_device_handling",
+    "_patch_fsdp_simulated_gpu",
     "_patch_fsdp_runtime_compat",
     "_patch_upstream_all_gather_object",
     "_patch_upstream_fakecuda_tensor_compat",

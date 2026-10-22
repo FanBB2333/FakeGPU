@@ -77,7 +77,8 @@ every rank sees the values NCCL would produce:
 
 - `get_rank()` and `get_world_size()` return the real rank and world size.
   `get_backend()` still reports the requested backend, such as `nccl`, and
-  `get_backend(group)` the backend `new_group` was asked for.
+  `get_backend(group)` the backend `new_group` was asked for. With no backend
+  named, `get_backend()` reports `undefined`, as torch does.
 - `all_reduce` (including `ReduceOp.AVG`), `broadcast`, `all_gather`,
   `all_gather_into_tensor`, `reduce_scatter`, `reduce_scatter_tensor`,
   `reduce`, `gather`, `scatter`, `all_to_all`, `all_to_all_single`,
@@ -85,6 +86,9 @@ every rank sees the values NCCL would produce:
   values. `ReduceOp.AVG` on integer tensors rounds toward zero. As with NCCL,
   `BAND`, `BOR` and `BXOR` on CUDA tensors raise `ValueError` and `AVG` on
   boolean tensors raises `TypeError`, unless the group asked for gloo.
+  `ReduceOp.PREMUL_SUM`, built by `_make_nccl_premul_sum` as FSDP does,
+  multiplies each rank's tensor by its factor before summing, as NCCL does; a
+  gloo group still rejects it.
 - `DistributedDataParallel` broadcasts rank 0's parameters and buffers when it
   is built (no buffers with `broadcast_buffers=False`, nothing with
   `init_sync=False`). Unless `broadcast_buffers=False`, it broadcasts rank 0's
@@ -96,6 +100,18 @@ every rank sees the values NCCL would produce:
   that got no gradient makes the next forward raise DDP's "Expected to have
   finished reduction in the prior iteration" error, in a simulated process
   too. Inside `no_sync()` gradients accumulate locally, as with real DDP.
+- A hook registered with `DistributedDataParallel.register_comm_hook`, such as
+  the fp16, bf16 or PowerSGD hooks, gets a bucket with `GradBucket`'s methods
+  (`buffer()`, `gradients()`, `parameters()`, `index()`, `is_last()` and
+  `set_buffer()`), and its result becomes the gradients. The buckets follow
+  DDP's reducer: one bucket until the first synced backward (the second with
+  `static_graph=True`), then buckets of `bucket_cap_mb` in gradient order;
+  with `find_unused_parameters=True` they keep their first layout.
+- `model.join()` and `Join([model])` handle uneven inputs: a rank that runs
+  out of batches joins the gradient reductions of the ranks still training
+  with zeros, and `divide_by_initial_world_size`,
+  `throw_on_early_termination`, `join_device` and `join_process_group` behave
+  as in DDP.
 - Accelerate sees every process, its rank and the world size.
 
 Any other process keeps the in-process simulation, where collectives use
@@ -104,7 +120,31 @@ finds `WORLD_SIZE` and `MASTER_ADDR` in a cluster pod's environment, so it
 does not wait for peers that never start. Set `FAKEGPU_DIST_COLLECTIVES=real`
 for launchers FakeGPU does not recognize, such as the DeepSpeed or Lightning
 launchers, or `FAKEGPU_DIST_COLLECTIVES=simulate` to simulate in every
-process.
+process. A simulated `gather` fills every slot of `gather_list` with the local
+tensor, and `scatter` hands the simulated rank its own `scatter_list` entry. A
+communication hook runs on the local bucket; since its collectives see only
+local tensors, the stock `allreduce_hook` leaves the gradients divided by the
+world size.
+
+In both modes FakeCUDA checks devices and backends as torch does on GPUs:
+
+- A group made with `nccl`, or without a backend, has no CPU backend, so a
+  collective on CPU tensors raises `RuntimeError: No backend type associated
+  with device type cpu`. Use a gloo group, or the `cpu:gloo,cuda:nccl`
+  backend, for CPU tensors.
+- `monitored_barrier` raises torch's `ValueError` unless the group uses gloo
+  (from torch 2.14, unless the group has a CPU backend).
+- Before `init_process_group` and after `destroy_process_group`,
+  `get_rank()`, `get_world_size()` and `get_backend()` raise torch's "Default
+  process group has not been initialized" `ValueError`, and so does building
+  `DistributedDataParallel`.
+- `fully_shard` without a mesh, and `FullyShardedDataParallel`, use the
+  simulated CUDA devices, also on macOS where torch would otherwise pick MPS.
+  `FullyShardedDataParallel(module, device_id=torch.device("cuda", 0))` moves
+  a CPU module to that device. With `fully_shard`, gradients count toward
+  memory, but the optimizer states created on its DTensor parameters do not
+  yet, and those parameters report device `cpu`.
+
 FSDP across processes is not covered by tests yet. Peak memory does not include
 the DDP gradient buckets or NCCL buffers a real GPU holds. To run a launcher
 on simulated GPUs without changing the script, use

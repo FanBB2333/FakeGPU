@@ -68,14 +68,17 @@ ZeRO/FSDP 與多機 collective 不在目前範圍內。重現入口為 `scripts/
 
 - `get_rank()` 與 `get_world_size()` 回傳真實的 rank 與 world size。
   `get_backend()` 仍回報要求的 backend，例如 `nccl`；`get_backend(group)` 回報
-  `new_group` 要求的 backend。
+  `new_group` 要求的 backend。未指定 backend 時，`get_backend()` 與 torch 相同回報
+  `undefined`。
 - `all_reduce`（包括 `ReduceOp.AVG`）、`broadcast`、`all_gather`、
   `all_gather_into_tensor`、`reduce_scatter`、`reduce_scatter_tensor`、`reduce`、
   `gather`、`scatter`、`all_to_all`、`all_to_all_single`、`barrier`、
   `all_gather_object` 與 `broadcast_object_list` 交換真實數值。對整數 tensor 做
   `ReduceOp.AVG` 時向零取整。與 NCCL 相同，對 CUDA tensor 使用 `BAND`、`BOR`、
   `BXOR` 會拋出 `ValueError`，對 bool tensor 使用 `AVG` 會拋出 `TypeError`，除非
-  該 group 要求的是 gloo。
+  該 group 要求的是 gloo。由 `_make_nccl_premul_sum` 建立的 `ReduceOp.PREMUL_SUM`
+  （FSDP 即如此使用）會先把每個 rank 的 tensor 乘上係數再加總，與 NCCL 相同；gloo
+  group 仍會拒絕它。
 - `DistributedDataParallel` 建立時會廣播 rank 0 的參數與 buffer（設定
   `broadcast_buffers=False` 時不廣播 buffer，設定 `init_sync=False` 時都不廣播）。
   除非設定 `broadcast_buffers=False`，它會在第一次 forward 前、以及每次緊接在
@@ -86,14 +89,44 @@ ZeRO/FSDP 與多機 collective 不在目前範圍內。重現入口為 `scripts/
   沒有得到梯度的可訓練參數會讓下一次 forward 拋出 DDP 的 “Expected to have
   finished reduction in the prior iteration” 錯誤，模擬程序中也是如此。
   在 `no_sync()` 內梯度只在本地累積，與真實 DDP 相同。
+- 透過 `DistributedDataParallel.register_comm_hook` 註冊的 hook（例如 fp16、bf16
+  或 PowerSGD hook）會拿到具備 `GradBucket` 方法（`buffer()`、`gradients()`、
+  `parameters()`、`index()`、`is_last()` 與 `set_buffer()`）的 bucket，hook 的結果
+  就是梯度。bucket 的劃分與 DDP 的 reducer 相同：第一次同步的 backward（設定
+  `static_graph=True` 時為第二次）之前只有一個 bucket，之後依梯度就緒順序以
+  `bucket_cap_mb` 重建；設定 `find_unused_parameters=True` 時維持最初的劃分。
+- `model.join()` 與 `Join([model])` 處理不均勻的輸入：資料先用完的 rank 以零參與
+  仍在訓練的 rank 的梯度歸約，`divide_by_initial_world_size`、
+  `throw_on_early_termination`、`join_device` 與 `join_process_group` 的行為與 DDP
+  相同。
 - Accelerate 能看到每個程序、它的 rank 與 world size。
 
 其他程序仍使用程序內模擬，collective 只用到本地 tensor：例如只指定 world size 的
 單一程序，或在叢集 pod 環境中看到 `WORLD_SIZE` 與 `MASTER_ADDR` 的程序，如此它不會
 去等永遠不會啟動的對端。對於 FakeGPU 無法辨識的啟動器（如 DeepSpeed 或 Lightning
 的啟動器），設定 `FAKEGPU_DIST_COLLECTIVES=real`；設定
-`FAKEGPU_DIST_COLLECTIVES=simulate` 則讓每個程序都使用模擬。跨程序的 FSDP
-尚未有測試涵蓋。峰值記憶體不包括真實 GPU 上的 DDP 梯度 bucket 與 NCCL 緩衝區。
+`FAKEGPU_DIST_COLLECTIVES=simulate` 則讓每個程序都使用模擬。模擬程序中，`gather`
+以本地 tensor 填滿 `gather_list` 的每個位置，`scatter` 把 `scatter_list` 中屬於該模擬
+rank 的那一項交給它。communication hook 在本地 bucket 上執行；由於 hook 裡的
+collective 只看得到本地 tensor，內建的 `allreduce_hook` 會讓梯度除以 world size。
+
+兩種模式下，FakeCUDA 都像 torch 在 GPU 上那樣檢查裝置與 backend：
+
+- 以 `nccl` 或不指定 backend 建立的 group 沒有 CPU backend，對 CPU tensor 做
+  collective 會拋出 `RuntimeError: No backend type associated with device type cpu`。
+  CPU tensor 請用 gloo group 或 `cpu:gloo,cuda:nccl` backend。
+- 除非 group 使用 gloo（torch 2.14 起：除非 group 具有 CPU backend），
+  `monitored_barrier` 會拋出 torch 的 `ValueError`。
+- 在 `init_process_group` 之前與 `destroy_process_group` 之後，`get_rank()`、
+  `get_world_size()` 與 `get_backend()` 會拋出 torch 的 “Default process group has
+  not been initialized” `ValueError`，建立 `DistributedDataParallel` 也是如此。
+- 不指定 mesh 的 `fully_shard` 以及 `FullyShardedDataParallel` 使用模擬的 CUDA
+  裝置，在 torch 原本會選擇 MPS 的 macOS 上也是如此。
+  `FullyShardedDataParallel(module, device_id=torch.device("cuda", 0))` 會把 CPU 上的
+  module 移到該裝置。使用 `fully_shard` 時梯度計入記憶體，但在其 DTensor 參數上建立的
+  最佳化器狀態尚未計入，這些參數回報的裝置也是 `cpu`。
+
+跨程序的 FSDP 尚未有測試涵蓋。峰值記憶體不包括真實 GPU 上的 DDP 梯度 bucket 與 NCCL 緩衝區。
 若要不修改腳本就在模擬 GPU 上執行啟動器，請使用
 [`fakegpu run`](commands.md#run-a-command-on-simulated-gpus)；若 `torchrun` 卡在
 rendezvous，見[torchrun 卡在 rendezvous 時](commands.md#torchrun-hangs-at-rendezvous)。

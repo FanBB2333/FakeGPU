@@ -626,7 +626,18 @@ def test_fakecuda_patches_the_distributed_process_group_lifecycle() -> None:
 
         import torch.distributed as dist
 
-        before = dist.is_initialized()
+        def query(fn):
+            try:
+                return fn()
+            except ValueError as exc:
+                return ["ValueError", str(exc)]
+
+        before = {
+            "initialized": dist.is_initialized(),
+            "world_size": query(dist.get_world_size),
+            "rank": query(dist.get_rank),
+            "backend": query(dist.get_backend),
+        }
         dist.init_process_group(backend="nccl", world_size=4, rank=2)
         during = {
             "initialized": dist.is_initialized(),
@@ -637,8 +648,8 @@ def test_fakecuda_patches_the_distributed_process_group_lifecycle() -> None:
         dist.destroy_process_group()
         after = {
             "initialized": dist.is_initialized(),
-            "world_size": dist.get_world_size(),
-            "rank": dist.get_rank(),
+            "world_size": query(dist.get_world_size),
+            "rank": query(dist.get_rank),
         }
 
         dist.init_process_group()
@@ -669,7 +680,17 @@ def test_fakecuda_patches_the_distributed_process_group_lifecycle() -> None:
     )
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout.strip().splitlines()[-1])
-    assert payload["before"] is False
+    # torch raises outside a process group (oracle: torch 2.9.1 on a GPU, and torch 2.14.1).
+    not_initialized = [
+        "ValueError",
+        "Default process group has not been initialized, please make sure to call init_process_group.",
+    ]
+    assert payload["before"] == {
+        "initialized": False,
+        "world_size": not_initialized,
+        "rank": not_initialized,
+        "backend": not_initialized,
+    }
     assert payload["during"] == {
         "initialized": True,
         "backend": "nccl",
@@ -678,12 +699,12 @@ def test_fakecuda_patches_the_distributed_process_group_lifecycle() -> None:
     }
     assert payload["after"] == {
         "initialized": False,
-        "world_size": 1,
-        "rank": 0,
+        "world_size": not_initialized,
+        "rank": not_initialized,
     }
-    # An argument-free call keeps the NCCL-shaped single-rank default.
+    # Without a backend torch reports "undefined" and gives CUDA its NCCL backend only.
     assert payload["defaulted"] == {
-        "backend": "nccl",
+        "backend": "undefined",
         "world_size": 1,
         "rank": 0,
     }

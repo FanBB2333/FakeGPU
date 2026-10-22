@@ -60,6 +60,11 @@
   `cudaStreamGetId`, `cudaStreamGetAttribute`/`cudaStreamSetAttribute` with
   their driver forms, `cudaHostGetDevicePointer`, `cudaMemcpyToSymbolAsync`
   and `cudaMemcpyFromSymbolAsync`.
+- FakeCUDA `DistributedDataParallel` runs communication hooks from
+  `register_comm_hook`, such as the fp16, bf16 and PowerSGD hooks, on buckets
+  laid out as DDP's reducer lays them out, and supports `model.join()` and
+  `Join([model])` for uneven inputs, with `join_hook`, `join_device` and
+  `join_process_group`.
 
 ### Changed
 
@@ -288,6 +293,12 @@
   allocator on the profiled devices, with PyTorch's statistics keys and
   `mem_get_info()` from the profile, instead of 80 GiB and an empty
   `memory_stats()`.
+- Under FakeCUDA, `torch.distributed.get_rank()`, `get_world_size()` and
+  `get_backend()` raise torch's "Default process group has not been
+  initialized" `ValueError` before `init_process_group` and after
+  `destroy_process_group`, and so does building `DistributedDataParallel`;
+  they used to return 0, 1 and `None`. With no backend named,
+  `get_backend()` reports `undefined`, as torch does, instead of `nccl`.
 
 ### Fixed
 
@@ -765,6 +776,18 @@
   `ncclInvalidUsage`, as in NCCL. When an operation enqueued inside a group
   returns an error, `ncclGroupEnd` now returns that error and drops the
   group, as NCCL does, instead of running the other operations.
+- FakeCUDA `torch.distributed` raises torch's "No backend type associated
+  with device type cpu" for CPU tensors in an `nccl` group, and its
+  `ValueError` for `monitored_barrier` outside a gloo group (from torch 2.14,
+  a group without a CPU backend). `PREMUL_SUM` from `_make_nccl_premul_sum`
+  multiplies by its factor before summing, as NCCL does. A simulated
+  `gather` fills every slot and `scatter` hands each rank its own entry, and
+  `new_group` takes positional arguments like the installed torch.
+- `fully_shard` without a mesh no longer fails on Apple Silicon, every
+  parameter gets its gradient and gradients count toward memory.
+  `FullyShardedDataParallel(module, device_id=torch.device("cuda", 0))` no
+  longer fails with "Inconsistent compute device" for a CPU module, and
+  moves it onto the simulated GPU.
 
 ## v1.6.0 - 2026-10-17
 
