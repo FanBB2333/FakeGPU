@@ -669,14 +669,15 @@ def test_launched_premul_sum_matches_nccl(tmp_path: Path) -> None:
 
 
 def test_queries_before_init_process_group_fail_like_torch(tmp_path: Path) -> None:
-    # Oracle: torch 2.9.1 on a GPU raises for each query before init and after destroy.
+    # Oracle: torch 2.9.1 on a GPU raises for each query before init and after destroy, and DDP too.
     results = _single_rank(tmp_path, """
         probe("get_rank", dist.get_rank)
         probe("get_world_size", dist.get_world_size)
         probe("get_backend", dist.get_backend)
+        probe("ddp", lambda: torch.nn.parallel.DistributedDataParallel(torch.nn.Linear(2, 2).cuda()) and None)
     """)
     assert results == {"get_rank": NOT_INITIALIZED, "get_world_size": NOT_INITIALIZED,
-                       "get_backend": NOT_INITIALIZED}
+                       "get_backend": NOT_INITIALIZED, "ddp": NOT_INITIALIZED}
 
 
 def test_simulated_gather_and_scatter_use_every_slot(tmp_path: Path) -> None:
@@ -736,4 +737,284 @@ def test_new_group_binds_positional_arguments_like_torch(tmp_path: Path) -> None
     # torch names the operation after the function that warns (all_gather_single since 2.10).
     name = "all_gather_single" if results["single_name"] else "all_gather_into_tensor"
     assert results["warning"] == [f"Running {name} on global rank 5 which does not belong to the given group."]
+
+
+# DDP join, per gloo with 3 ranks on CPU tensors: rank r trains 2 + r steps on x = [[1 + r, 2 + step]].
+JOIN_GRADS = [
+    [[2.0, 2.0], [1.0], [2.0, 2.0]],
+    [[2.0, 3.0], [1.0], [2.0, 3.0]],
+    [[1.66667, 2.66667], [0.66667], [1.66667, 2.66667]],  # one rank joined: its zeros count in the mean
+    [[1.0, 1.66667], [0.33333], [1.0, 1.66667]],
+]
+
+
+def test_ddp_join_shadows_the_collectives_of_ranks_still_training(tmp_path: Path) -> None:
+    ranks = _torchrun(tmp_path, """
+        from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
+        from torch.distributed.algorithms.join import Join, Joinable
+        from torch.nn.parallel import DistributedDataParallel as DDP
+        device = torch.device("cuda", rank)
+        class Counter(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.fc = torch.nn.Linear(2, 1)
+                self.extra = torch.nn.Linear(2, 1)
+                self.register_buffer("count", torch.zeros(1))
+            def forward(self, x, use_extra=False):
+                self.count += rank + 1
+                out = self.fc(x)
+                return out + self.extra(x) if use_extra else out
+        def r5(tensor):
+            return [round(float(v), 5) for v in tensor.reshape(-1).tolist()]
+        def train(join_options=None, hook=None, steps=None, join_class=False, extra_on=lambda step: True, **options):
+            def run():
+                torch.manual_seed(100 + rank)
+                model = DDP(Counter().to(device), device_ids=[rank], **options)
+                if hook is not None:
+                    model.register_comm_hook(None, hook)
+                optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+                context = Join([model], **(join_options or {})) if join_class else model.join(**(join_options or {}))
+                log = []
+                with context:
+                    for step in range(2 + rank if steps is None else steps):
+                        model(torch.tensor([[1.0 + rank, 2.0 + step]], device=device), extra_on(step)).sum().backward()
+                        extra = model.module.extra.weight.grad
+                        log.append([r5(model.module.fc.weight.grad), r5(model.module.fc.bias.grad),
+                                    None if extra is None else r5(extra)])
+                        optimizer.step()
+                        optimizer.zero_grad()
+                return {"grads": log, "count": r5(model.module.count),
+                        "weights": [r5(p) for p in model.module.parameters()]}
+            return run
+        probe("default", train())
+        probe("divide_false", train({"divide_by_initial_world_size": False}))
+        probe("hook", train(hook=default_hooks.allreduce_hook))
+        probe("join_class", train(join_class=True))
+        probe("no_broadcast_buffers", train(broadcast_buffers=False))
+        probe("find_unused", train(find_unused_parameters=True, extra_on=lambda step: step % 2 == 0))
+        probe("disabled_even", train({"enable": False}, steps=2))
+        def throw():
+            model = DDP(Counter().to(device), device_ids=[rank])
+            done = 0
+            try:
+                with model.join(throw_on_early_termination=True):
+                    for step in range(2 + rank):
+                        model(torch.ones(1, 2, device=device), True).sum().backward()
+                        done += 1
+            except RuntimeError as exc:
+                return [done, str(exc)]
+            return [done, None]
+        probe("throw", throw)
+        def attributes():
+            model = DDP(Counter().to(device), device_ids=[rank])
+            return [isinstance(model, Joinable), str(model.join_device),
+                    model.join_process_group is model.process_group,
+                    model.process_group is dist.distributed_c10d._get_default_group(),
+                    model._divide_by_initial_world_size, type(model.join()).__name__]
+        probe("attributes", attributes)
+    """)
+    for rank, results in ranks.items():
+        expected = JOIN_GRADS[:2 + rank]
+        for name in ("default", "hook", "join_class", "no_broadcast_buffers"):
+            assert results[name]["grads"] == expected, name
+        # Divided by the ranks still training instead of the initial world size.
+        assert results["divide_false"]["grads"] == expected[:2] + [
+            [[2.5, 4.0], [1.0], [2.5, 4.0]], [[3.0, 5.0], [1.0], [3.0, 5.0]]][:rank]
+        # A joined rank reports the parameters its last backward used, so the extra layer that the
+        # last training rank skipped still gets a zero gradient.
+        assert results["find_unused"]["grads"] == [
+            JOIN_GRADS[0], [[2.0, 3.0], [1.0], None], JOIN_GRADS[2], [[1.0, 1.66667], [0.33333], [0.0, 0.0]]
+        ][:2 + rank]
+        assert results["disabled_even"]["grads"] == JOIN_GRADS[:2]
+        assert results["default"]["count"] == [12.0]
+        assert results["no_broadcast_buffers"]["count"] == [[2.0], [6.0], [12.0]][rank]
+        assert results["disabled_even"]["count"] == [float(2 + rank)]
+        assert results["throw"] == [2, "Rank 0 exhausted all inputs." if rank == 0 else
+                                    "Detected at least one rank that exhausted inputs. Throwing across all ranks."]
+        # On GPUs the join device is the rank's CUDA device (gloo on CPU tensors reports cpu).
+        assert results["attributes"] == [True, f"cuda:{rank}", True, True, True, "Join"]
+    for name in ("default", "divide_false", "hook", "find_unused", "disabled_even"):
+        assert ranks[0][name]["weights"] == ranks[1][name]["weights"] == ranks[2][name]["weights"], name
+
+
+def test_ddp_runs_communication_hooks_on_its_buckets(tmp_path: Path) -> None:
+    # gloo, 2 ranks: the buckets a hook sees, the gradients it leaves, and register_comm_hook's checks.
+    ranks = _torchrun(tmp_path, """
+        from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
+        from torch.distributed.algorithms.ddp_comm_hooks import powerSGD_hook as powersgd
+        from torch.nn.parallel import DistributedDataParallel as DDP
+        device = torch.device("cuda", rank)
+        class Net(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.a = torch.nn.Linear(4, 8)
+                self.b = torch.nn.Linear(8, 8)
+                self.c = torch.nn.Linear(8, 2)
+            def forward(self, x):
+                return self.c(torch.relu(self.b(torch.relu(self.a(x)))))
+        def build(**options):
+            torch.manual_seed(0)
+            return DDP(Net().to(device), device_ids=[rank], **options)
+        def batch(step):
+            return torch.randn(3, 4, generator=torch.Generator().manual_seed(1000 * step + rank)).to(device)
+        def grads(model):
+            return {n: [round(v, 4) for v in p.grad.reshape(-1).tolist()] for n, p in model.module.named_parameters()}
+        def calls(steps, no_sync_step=None, **options):
+            def run():
+                model = build(**options)
+                names = {id(p): n for n, p in model.module.named_parameters()}
+                log = []
+                def hook(state, bucket):
+                    buffer = bucket.buffer()
+                    flat = torch.cat([g.reshape(-1) for g in bucket.gradients()])
+                    log.append([bucket.index(), bucket.is_last(), buffer.numel(), buffer.device.type,
+                                [names[id(p)] for p in bucket.parameters()], bool(torch.equal(flat, buffer))])
+                    return default_hooks.allreduce_hook(state, bucket)
+                model.register_comm_hook(None, hook)
+                per_step = []
+                for step in range(steps):
+                    log.clear()
+                    if step == no_sync_step:
+                        with model.no_sync():
+                            model(batch(step)).sum().backward()
+                    else:
+                        model(batch(step)).sum().backward()
+                    per_step.append(list(log))
+                    model.zero_grad()
+                return per_step
+            return run
+        probe("calls/default", calls(3))
+        probe("calls/small", calls(3, bucket_cap_mb=0.0002))
+        probe("calls/small_find_unused", calls(2, bucket_cap_mb=0.0002, find_unused_parameters=True))
+        probe("calls/small_static", calls(4, bucket_cap_mb=0.0002, static_graph=True))
+        probe("calls/no_sync", calls(3, no_sync_step=1, bucket_cap_mb=0.0002))
+        def values(hook=None, steps=2, state=None):
+            def run():
+                model = build()
+                if hook is not None:
+                    model.register_comm_hook(state() if callable(state) else state, hook)
+                out = []
+                for step in range(steps):
+                    model(batch(step)).sum().backward()
+                    out.append(grads(model))
+                    model.zero_grad()
+                return out
+            return run
+        def future_of(make):
+            def hook(state, bucket):
+                future = torch.futures.Future()
+                future.set_result(make(bucket))
+                return future
+            return hook
+        def set_buffer(bucket):
+            bucket.set_buffer(bucket.buffer() * 0 + 7)
+            return bucket.buffer()
+        probe("values/none", values())
+        probe("values/allreduce", values(default_hooks.allreduce_hook))
+        probe("values/fp16", values(default_hooks.fp16_compress_hook))
+        probe("values/bf16", values(default_hooks.bf16_compress_hook))
+        probe("values/powersgd", values(powersgd.powerSGD_hook, steps=3, state=lambda: powersgd.PowerSGDState(
+            process_group=None, matrix_approximation_rank=1, start_powerSGD_iter=2)))
+        probe("values/scaled", values(future_of(lambda bucket: bucket.buffer() * 3), steps=1))
+        probe("values/set_buffer", values(future_of(set_buffer), steps=1))
+        probe("values/list_result", values(future_of(lambda bucket: [bucket.buffer()]), steps=1))
+        def register_twice():
+            model = build()
+            model.register_comm_hook(None, default_hooks.allreduce_hook)
+            model.register_comm_hook(None, default_hooks.allreduce_hook)
+        probe("errors/register_twice", register_twice)
+        def bucket_annotation(state, bucket: int):
+            return None
+        def return_annotation(state, bucket) -> int:
+            return None
+        def parameter_name(state, grads):
+            return None
+        probe("errors/bucket_annotation", lambda: build().register_comm_hook(None, bucket_annotation))
+        probe("errors/return_annotation", lambda: build().register_comm_hook(None, return_annotation))
+        probe("errors/parameter_name", lambda: build().register_comm_hook(None, parameter_name))
+        probe("errors/not_callable", lambda: build().register_comm_hook(None, 3))
+        def after_backward():
+            model = build()
+            model(batch(0)).sum().backward()
+            model.register_comm_hook(None, default_hooks.allreduce_hook)
+            model(batch(1)).sum().backward()
+            return grads(model)["c.bias"]
+        probe("after_backward", after_backward)
+        def hooks_attribute():
+            model = build()
+            model.register_comm_hook("S", default_hooks.allreduce_hook)
+            return [[hook.__name__, state] for hook, state in model._comm_hooks]
+        probe("_comm_hooks", hooks_attribute)
+    """, nproc=2)
+    names = ["a.weight", "a.bias", "b.weight", "b.bias", "c.weight", "c.bias"]
+    one = [0, True, 130, "cuda", names, True]
+    one_reversed = [0, True, 130, "cuda", names[::-1], True]
+    two = [[0, False, 90, "cuda", names[:1:-1], True], [1, True, 40, "cuda", ["a.bias", "a.weight"], True]]
+    for results in ranks.values():
+        # One bucket in parameter order at first, rebuilt in gradient order after the first synced backward
+        # (the second with static_graph); no rebuild with find_unused_parameters; no hook call under no_sync.
+        assert results["calls/default"] == [[one], [one_reversed], [one_reversed]]
+        assert results["calls/small"] == [[one], two, two]
+        assert results["calls/small_find_unused"] == [[
+            [0, False, 26, "cuda", ["b.bias", "c.weight", "c.bias"], True],
+            [1, True, 104, "cuda", ["a.weight", "a.bias", "b.weight"], True],
+        ]] * 2
+        assert results["calls/small_static"] == [[one], [one], two, two]
+        assert results["calls/no_sync"] == [[one], [], two]
+        baseline = results["values/none"]
+        assert results["values/allreduce"] == baseline
+        # Compression rounds; PowerSGD runs a plain allreduce before start_powerSGD_iter.
+        # (gloo rejects bfloat16 on CPU; a GPU with NCCL runs the bf16 hook.)
+        for name in ("values/fp16", "values/bf16"):
+            for got, want in zip(results[name], baseline):
+                for parameter in names:
+                    assert got[parameter] == pytest.approx(want[parameter], abs=1e-2), name
+        assert results["values/powersgd"][:2] == baseline
+        assert len(results["values/powersgd"]) == 3
+        # The hook's result is the gradient, with no averaging after it; c.bias gets 3 per rank (3 rows).
+        assert results["values/scaled"][0]["c.bias"] == [9.0, 9.0]
+        assert {value for grads in results["values/set_buffer"][0].values() for value in grads} == {7.0}
+        assert results["values/list_result"][0] == "RuntimeError"
+        assert results["values/list_result"][1].startswith("Unable to cast [tensor(")
+        assert results["errors/register_twice"] == [
+            "RuntimeError", "register_comm_hook or register_builtin_comm_hook can only be called once."]
+        assert results["errors/bucket_annotation"] == [
+            "ValueError", "Communication hook: bucket annotation should be dist.GradBucket."]
+        assert results["errors/return_annotation"] == [
+            "ValueError", "Communication hook: return annotation should be torch.futures.Future[torch.Tensor]."]
+        assert results["errors/parameter_name"] == ["KeyError", "'bucket'"]
+        assert results["errors/not_callable"] == ["TypeError", "Communication hook must be callable."]
+        assert results["after_backward"] == [6.0, 6.0]
+        assert results["_comm_hooks"] == [["allreduce_hook", "S"]]
+    assert ranks[0]["values/none"] == ranks[1]["values/none"]
+
+
+def test_simulated_ddp_runs_communication_hooks_locally(tmp_path: Path) -> None:
+    # A single simulated rank has no peers: the hook still sees DDP's bucket and its result becomes the gradient.
+    results = _simulate(tmp_path, """
+        from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
+        from torch.distributed.algorithms.join import Joinable
+        from torch.nn.parallel import DistributedDataParallel as DDP
+        def run(hook):
+            model = DDP(torch.nn.Linear(4, 2).cuda(), device_ids=[5])
+            seen = []
+            def recording(state, bucket):
+                seen.append([bucket.index(), bucket.is_last(), bucket.buffer().numel(), str(bucket.buffer().device)])
+                return hook(state, bucket)
+            model.register_comm_hook(None, recording)
+            model(torch.ones(3, 4, device="cuda")).sum().backward()
+            return [seen, model.module.bias.grad.tolist()]
+        def tripled(state, bucket):
+            future = torch.futures.Future()
+            future.set_result(bucket.buffer() * 3)
+            return future
+        probe("tripled", lambda: run(tripled))
+        probe("fp16", lambda: run(default_hooks.fp16_compress_hook)[0])
+        model = DDP(torch.nn.Linear(4, 2).cuda(), device_ids=[5])
+        results["attributes"] = [isinstance(model, Joinable), str(model.join_device),
+                                 model.join_process_group is model.process_group]
+    """)
+    assert results["tripled"] == [[[0, True, 10, "cuda:5"]], [9.0, 9.0]]
+    assert results["fp16"] == [[0, True, 10, "cuda:5"]]
+    assert results["attributes"] == [True, "cuda:5", True]
 

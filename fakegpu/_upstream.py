@@ -24,6 +24,7 @@ import functools
 import inspect
 import os
 import struct
+import sys
 import weakref
 from collections import OrderedDict
 from typing import Any
@@ -290,9 +291,108 @@ def _ddp_arguments(module: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -
     return dict(inspect.signature(_ORIG_DDP.__init__).bind(None, module, *args, **kwargs).arguments)
 
 
-class _FakeDistributedDataParallel(torch.nn.Module):
+try:
+    from torch.distributed.algorithms.join import Join as _Join
+    from torch.distributed.algorithms.join import JoinHook as _JoinHook
+    from torch.distributed.algorithms.join import Joinable as _Joinable
+except Exception:  # PyTorch built without torch.distributed
+    _Join = None
+
+    class _JoinHook:  # type: ignore[no-redef]
+        pass
+
+    class _Joinable:  # type: ignore[no-redef]
+        def __init__(self) -> None:
+            return None
+
+
+_MIB = 1024 * 1024
+
+
+def _assign_buckets(
+    tensors: list[torch.Tensor], limits: list[int], expect_sparse: list[bool], indices: list[int] | None = None
+) -> list[list[int]]:
+    """DDP's bucket assignment, computed by the installed torch (``_compute_bucket_assignment_by_size``)."""
+
+    if not tensors:
+        return []
+    raw = [unwrap_tensor(tensor) for tensor in tensors]
+    positions = list(range(len(raw))) if indices is None else list(indices)
+    compute = getattr(torch.distributed, "_compute_bucket_assignment_by_size", None)
+    if compute is None:
+        by_dtype: dict[torch.dtype, list[int]] = {}
+        for position, tensor in zip(positions, raw):
+            by_dtype.setdefault(tensor.dtype, []).append(position)
+        return list(by_dtype.values())
+    arguments: list[Any] = [raw, list(limits), list(expect_sparse)]
+    if indices is not None:
+        arguments.append(list(indices))
+    buckets, _ = compute(*arguments)
+    return [list(bucket) for bucket in buckets]
+
+
+class _FakeGradBucket:
+    """The bucket DDP hands a communication hook, with ``dist.GradBucket``'s methods.
+
+    ``gradients()`` are views of the current buffer, as in the C++ bucket,
+    so they follow ``set_buffer``.
+    """
+
+    def __init__(self, index: int, is_last: bool, buffer: torch.Tensor, parameters: list[Any]) -> None:
+        self._index = index
+        self._is_last = is_last
+        self._buffer = buffer
+        self._parameters = list(parameters)
+
+    def index(self) -> int:
+        return self._index
+
+    def is_last(self) -> bool:
+        return self._is_last
+
+    def buffer(self) -> torch.Tensor:
+        return self._buffer
+
+    def set_buffer(self, tensor: torch.Tensor) -> None:
+        self._buffer = tensor
+
+    def gradients(self) -> list[torch.Tensor]:
+        views, offset = [], 0
+        for parameter in self._parameters:
+            views.append(self._buffer[offset:offset + parameter.numel()].view(parameter.shape))
+            offset += parameter.numel()
+        return views
+
+    def parameters(self) -> list[Any]:
+        return list(self._parameters)
+
+
+class _FakeDDPJoinHook(_JoinHook):
+    """DDP's join hook: a joined rank shadows the collectives of the ranks still training."""
+
+    def __init__(self, ddp: Any, divide_by_initial_world_size: bool) -> None:
+        self.ddp = ddp
+        ddp._divide_by_initial_world_size = divide_by_initial_world_size
+        super().__init__()
+
+    def main_hook(self) -> None:
+        ddp = self.ddp
+        ddp._maybe_rebuild_buckets()
+        if ddp._syncs_buffers():
+            ddp._broadcast_buffers(ddp._find_common_rank(ddp._distributed_rank, False))
+        should_sync = ddp._check_global_requires_backward_grad_sync(is_joined_rank=True)
+        ddp.require_forward_param_sync = should_sync
+        if should_sync and ddp._reduces():
+            ddp._reduce_buckets(joined=True)
+
+    def post_hook(self, is_last_joiner: bool) -> None:
+        self.ddp._sync_final_model(is_last_joiner)
+
+
+class _FakeDistributedDataParallel(torch.nn.Module, _Joinable):
     def __init__(self, module: torch.nn.Module, *args: Any, **kwargs: Any) -> None:
         super().__init__()
+        _Joinable.__init__(self)
         options = _ddp_arguments(module, args, kwargs)
         ignored = set(getattr(module, "_ddp_params_and_buffers_to_ignore", ()))
         self._parameters_to_sync = [
@@ -316,7 +416,9 @@ class _FakeDistributedDataParallel(torch.nn.Module):
         self.output_device = (
             None if output_device is None else _normalize_device_index(output_device)
         )
-        self.process_group = options.get("process_group")
+        self.process_group = self._resolve_process_group(options)
+        # Like DDP, the device of the first parameter it manages.
+        self.device = self._parameters_to_sync[0].device if self._parameters_to_sync else torch.device("cpu")
         self.find_unused_parameters = bool(options.get("find_unused_parameters", False))
         self.static_graph = bool(options.get("static_graph", False))
         self.gradient_as_bucket_view = bool(options.get("gradient_as_bucket_view", False))
@@ -331,21 +433,91 @@ class _FakeDistributedDataParallel(torch.nn.Module):
         # Whether the next forward starts from rank 0's buffers: the first one
         # does, later ones when the forward before had gradients synced.
         self.require_forward_param_sync = True
+        self.logger = None
+        self._comm_hooks: list[tuple[Any, Any]] = []
+        self._comm_hook: tuple[Any, Any] | None = None
+        self._divide_by_initial_world_size = True
+        # The forward's notice to a join context; its value is the number of ranks still training.
+        self._join_work: Any = None
+        # Trainable parameters, in the order of DDP's reducer.
+        self._trainable = [parameter for parameter in self._parameters_to_sync if parameter.requires_grad]
+        self._init_buckets(module, options)
+        self._local_used = [False] * len(self._trainable)
+        self._queued = False
         if _DIST_REAL:
             self._join_processes(options.get("init_sync", True), init_buffers)
         # Trainable parameters whose gradient arrived since the last synced forward.
-        self._trainable = [parameter for parameter in self._parameters_to_sync if parameter.requires_grad]
         self._marked: set[int] = set()
         for index, parameter in enumerate(self._trainable):
-            unwrap_tensor(parameter).register_hook(self._marker(index))
+            raw = unwrap_tensor(parameter)
+            raw.register_hook(self._marker(index))
+            raw.register_hook(self._queue_reduction)
+
+    def _resolve_process_group(self, options: dict[str, Any]) -> Any:
+        """DDP's group: the given one, the mesh's, or the default group."""
+
+        group, mesh = options.get("process_group"), options.get("device_mesh")
+        if group and mesh is not None:
+            raise RuntimeError("Cannot specify both process_group and device_mesh arguments.")
+        if mesh is not None:
+            if mesh.ndim != 1:
+                raise RuntimeError(f"Only 1D device mesh is supported, but got {mesh}.")
+            self.device_mesh = mesh
+            return mesh.get_group(mesh_dim=0)
+        if group is not None:
+            return group
+        c10d = torch.distributed.distributed_c10d
+        if c10d.is_initialized():
+            return c10d._get_default_group()
+        if _DIST_INITIALIZED:
+            return None  # torch's fake backend is missing; FakeGPU keeps the job's state
+        # Without init_process_group torch raises "Default process group has not been initialized".
+        return c10d._get_default_group()
+
+    def _init_buckets(self, module: torch.nn.Module, options: dict[str, Any]) -> None:
+        """DDP's gradient buckets: one bucket at first, rebuilt in gradient order (reducer.cpp)."""
+
+        cap_mb, cap_list = options.get("bucket_cap_mb"), options.get("bucket_cap_mb_list")
+        if cap_list:
+            initial = rebuild = [int(cap * _MIB) for cap in cap_list]
+        else:
+            cap = int((25 if cap_mb is None else cap_mb) * _MIB)
+            first = getattr(torch.distributed, "_DEFAULT_FIRST_BUCKET_BYTES", _MIB) if cap_mb is None else cap
+            rebuild = [first, cap]
+            if self.static_graph or not self.find_unused_parameters:
+                initial = [sys.maxsize]
+            else:
+                initial = [first, cap] if first < cap else [cap]
+        owners: dict[int, Any] = {}
+        for submodule in module.modules():
+            for parameter in submodule.parameters(recurse=False):
+                owners.setdefault(id(parameter), submodule)
+        embeddings = (torch.nn.Embedding, torch.nn.EmbeddingBag)
+        self._expect_sparse = [
+            isinstance(owners.get(id(p)), embeddings) and bool(owners[id(p)].sparse) for p in self._trainable
+        ]
+        self._rebuild_limits = rebuild
+        # Reversed: the last parameters' gradients come first in backward.
+        self._buckets = list(reversed(_assign_buckets(self._trainable, initial, self._expect_sparse)))
+        self._can_rebuild = self.static_graph or not self.find_unused_parameters
+        # The synced backward whose gradient order the buckets are rebuilt in.
+        self._record_iteration = 1 if self.static_graph else 0
+        self._synced_backwards = 0
+        self._ready_order: list[int] = []
+        self._pending_order: list[int] | None = None
 
     def forward(self, *inputs: Any, **kwargs: Any) -> Any:
         if torch.is_grad_enabled():
             self._check_prior_reduction()
-        if _DIST_REAL and self.broadcast_buffers and self.require_forward_param_sync:
-            with torch.no_grad():
-                for buffer in self._buffers_to_sync():
-                    _ORIG_DIST["broadcast"](unwrap_tensor(buffer).detach(), src=self._source, group=self.process_group)
+        work = _Join.notify_join_context(self) if _Join is not None else None
+        if work:
+            self._join_work = work
+        if torch.is_grad_enabled():
+            self._maybe_rebuild_buckets()
+        if self._syncs_buffers():
+            self._sync_buffers()
+        if self._join_enabled():
+            self._check_global_requires_backward_grad_sync(is_joined_rank=False)
         output = self.module(*inputs, **kwargs)
         self.require_forward_param_sync = torch.is_grad_enabled() and self.require_backward_grad_sync
         if self.require_forward_param_sync:
@@ -356,8 +528,46 @@ class _FakeDistributedDataParallel(torch.nn.Module):
         def mark(grad: torch.Tensor) -> None:
             if self.require_backward_grad_sync:
                 self._marked.add(index)
+                if self._recording() and index not in self._ready_order:
+                    self._ready_order.append(index)
 
         return mark
+
+    def _recording(self) -> bool:
+        return (
+            self._can_rebuild
+            and self._pending_order is None
+            and self._synced_backwards == self._record_iteration
+        )
+
+    def _queue_reduction(self, grad: torch.Tensor) -> None:
+        if self.require_backward_grad_sync and not self._queued:
+            self._queued = True
+            torch.autograd.Variable._execution_engine.queue_callback(self._finish_backward)
+
+    def _finish_backward(self) -> None:
+        self._queued = False
+        if self._reduces():
+            self._reduce_buckets(joined=False)
+        if self._recording() and len(self._ready_order) == len(self._trainable):
+            self._pending_order = list(self._ready_order)
+        self._ready_order = []
+        self._synced_backwards += 1
+        self._join_work = None
+
+    def _maybe_rebuild_buckets(self) -> None:
+        if self._pending_order is None or not self._can_rebuild:
+            return
+        order, self._pending_order = self._pending_order, None
+        self._can_rebuild = False
+        self._buckets = _assign_buckets(
+            [self._trainable[i] for i in order], self._rebuild_limits, [self._expect_sparse[i] for i in order], order
+        )
+
+    def _reduces(self) -> bool:
+        """Whether backward reduces gradients: across launched ranks, or through a registered hook."""
+
+        return _DIST_REAL or self._comm_hook is not None
 
     def _check_prior_reduction(self) -> None:
         """Fail like DDP's reducer when the last backward left a parameter without a gradient.
@@ -388,60 +598,214 @@ class _FakeDistributedDataParallel(torch.nn.Module):
             self.require_backward_grad_sync = previous
 
     def _join_processes(self, init_sync: bool, init_buffers: bool) -> None:
-        """Start every rank from rank 0's weights and average gradients, like DDP.
+        """Start every rank from rank 0's parameters, and from its buffers with ``init_buffers``."""
 
-        With ``init_sync``, every rank starts from rank 0's parameters, and
-        from its buffers too with ``init_buffers``. When backward ends, every
-        rank averages the gradients of all its trainable parameters in the
-        same order, a missing gradient counting as zeros, so ranks that took
-        different branches still combine the same parameter. A parameter that
-        no rank used keeps no gradient.
+        initial = [*self._parameters_to_sync, *(self._buffers_to_sync() if init_buffers else [])] if init_sync else []
+        source = self._global_rank(0)
+        with torch.no_grad():
+            for tensor in initial:
+                _ORIG_DIST["broadcast"](unwrap_tensor(tensor).detach(), src=source, group=self.process_group)
+
+    def _global_rank(self, group_rank: int) -> int:
+        group = self.process_group
+        if group is None or group is torch.distributed.GroupMember.WORLD:
+            return int(group_rank)
+        return torch.distributed.distributed_c10d.get_global_rank(group, int(group_rank))
+
+    @property
+    def _distributed_rank(self) -> int:
+        return torch.distributed.get_rank(self.process_group)
+
+    def _reduce_buckets(self, joined: bool) -> None:
+        """Reduce the gradients bucket by bucket, as DDP's reducer does when backward ends.
+
+        Every rank first sums which parameters got a gradient, so a parameter
+        that some rank used gets zeros where it was unused and one that no
+        rank used keeps no gradient. A joined rank contributes zeros, and the
+        parameters its last backward used, as DDP's join hook does. Without a
+        communication hook each bucket is scaled by 1/world size (or by the
+        ranks still training, with ``divide_by_initial_world_size=False``) and
+        summed; with one, the hook's result becomes the gradients.
         """
 
         group = self.process_group
-        self._source = 0 if group is None else torch.distributed.distributed_c10d.get_global_rank(group, 0)
-        initial = [*self._parameters_to_sync, *(self._buffers_to_sync() if init_buffers else [])] if init_sync else []
-        with torch.no_grad():
-            for tensor in initial:
-                _ORIG_DIST["broadcast"](unwrap_tensor(tensor).detach(), src=self._source, group=group)
-        world_size = _ORIG_DIST["get_world_size"](group)
-        parameters = [unwrap_tensor(parameter) for parameter in self._parameters_to_sync if parameter.requires_grad]
-        queued = False
-
-        def average() -> None:
-            nonlocal queued
-            queued = False
-            used = torch.tensor([parameter.grad is not None for parameter in parameters], dtype=torch.int32)
+        params = [unwrap_tensor(parameter) for parameter in self._trainable]
+        if not joined:
+            self._local_used = [parameter.grad is not None for parameter in params]
+        used = torch.tensor(self._local_used, dtype=torch.int32)
+        if _DIST_REAL:
             _ORIG_DIST["all_reduce"](used, op=_sum_op(), group=group)
-            dense: dict[torch.dtype, list[torch.Tensor]] = {}
-            with torch.no_grad():
-                for parameter, count in zip(parameters, used.tolist()):
-                    if not count:
-                        continue
-                    if parameter.grad is None:
-                        parameter.grad = torch.zeros_like(parameter)
-                    if parameter.grad.is_sparse:
-                        _ORIG_DIST["all_reduce"](parameter.grad, op=_sum_op(), group=group)
-                        parameter.grad.div_(world_size)
-                    else:
-                        dense.setdefault(parameter.grad.dtype, []).append(parameter.grad)
-                for grads in dense.values():
-                    flat = torch.cat([grad.reshape(-1) for grad in grads])
-                    _ORIG_DIST["all_reduce"](flat, op=_sum_op(), group=group)
-                    flat.div_(world_size)
-                    offset = 0
-                    for grad in grads:
-                        grad.copy_(flat[offset:offset + grad.numel()].view_as(grad))
-                        offset += grad.numel()
+        counts = used.tolist()
+        divisor = None if joined or self._comm_hook is not None else self._divisor()
+        with torch.no_grad():
+            for index, bucket in enumerate(self._buckets):
+                grads = [None if joined else params[i].grad for i in bucket]
+                if any(grad is not None and grad.is_sparse for grad in grads):
+                    for i, grad in zip(bucket, grads):
+                        if grad is not None and _DIST_REAL:
+                            _ORIG_DIST["all_reduce"](grad, op=_sum_op(), group=group)
+                            grad.div_(divisor or 1)
+                    continue
+                flat = torch.cat([
+                    (grad if grad is not None else torch.zeros_like(params[i])).reshape(-1)
+                    for i, grad in zip(bucket, grads)
+                ])
+                if self._comm_hook is not None:
+                    result = self._run_comm_hook(index, bucket, flat)
+                else:
+                    if divisor is not None:
+                        flat.mul_(1.0 / divisor)
+                    if _DIST_REAL:
+                        _ORIG_DIST["all_reduce"](flat, op=_sum_op(), group=group)
+                    result = flat
+                if joined:
+                    continue
+                offset = 0
+                for i in bucket:
+                    size = params[i].numel()
+                    if counts[i]:
+                        if params[i].grad is None:
+                            params[i].grad = torch.zeros_like(params[i])
+                        params[i].grad.copy_(result[offset:offset + size].view_as(params[i]))
+                    offset += size
 
-        def queue_average(grad: torch.Tensor) -> None:
-            nonlocal queued
-            if self.require_backward_grad_sync and not queued:
-                queued = True
-                torch.autograd.Variable._execution_engine.queue_callback(average)
+    def _run_comm_hook(self, index: int, bucket: list[int], flat: torch.Tensor) -> torch.Tensor:
+        hook, state = self._comm_hook  # type: ignore[misc]
+        first = self._trainable[bucket[0]]
+        buffer = wrap_tensor(flat, device_index=first.device_index) if isinstance(first, FakeCudaTensor) else flat
+        grad_bucket = _FakeGradBucket(
+            index, index == len(self._buckets) - 1, buffer, [self._trainable[i] for i in bucket]
+        )
+        future = hook(state, grad_bucket)
+        if not hasattr(future, "wait"):
+            raise RuntimeError(f"Unable to cast {future!r} to torch.futures.Future")
+        result = future.wait()
+        # DDP reads the future's value as one tensor (PythonCommHook::parseHookResult).
+        if not isinstance(result, torch.Tensor):
+            raise RuntimeError(f"Unable to cast {result!r} to Tensor")
+        return unwrap_tensor(result).reshape(-1)
 
-        for parameter in parameters:
-            parameter.register_hook(queue_average)
+    def _divisor(self) -> int:
+        world = (
+            _ORIG_DIST["get_world_size"](self.process_group)
+            if _DIST_REAL
+            else _dist_get_world_size(self.process_group)
+        )
+        if self._join_enabled() and not self._divide_by_initial_world_size and self._join_work is not None:
+            # The forward's join notice summed one per rank still training.
+            values = self._join_work.get_future().value()
+            return int(unwrap_tensor(values[0]).item())
+        return world
+
+    # --- communication hooks ---------------------------------------------------------
+
+    def _log_and_throw(self, err_type: type, err_msg: str) -> None:
+        raise err_type(err_msg)
+
+    def _check_comm_hook(self, hook: Any) -> None:
+        check = getattr(_ORIG_DDP, "_check_comm_hook", None)
+        if check is not None:
+            check(self, hook)  # torch's own checks of the hook's signature
+        elif not callable(hook):
+            raise TypeError("Communication hook must be callable.")
+
+    def register_comm_hook(self, state: object, hook: Any) -> None:
+        """Run ``hook(state, bucket)`` on each gradient bucket, as DDP does.
+
+        Its future's tensor becomes the bucket's gradients. In a simulated job
+        the hook's collectives use the local tensors only.
+        """
+
+        self._check_comm_hook(hook)
+        if self._comm_hook is not None:
+            raise RuntimeError("register_comm_hook or register_builtin_comm_hook can only be called once.")
+        self._comm_hooks.append((hook, state))
+        self._comm_hook = (hook, state)
+
+    def _register_builtin_comm_hook(self, comm_hook_type: Any) -> None:
+        if self._comm_hook is not None:
+            raise RuntimeError("register_builtin_comm_hook or register_comm_hook can only be called once.")
+        from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
+
+        hook = {"ALLREDUCE": default_hooks.allreduce_hook, "FP16_COMPRESS": default_hooks.fp16_compress_hook}[
+            comm_hook_type.name
+        ]
+        self._comm_hook = (hook, self.process_group)
+
+    # --- uneven inputs (Join) ----------------------------------------------------------
+
+    def join(
+        self,
+        divide_by_initial_world_size: bool = True,
+        enable: bool = True,
+        throw_on_early_termination: bool = False,
+    ) -> Any:
+        return _Join(
+            [self], enable, throw_on_early_termination, divide_by_initial_world_size=divide_by_initial_world_size
+        )
+
+    def join_hook(self, **kwargs: Any) -> Any:
+        return _FakeDDPJoinHook(self, kwargs.get("divide_by_initial_world_size", True))
+
+    @property
+    def join_device(self) -> torch.device:
+        return self.device
+
+    @property
+    def join_process_group(self) -> Any:
+        return self.process_group
+
+    def _join_enabled(self) -> bool:
+        return bool(getattr(getattr(self, "_join_config", None), "enable", False))
+
+    def _syncs_buffers(self) -> bool:
+        return bool(
+            _DIST_REAL and self.broadcast_buffers and self.require_forward_param_sync and self._buffers_to_sync()
+        )
+
+    def _sync_buffers(self) -> None:
+        # Under a join context rank 0 may have joined; the highest training rank holds the buffers.
+        authoritative = self._find_common_rank(self._distributed_rank, True) if self._join_enabled() else 0
+        self._broadcast_buffers(authoritative)
+
+    def _broadcast_buffers(self, group_rank: int) -> None:
+        source = self._global_rank(group_rank)
+        with torch.no_grad():
+            for buffer in self._buffers_to_sync():
+                _ORIG_DIST["broadcast"](unwrap_tensor(buffer).detach(), src=source, group=self.process_group)
+
+    def _find_common_rank(self, input_rank: int, rank_cond: bool) -> int:
+        rank_to_use = torch.tensor([input_rank if rank_cond else -1], device=self.device)
+        torch.distributed.all_reduce(rank_to_use, op=torch.distributed.ReduceOp.MAX, group=self.process_group)
+        if rank_to_use.item() == -1:
+            raise ValueError(
+                "BUG! Expected rank_cond to be true for at least one process."
+                " This indicates a bug in PyTorch, please report an issue."
+            )
+        return int(rank_to_use.item())
+
+    def _check_global_requires_backward_grad_sync(self, is_joined_rank: bool) -> Any:
+        if not is_joined_rank and self.require_backward_grad_sync:
+            requires_sync_tensor = torch.ones(1, device=self.device)
+        else:
+            requires_sync_tensor = torch.zeros(1, device=self.device)
+        work = torch.distributed.all_reduce(requires_sync_tensor, group=self.process_group, async_op=True)
+        if is_joined_rank:
+            work.wait()
+            return requires_sync_tensor.item() != 0
+        return None
+
+    def _sync_final_model(self, is_last_joiner: bool) -> None:
+        """Give every rank the model of the last rank to join."""
+
+        self._authoritative_rank = self._find_common_rank(self._distributed_rank, is_last_joiner)
+        if not _DIST_REAL:
+            return
+        source = self._global_rank(self._authoritative_rank)
+        states = [*self._parameters_to_sync, *(self._buffers_to_sync() if self.broadcast_buffers else [])]
+        with torch.no_grad():
+            for tensor in states:
+                _ORIG_DIST["broadcast"](unwrap_tensor(tensor).detach(), src=source, group=self.process_group)
 
 
 class _FakeAsyncWork:
