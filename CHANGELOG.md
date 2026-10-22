@@ -63,6 +63,11 @@
 - `fakegpu nvidia-smi` writes warnings about unreadable state files to
   stderr instead of appending them to the report, so `nvidia-smi -L | wc -l`
   counts GPUs only. Queries report them too.
+- `fakegpu nvidia-smi -L` prints nvidia-smi's lines, `GPU 0: NAME (UUID:
+  GPU-...)` and `  MIG 1g.10gb     Device  0: (UUID: MIG-...)`, so
+  `GPU (\d+):` and `UUID: ([^)]+)` parsers work. Profile, compute capability,
+  PCI bus ID and the MIG GI/CI/memory details moved to `-q` and `--json`. The
+  `GPU 0 @ host` form remains only when several hosts are shown.
 
 ### Fixed
 

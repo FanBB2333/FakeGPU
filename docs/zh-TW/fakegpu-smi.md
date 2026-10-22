@@ -65,6 +65,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 - `-q` 顯示 FakeGPU 版本、runtime 策略、軟體版本、狀態更新時間、profile 目錄與
   原生 API 涵蓋、裝置識別、插槽、建模的拷貝與鏈路吞吐、GPU 記憶體分類、allocator
   活動、dispatch 追蹤及各程序峰值。
+- `-L` 輸出 nvidia-smi 格式的 `GPU 0: NAME (UUID: GPU-...)` 列，MIG 裝置縮排
+  列在所屬 GPU 下方。只有同時顯示多台主機時，索引後才帶主機名稱。profile、
+  compute capability 與 PCI Bus ID 見 `-q` 與 `--json`。
 - `-i` 依裝置索引、UUID、PCI Bus ID 或 profile ID 篩選。`--json` 輸出完整的標準化
   資料。FakeGPU 寫入 state schema v2，仍可讀取 v1。
 - `--query-runtime` 以 CSV 或 JSON 輸出相同的執行期資訊。`--help-query-runtime`

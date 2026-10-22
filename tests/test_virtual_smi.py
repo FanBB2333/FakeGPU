@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -137,13 +138,21 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
 
     assert main(["--state", str(path), "-L"]) == 0
     listed = capsys.readouterr().out
-    assert "Profile: test-512m" in listed
-    assert "CC: 8.0" in listed
-    assert "PCI: 00000000:01:00.0" in listed
+    # nvidia-smi -L: "GPU %u: %s (UUID: %s)", nothing else on the line.
+    assert re.fullmatch(
+        r"GPU 0: FakeGPU Test Profile 512MB \(UUID: GPU-[0-9a-f-]{36}\)\n",
+        listed,
+    )
+    # torch.utils.collect_env anonymizes the list by removing the UUID.
+    assert re.sub(r" \(UUID: .+?\)", "", listed) == (
+        "GPU 0: FakeGPU Test Profile 512MB\n"
+    )
 
     assert main(["--state", str(path), "-q"]) == 0
     detail = capsys.readouterr().out
     assert "FakeGPU-SMI detailed report" in detail
+    assert "Profile: test-512m" in detail
+    assert "PCI Bus ID: 00000000:01:00.0" in detail
     assert "Architecture: ampere, compute capability 8.0" in detail
     assert "108 SMs" in detail
     assert "native capabilities 5 groups / 107 APIs / 94" in detail
@@ -436,9 +445,17 @@ def test_virtual_smi_models_mig_instances_views_and_queries(
     assert "memory tracking unobserved" in compute_instances
 
     assert main(["--state", str(path), "-L"]) == 0
-    listed = capsys.readouterr().out
-    assert "MIG 1g.10gb Device 0" in listed
-    assert "GI: 0, CI: 0" in listed
+    listed = capsys.readouterr().out.splitlines()
+    # nvidia-smi -L prints MIG devices as "  %-15s Device %2u: (%s: %s)":
+    # "  MIG 3g.40gb     Device  0: (UUID: MIG-...)" in a real H100 capture.
+    assert re.fullmatch(r"GPU 0: Fake GPU 0 \(UUID: GPU-[0-9a-f-]{36}\)", listed[0])
+    assert listed[1] == (
+        f"  MIG 1g.10gb     Device  0: (UUID: {gpu0_mig['instances'][0]['uuid']})"
+    )
+    assert listed[2].startswith("  MIG 1g.10gb     Device  1: (UUID: MIG-")
+    assert listed[3].startswith("GPU 1: Fake GPU 1 (UUID: GPU-")
+    assert listed[4].startswith("  MIG 2g.20gb     Device  0: (UUID: MIG-")
+    assert len(listed) == 5
 
     assert (
         main(
@@ -1686,3 +1703,23 @@ def test_virtual_smi_writes_state_warnings_to_stderr(
         assert "bad.json" in captured.err, view
     assert main(["-L", "--state-dir", str(tmp_path)]) == 0
     assert len(capsys.readouterr().out.splitlines()) == 1
+
+
+def test_virtual_smi_list_names_hosts_only_when_several_are_shown(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    for host in ("node-a", "node-b"):
+        monkeypatch.setattr(smi_module.socket, "gethostname", lambda host=host: host)
+        SmiStatePublisher(tmp_path / f"{host}.json", _snapshot).publish_once(running=True)
+
+    assert main(["-L", "--state", str(tmp_path / "node-a.json")]) == 0
+    assert capsys.readouterr().out.startswith("GPU 0: Fake NVIDIA Test GPU (UUID: GPU-")
+
+    assert main(["-L", "--state-dir", str(tmp_path)]) == 0
+    listed = capsys.readouterr().out.splitlines()
+    assert [line.split(" (UUID: ")[0] for line in listed] == [
+        "GPU 0 @ node-a: Fake NVIDIA Test GPU",
+        "GPU 0 @ node-b: Fake NVIDIA Test GPU",
+    ]

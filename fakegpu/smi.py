@@ -559,7 +559,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "-L",
         "--list-gpus",
         action="store_true",
-        help="List simulated GPUs with UUID, profile, and compute capability.",
+        help="List simulated GPUs and their UUIDs in nvidia-smi -L's format.",
     )
     output_group.add_argument(
         "-q",

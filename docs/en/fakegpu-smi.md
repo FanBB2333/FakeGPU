@@ -69,6 +69,10 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   freshness, catalog and native API coverage, device identity, slot, modeled
   copies and link throughput, memory categories, allocator activity, dispatch
   tracking, and per-process peaks.
+- `-L` prints nvidia-smi's `GPU 0: NAME (UUID: GPU-...)` lines, with MIG
+  devices indented below their GPU. A host name follows the index only when
+  several hosts are shown. Profile, compute capability and PCI bus ID are in
+  `-q` and `--json`.
 - `-i` selects devices by index, UUID, PCI bus ID, or profile ID. `--json`
   prints the full normalized inventory. FakeGPU writes state schema v2 and can
   still read v1.

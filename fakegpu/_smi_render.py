@@ -134,24 +134,26 @@ def render_table(
 
 
 def render_gpu_list(inventory: Mapping[str, Any]) -> str:
+    """List GPUs in nvidia-smi -L's format.
+
+    nvidia-smi 580's format strings are "GPU %u: %s (%s: %s)" and, for MIG
+    devices, "  %-15s Device %2u: (%s: %s)" with "MIG <profile>" as the
+    first field. Profile, compute capability and PCI bus ID are in -q and
+    --json. Only a view of several hosts names each GPU's host.
+    """
+
+    devices = list(inventory.get("devices") or [])
+    several_hosts = len({str(item["host"]) for item in devices}) > 1
     lines = []
-    for item in inventory.get("devices") or []:
+    for item in devices:
+        host = f" @ {item['host']}" if several_hosts else ""
         lines.append(
-            f"GPU {item['index']} @ {item['host']}: {item['name']} "
-            f"(UUID: {item['uuid']}, Profile: {item['profile_id']}, "
-            f"CC: {item['compute_capability'] or 'N/A'}, "
-            f"PCI: {item['pci_bus_id']})"
+            f"GPU {item['index']}{host}: {item['name']} (UUID: {item['uuid']})"
         )
         for instance in item["mig"]["instances"]:
             lines.append(
-                "  MIG "
-                f"{instance['profile']} Device "
-                f"{instance['index']}: "
-                f"(UUID: {instance['uuid']}, "
-                f"GI: {instance['gpu_instance_id']}, "
-                f"CI: {instance['compute_instance_id']}, "
-                "Memory: "
-                f"{_format_bytes(instance['memory_total_bytes'])})"
+                f"  {'MIG ' + str(instance['profile']):<15} "
+                f"Device {instance['index']:>2}: (UUID: {instance['uuid']})"
             )
     if not lines:
         lines.append("No published FakeCUDA GPUs found.")
