@@ -74,6 +74,13 @@
   capability 7.5–8.9. `doctor` and `fakegpu nvidia-smi` stop showing INT4 for
   H100, B200 or RTX 50 GPUs, and strict cuBLAS dtype checks reject INT4
   there. `profiles/README.md` documents the field.
+- The topology simulator (`fakegpu simulate-topology` and
+  `fakegpu replay-trace --topology`) documents its bandwidths as Gbit/s per
+  direction, and an `nvlink_domain` without `nvlink_bandwidth_gbps` now runs
+  at 3600 Gbit/s, NVLink 4's 450 GB/s per direction. The old default of 900
+  was NVIDIA's bidirectional GB/s figure read as Gbit/s, which made NVLink
+  transfers 4× too slow. Simulation outputs for configs that omit the value
+  change.
 
 ### Fixed
 
