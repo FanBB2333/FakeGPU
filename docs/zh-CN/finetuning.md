@@ -161,6 +161,13 @@ setup、warmup、有序训练窗口、评估、checkpoint、Trainer 间隙与收
 - 支持无 packing、保留尾批次的顺序文本数据：HF Trainer（Transformers 5.6.0）与
   LLaMA-Factory 0.9.5 需要 `disable_shuffling: true`，Axolotl 0.18.0
   （Transformers 5.14.1）需要 `curriculum_sampling: true`。
+- `--epochs` 按框架自己的 `num_epochs` 含义换算。HF 与 LLaMA-Factory 会跑完每个
+  epoch 末尾不足一个累积窗口的 update。Axolotl 运行
+  `ceil(rows * epochs / (micro_batch_size * gradient_accumulation_steps))` 次
+  update，即它传给 Trainer 的 `max_steps`。`plan-finetune-transfer` 和
+  `run-finetune --planning-epochs` 使用同一规则。打包的 Axolotl 运行要用步数指定
+  范围（`--max-steps`，`run-finetune` 用 `--planning-max-steps`），因为 Axolotl
+  按 multipack 长度估计换算打包 epoch。
 - 数据、模型、硬件和执行设置必须与校准一致，数据行数变了就要重新校准。日志必须
   关闭，或者每次 update 都记录。不支持 checkpoint 轮转删除和最佳模型重载。
 

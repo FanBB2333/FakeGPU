@@ -62,6 +62,13 @@
   no longer match and need a new probe. Native `run-finetune` reports are
   unaffected: they record the value the real Trainer used, which was
   already 1.0.
+- For Axolotl runs, `plan-finetune-pipeline --epochs`,
+  `plan-finetune-transfer --epochs` and `run-finetune --planning-epochs`
+  count `ceil(rows * epochs / (micro_batch_size * gradient_accumulation_steps))`
+  updates, the `max_steps` Axolotl passes to Trainer, instead of Trainer's
+  per-epoch windows (25 rows, micro batch 2, accumulation 4, 30 epochs: 94
+  updates, not 120). Other frameworks keep Trainer's count. Packed Axolotl
+  horizons now require a step count.
 
 ### Fixed
 

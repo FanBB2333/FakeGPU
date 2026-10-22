@@ -91,10 +91,44 @@ def test_future_partial_epochs_and_forced_terminal_events(native_run, steps):
 def test_fractional_epochs_count_complete_optimizer_windows(native_run):
     plan = plan_finetuning_pipeline(sequential_run(native_run, 1), epochs=2.5)
     assert plan["workload"] == {"optimizer_steps": 8, "microsteps": 14, "samples": 14}
+    assert plan["projection"]["epoch_step_rule"] == "trainer_epoch_windows"
     assert [batch["epoch_microstep"] for batch in plan["updates"][-1]["batches"]] == [
         3,
         4,
     ]
+
+
+def axolotl_sequential_run(base, number, **kwargs):
+    run = sequential_run(base, number, **kwargs)
+    run["framework"] = "axolotl"
+    config = run["training_config"]
+    config["source_framework"] = "axolotl"
+    run["dataset"]["source_framework"] = "axolotl"
+    run["observation"]["native_framework"] = "axolotl"
+    run["native_config"].pop("disable_shuffling")
+    run["native_config"]["curriculum_sampling"] = True
+    config["software_versions"] = {"axolotl": "0.18.0", "transformers": "5.14.1"}
+    run["observation"]["software_versions"] = deepcopy(config["software_versions"])
+    refresh_signature(run)
+    return run
+
+
+@pytest.mark.parametrize(("epochs", "steps"), [(2.5, 7), (32, 80)])
+def test_axolotl_epochs_follow_its_max_steps_conversion(native_run, epochs, steps):
+    # Axolotl 0.18.0 hands Trainer max_steps = ceil(rows * num_epochs /
+    # batch_size) for unpacked data (utils/trainer.py
+    # calculate_total_num_steps; core/builders/base.py). With 5 rows, micro
+    # batch 1 and accumulation 2, Trainer's per-epoch windows would give 8 and 96.
+    run = axolotl_sequential_run(native_run, 1)
+    config = run["training_config"]
+    assert (config["num_samples"], config["micro_batch_size"]) == (5, 1)
+    assert config["gradient_accumulation_steps"] == 2
+    plan = plan_finetuning_pipeline(run, epochs=epochs)
+    assert plan["workload"]["optimizer_steps"] == steps
+    assert plan["projection"]["epoch_step_rule"] == "axolotl_max_steps"
+    assert plan["projection"]["updates_per_epoch"] == 3
+    # Trainer still walks each epoch's windows, the short last one included.
+    assert plan["updates"][2]["batches"][-1]["epoch_microstep"] == 5
 
 
 def test_future_checkpoint_rotation_requires_separate_cost_coverage(native_run):

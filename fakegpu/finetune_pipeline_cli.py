@@ -12,7 +12,12 @@ from .structured_io import emit_json, load_mapping
 def _duration_arguments(parser):
     duration = parser.add_mutually_exclusive_group(required=True)
     duration.add_argument(
-        "--epochs", type=float, help="Target training epochs on the calibrated dataset."
+        "--epochs",
+        type=float,
+        help=(
+            "Target training epochs on the calibrated dataset, counted in updates "
+            "as the source framework does (Axolotl: its max_steps conversion)."
+        ),
     )
     duration.add_argument("--max-steps", type=int, help="Target optimizer updates.")
     parser.add_argument(

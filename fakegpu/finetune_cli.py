@@ -330,7 +330,10 @@ def run_main(argv: Sequence[str] | None = None) -> int:
     planning.add_argument(
         "--planning-epochs",
         type=float,
-        help="Prepare a CPU sampling plan for this many epochs and verify consumed batch inputs.",
+        help=(
+            "Prepare a CPU sampling plan for this many epochs, counted as the "
+            "framework does, and verify consumed batch inputs."
+        ),
     )
     planning.add_argument(
         "--planning-max-steps",

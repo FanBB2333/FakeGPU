@@ -177,6 +177,14 @@ finalization.
   tail batch: HF Trainer (Transformers 5.6.0) and LLaMA-Factory 0.9.5 with
   `disable_shuffling: true`, and Axolotl 0.18.0 (Transformers 5.14.1) with
   `curriculum_sampling: true`.
+- `--epochs` means the framework's own `num_epochs`. HF and LLaMA-Factory
+  finish every epoch's short final accumulation window. Axolotl runs
+  `ceil(rows * epochs / (micro_batch_size * gradient_accumulation_steps))`
+  updates, the `max_steps` it passes to Trainer. The same rule applies to
+  `plan-finetune-transfer` and `run-finetune --planning-epochs`. Packed
+  Axolotl horizons need a step count (`--max-steps`, or
+  `--planning-max-steps` for `run-finetune`), because Axolotl derives packed
+  epochs from its multipack length estimate.
 - Dataset, model, hardware, and execution settings must match the
   calibration, and a different row count needs a new calibration. Logging must
   be off or happen on every update. Checkpoint rotation and best-model reload
