@@ -42,6 +42,11 @@
   `CUDA_ERROR_INVALID_DEVICE`. Breaking: an empty mask now hides the
   simulated GPUs too. `CUDA_DEVICE_ORDER=PCI_BUS_ID` is honored; the default
   `FASTEST_FIRST` heuristic is not modeled (PCI order).
+- `fakegpu.init(runtime="fakecuda")` applies `CUDA_VISIBLE_DEVICES` to the
+  GPUs it simulates unless `fakegpu run` already did, and leaves `torch.cuda`
+  unpatched with a warning when the mask hides every GPU. Breaking for code
+  that set `CUDA_VISIBLE_DEVICES=""` to keep real GPUs out of a FakeCUDA run.
+  `fakegpu run` accepts GPU UUIDs in the mask, and a repeated GPU hides all.
 - One synthetic identity per simulated GPU in native and Python code: the
   native UUID is the same `uuid5` value fakegpu-smi and the machine daemon
   use, so a native process and a FakeCUDA process on the same GPU no longer
@@ -80,6 +85,9 @@
   any spelling the driver accepts instead of always returning device 0.
 - The `PCI_DEVICE_ID` device attribute (`pciDeviceID`) is the PCI slot
   number, 0, not the product id; `PCI_DOMAIN_ID` follows the bus id.
+- `torch.cuda.get_device_properties()` under FakeCUDA has `uuid`,
+  `pci_bus_id`, `pci_device_id` and `pci_domain_id`, matching the identity
+  fakegpu-smi publishes.
 - Multi-process distributed training under FakeCUDA. Processes launched by
   `torchrun`, `accelerate launch` or `mp.spawn` take their rank and world size
   from the launcher and join a real gloo group, so collectives carry real

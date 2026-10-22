@@ -1004,6 +1004,49 @@ def _hide_mps_backend(torch_mod: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
+class _FakeCUuuid:
+    """``torch._C._CUuuid``: ``bytes`` lists the 16 octets and ``str`` gives
+    the 8-4-4-4-12 form without the ``GPU-`` prefix, as torch 2.9.1 prints a
+    real GPU's UUID."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: str):
+        import uuid as _uuid
+
+        self._value = _uuid.UUID(value)
+
+    @property
+    def bytes(self) -> list[int]:
+        return list(self._value.bytes)
+
+    def __str__(self) -> str:
+        return str(self._value)
+
+
+def _device_identity(index: int, profile_id: str) -> tuple[_FakeCUuuid, int, int, int]:
+    """The UUID and PCI address fakegpu-smi and NVML publish for ``cuda:index``.
+
+    Under ``CUDA_VISIBLE_DEVICES`` the device keeps its physical index
+    (FAKEGPU_PHYSICAL_INDICES), as its identity does on a real machine.
+    """
+
+    import socket
+
+    from ._smi_state import _synthetic_pci_address, _synthetic_uuid
+
+    physical = index
+    try:
+        indices = [int(item) for item in os.environ.get("FAKEGPU_PHYSICAL_INDICES", "").split(",") if item]
+    except ValueError:
+        indices = []
+    if 0 <= index < len(indices):
+        physical = indices[index]
+    gpu_uuid = _synthetic_uuid(socket.gethostname(), physical, profile_id)
+    domain, bus, device = _synthetic_pci_address(physical)
+    return _FakeCUuuid(gpu_uuid[len("GPU-"):]), bus, device, domain
+
+
 class _FakeDeviceProperties:
     """Mimics ``torch.cuda.get_device_properties()`` return value.
 
@@ -1013,6 +1056,11 @@ class _FakeDeviceProperties:
     def __init__(self, index: int = 0):
         prof = _DEVICE_PROFILES[index]
         self.name = prof["name"]
+        # torch's ``uuid`` (a ``_CUuuid``) and the PCI bus, device (slot) and
+        # domain numbers of the bus id NVML and fakegpu-smi report.
+        self.uuid, self.pci_bus_id, self.pci_device_id, self.pci_domain_id = _device_identity(
+            index, str(prof.get("profile_id") or "")
+        )
         self.major = prof["compute_major"]
         self.minor = prof["compute_minor"]
         self.total_memory = prof["total_memory"]
@@ -1040,7 +1088,9 @@ class _FakeDeviceProperties:
         return (
             f"_FakeDeviceProperties(name='{self.name}', major={self.major}, "
             f"minor={self.minor}, total_memory={self.total_memory // (1024**2)}MB, "
-            f"multi_processor_count={self.multi_processor_count})"
+            f"multi_processor_count={self.multi_processor_count}, uuid={self.uuid}, "
+            f"pci_bus_id={self.pci_bus_id}, pci_device_id={self.pci_device_id}, "
+            f"pci_domain_id={self.pci_domain_id}, L2_cache_size={self.L2_cache_size // (1024**2)}MB)"
         )
 
 

@@ -13,13 +13,18 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def _run(code):
+def _run(code, *, hide_cuda=True):
+    # An empty CUDA_VISIBLE_DEVICES keeps TensorFlow and scikit-learn on the
+    # CPU. FakeCUDA honors the mask like CUDA does, so code that simulates
+    # GPUs runs without it.
+    environment = {key: value for key, value in os.environ.items() if key != "CUDA_VISIBLE_DEVICES"}
+    if hide_cuda:
+        environment["CUDA_VISIBLE_DEVICES"] = ""
     return subprocess.run(
         [sys.executable, "-c", code],
         cwd=ROOT,
         env={
-            **os.environ,
-            "CUDA_VISIBLE_DEVICES": "",
+            **environment,
             "FAKEGPU_TERMINAL_REPORT": "0",
             "SCIPY_ARRAY_API": "1",
             "TF_CPP_MIN_LOG_LEVEL": "2",
@@ -44,7 +49,8 @@ def test_framework_numerical_probe(framework, modules):
     result = _run(
         "import runpy,sys; "
         f"sys.argv=['framework_compatibility.py','--framework',{framework!r}]; "
-        "runpy.run_path('tests/support/framework_compatibility.py',run_name='__main__')"
+        "runpy.run_path('tests/support/framework_compatibility.py',run_name='__main__')",
+        hide_cuda=framework != "sklearn-array-api",
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(result.stdout)["status"] == "passed"
@@ -174,7 +180,7 @@ leaf = torch.asarray([2., 3.], device='cuda:1', requires_grad=True)
 (leaf * leaf).sum().backward()
 torch.testing.assert_close(leaf.grad.cpu(), torch.tensor([4., 6.]))
 assert not torch.asarray(leaf).requires_grad
-""")
+""", hide_cuda=False)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -196,5 +202,5 @@ for index, kind in ((0, 'host_to_device'), (0, 'peer_send'), (1, 'peer_receive')
     copy = snapshot[index]['copies'][kind]
     assert copy['calls'] == 1
     assert copy['bytes'] == 8
-""")
+""", hide_cuda=False)
     assert result.returncode == 0, result.stdout + result.stderr

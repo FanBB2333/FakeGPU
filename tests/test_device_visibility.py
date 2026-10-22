@@ -33,6 +33,7 @@ from pathlib import Path
 
 import pytest
 
+from fakegpu._run_bootstrap import visible_gpus
 from fakegpu._smi_environment import _synthetic_mig_uuid
 from fakegpu._smi_state import _synthetic_pci_address, _synthetic_pci_bus_id, _synthetic_uuid
 
@@ -306,3 +307,90 @@ def test_hidden_devices_stay_in_the_native_smi_state(tmp_path: Path) -> None:
     assert [device["tracked_memory"] for device in devices] == [0, GIB]
     host = socket.gethostname()
     assert [device["uuid"] for device in devices] == [_synthetic_uuid(host, 0, "t4"), _synthetic_uuid(host, 1, "a100")]
+
+
+@pytest.mark.parametrize(
+    ("mask", "expected"),
+    [
+        ("0,0", ([], [])),  # a repeat makes CUDA initialization fail
+        ("0abc", (["a100"], [0])),
+        ("+2", (["h100"], [2])),
+        ("MIG-0", ([], [])),
+    ],
+)
+def test_visible_gpus_reads_entries_like_cuda(mask: str, expected: tuple) -> None:
+    assert visible_gpus("a100,a100,h100", mask, host="node") == expected
+
+
+def test_visible_gpus_accepts_gpu_uuids_and_unique_prefixes() -> None:
+    uuids = [_synthetic_uuid("node", index, profile) for index, profile in enumerate(["a100", "a100", "h100"])]
+    assert visible_gpus("a100,a100,h100", uuids[2], host="node") == (["h100"], [2])
+    assert visible_gpus("a100,a100,h100", f"{uuids[2][:14]},{uuids[0]}", host="node") == (["h100", "a100"], [2, 0])
+    assert visible_gpus("a100,a100,h100", "GPU-", host="node") == ([], [])  # ambiguous
+    assert visible_gpus("a100,a100,h100", f"{uuids[1]},1", host="node") == ([], [])  # the same GPU twice
+
+
+FAKECUDA = textwrap.dedent(
+    """
+    import json, os, socket, warnings
+    import fakegpu
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = fakegpu.init(runtime="fakecuda", devices="t4,a100,l4")
+    import torch
+    out = {"backend": result.backend, "count": torch.cuda.device_count(),
+           "physical": os.environ.get("FAKEGPU_PHYSICAL_INDICES"),
+           "warnings": [str(w.message) for w in caught if "CUDA_VISIBLE_DEVICES" in str(w.message)]}
+    if out["count"]:
+        props = [torch.cuda.get_device_properties(i) for i in range(out["count"])]
+        out["names"] = [p.name for p in props]
+        out["uuid"] = [str(p.uuid) for p in props]
+        out["uuid_bytes"] = [p.uuid.bytes for p in props]
+        out["pci"] = [[p.pci_bus_id, p.pci_device_id, p.pci_domain_id] for p in props]
+        out["repr"] = repr(props[0])
+    out["host"] = socket.gethostname()
+    print(json.dumps(out))
+    """
+)
+
+
+def _fakecuda(tmp_path: Path, mask: str | None, **environment: str) -> dict:
+    pytest.importorskip("torch")
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith(("FAKEGPU_", "CUDA_VISIBLE_DEVICES"))}
+    env.update(PYTHONPATH=str(ROOT), FAKEGPU_HOME=str(tmp_path), FAKEGPU_MACHINE="off",
+               FAKEGPU_TERMINAL_REPORT="0", **environment)
+    if mask is not None:
+        env["CUDA_VISIBLE_DEVICES"] = mask
+    completed = subprocess.run([sys.executable, "-c", FAKECUDA], cwd=tmp_path, env=env, text=True,
+                               capture_output=True, timeout=120)
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout.strip().splitlines()[-1])
+
+
+def test_fakecuda_init_applies_cuda_visible_devices(tmp_path: Path) -> None:
+    result = _fakecuda(tmp_path, "2,0")
+    assert result["count"] == 2
+    assert result["physical"] == "2,0"
+    assert "L4" in result["names"][0] and "T4" in result["names"][1]
+    host = result["host"]
+    # Each GPU keeps the identity nvidia-smi and NVML give it on this host.
+    assert result["uuid"] == [_synthetic_uuid(host, 2, "l4")[4:], _synthetic_uuid(host, 0, "t4")[4:]]
+    assert result["uuid_bytes"][0] == list(bytes.fromhex(_uuid_hex(_synthetic_uuid(host, 2, "l4"))))
+    assert result["pci"] == [[3, 0, 0], [1, 0, 0]]
+    assert "uuid=" in result["repr"] and "pci_bus_id=3" in result["repr"]
+
+
+def test_fakecuda_init_hides_every_gpu_for_an_empty_mask(tmp_path: Path) -> None:
+    result = _fakecuda(tmp_path, "")
+    assert result["backend"] == "none"
+    assert result["count"] == 0  # torch.cuda stays unpatched and CUDA shows no device
+    assert result["warnings"]
+
+
+def test_fakecuda_init_keeps_a_layout_fakegpu_run_already_filtered(tmp_path: Path) -> None:
+    # fakegpu run passes the visible GPUs and FAKEGPU_PHYSICAL_INDICES; the
+    # mask must not be applied a second time.
+    result = _fakecuda(tmp_path, "2", FAKEGPU_PHYSICAL_INDICES="2")
+    assert result["count"] == 3
+    assert result["pci"][0] == [3, 0, 0]  # cuda:0 is physical GPU 2

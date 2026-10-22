@@ -16,7 +16,9 @@ import importlib.machinery
 import json
 import os
 from pathlib import Path
+import re
 import signal
+import socket
 import sys
 import threading
 import time
@@ -74,23 +76,50 @@ class _StartWithTorch(importlib.abc.MetaPathFinder):
         return spec
 
 
-def visible_gpus(layout: str | None, mask: str | None) -> tuple[list[str], list[int]] | None:
-    """The run's GPUs that ``CUDA_VISIBLE_DEVICES`` leaves visible, and their indices.
+def visible_gpus(
+    layout: str | None, mask: str | None, *, host: str | None = None
+) -> tuple[list[str], list[int]] | None:
+    """The GPUs of ``layout`` that ``CUDA_VISIBLE_DEVICES`` leaves visible, and their indices.
 
-    Like CUDA, the mask is read up to its first entry that is not a GPU of
-    the run, so ``-1`` or an empty mask hides every GPU. ``None`` means the
-    process sees the whole layout.
+    ``layout`` lists one profile ID per GPU. The mask follows the CUDA
+    Programming Guide ("CUDA_VISIBLE_DEVICES") and the real driver:
+
+    * entries are read up to the first one that names no GPU, so ``-1`` or
+      an empty mask hides every GPU;
+    * an index entry reads like ``strtoul``: ``0abc`` is GPU 0;
+    * ``GPU-`` entries name a GPU by its UUID (as nvidia-smi shows it on this
+      host), or by enough of its beginning to match one GPU only;
+    * a GPU listed twice makes CUDA initialization fail, so no GPU is visible.
+
+    ``MIG-`` entries end the list: FakeCUDA does not model MIG instances as
+    CUDA devices. ``None`` means the process sees the whole layout.
     """
 
-    profiles = [item for item in (layout or "").split(",") if item]
+    profiles = [item.strip() for item in (layout or "").split(",") if item.strip()]
     if mask is None or not profiles:
         return None
+    uuids: list[str] | None = None
     indices: list[int] = []
     for entry in mask.split(","):
         entry = entry.strip()
-        if not entry.isdigit() or int(entry) >= len(profiles) or int(entry) in indices:
-            break
-        indices.append(int(entry))
+        if entry.startswith("GPU-"):
+            if uuids is None:
+                from ._smi_state import _synthetic_uuid
+
+                machine = socket.gethostname() if host is None else host
+                uuids = [_synthetic_uuid(machine, index, profile.lower()) for index, profile in enumerate(profiles)]
+            matches = [index for index, value in enumerate(uuids) if value.startswith(entry)]
+            if len(matches) != 1:
+                break
+            index = matches[0]
+        else:
+            digits = re.match(r"\+?(\d+)", entry)
+            if digits is None or int(digits.group(1)) >= len(profiles):
+                break
+            index = int(digits.group(1))
+        if index in indices:
+            return [], []
+        indices.append(index)
     if indices == list(range(len(profiles))):
         return None
     return [profiles[index] for index in indices], indices
