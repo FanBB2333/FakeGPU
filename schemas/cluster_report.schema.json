@@ -379,7 +379,9 @@
             "float16",
             "bfloat16",
             "float32",
-            "float64"
+            "float64",
+            "float8_e4m3",
+            "float8_e5m2"
           ]
         },
         "reduce_op": {

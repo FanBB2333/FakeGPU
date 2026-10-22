@@ -407,6 +407,13 @@
   factor. An operator used with another datatype or communicator is
   `ncclInvalidArgument`, and argument or usage errors no longer leave an
   async error on the communicator.
+- Native NCCL accepts `ncclFloat8e4m3` and `ncclFloat8e5m2`. Send and receive
+  work on every profile. As in NCCL 2.27.5, other non-empty FP8 collectives
+  return `ncclInvalidArgument` unless every rank's profile has compute
+  capability 9.0 or higher (`ncclAlltoAll`, an NCCL 2.28 API, follows 2.28
+  and is always allowed). FP8 reductions compute in float16 and round back to
+  FP8 after each step, and `ncclAvg` premultiplies by the FP8 value of 1/n.
+  Cluster reports name the types `float8_e4m3` and `float8_e5m2`.
 
 ## v1.6.0 - 2026-10-17
 

@@ -238,9 +238,16 @@ std::string handle_init_comm(CommunicatorRegistry& registry, const CoordinatorMe
     if (timeout_it != request.fields.end() && !parse_int_text(timeout_it->second, timeout_ms)) {
         timeout_ms = -1;
     }
+    int compute_capability = 0;
+    auto capability_it = request.fields.find("compute_capability");
+    if (capability_it != request.fields.end() &&
+        (!parse_int_text(capability_it->second, compute_capability) ||
+         compute_capability < 0)) {
+        return bad_request("compute_capability must be a non-negative integer");
+    }
 
-    CommunicatorRegistrationResult result =
-        registry.init_communicator(unique_it->second, world_size, rank, timeout_ms);
+    CommunicatorRegistrationResult result = registry.init_communicator(
+        unique_it->second, world_size, rank, timeout_ms, compute_capability);
     if (!result.ok) {
         return format_error_response(result.error_code, result.error_detail);
     }
@@ -249,6 +256,7 @@ std::string handle_init_comm(CommunicatorRegistry& registry, const CoordinatorMe
         {"seqno", std::to_string(result.seqno)},
         {"rank", std::to_string(rank)},
         {"world_size", std::to_string(world_size)},
+        {"min_compute_capability", std::to_string(result.min_compute_capability)},
     });
 }
 
@@ -293,6 +301,7 @@ std::string handle_split_comm(CommunicatorRegistry& registry, const CoordinatorM
         {"new_comm_id", std::to_string(result.new_comm_id)},
         {"new_rank", std::to_string(result.new_rank)},
         {"new_world_size", std::to_string(result.new_world_size)},
+        {"new_min_compute_capability", std::to_string(result.new_min_compute_capability)},
     });
 }
 
@@ -355,6 +364,7 @@ std::string handle_shrink_comm(CommunicatorRegistry& registry, const Coordinator
         {"new_comm_id", std::to_string(result.new_comm_id)},
         {"new_rank", std::to_string(result.new_rank)},
         {"new_world_size", std::to_string(result.new_world_size)},
+        {"new_min_compute_capability", std::to_string(result.new_min_compute_capability)},
     });
 }
 

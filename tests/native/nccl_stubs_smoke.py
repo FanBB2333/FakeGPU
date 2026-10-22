@@ -23,7 +23,9 @@ NCCL_INVALID_ARGUMENT = 4
 NCCL_INVALID_USAGE = 5
 NCCL_FLOAT16 = 6
 NCCL_FLOAT32 = 7
+NCCL_FLOAT8E4M3 = 10
 NCCL_SUM = 0
+NCCL_AVG = 4
 NCCL_SCALAR_DEVICE = 0
 NCCL_SCALAR_HOST_IMMEDIATE = 1
 # NCCL_SIM_INFO_INITIALIZER magic from nccl.h.
@@ -270,6 +272,58 @@ def child_premul_rank(rank: int) -> int:
     return 0
 
 
+def child_fp8_rank(rank: int) -> int:
+    """FP8 follows NCCL 2.27.5 (enqueue.cc, taskAppend).
+
+    Below compute capability 9.0 on any rank every non-empty FP8 collective is
+    ncclInvalidArgument (an Ampere GPU running NCCL 2.27.5 returned it for
+    all-reduce, reduce, reduce-scatter, broadcast and all-gather) and leaves the
+    communicator usable; send and receive work on any device.
+    """
+
+    lib = load_nccl()
+    lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, UniqueId, ctypes.c_int]
+    comm = ctypes.c_void_p()
+    unique_id = UniqueId(internal=os.environ["NCCL_SMOKE_UNIQUE_ID"].encode())
+    expect_rc(lib.ncclCommInitRank(ctypes.byref(comm), REDUCE_WORLD, unique_id, rank), NCCL_SUCCESS, "ncclCommInitRank")
+    # e4m3 bytes: rank 0 holds (1, 16), rank 1 holds (2, 1).
+    send = (ctypes.c_uint8 * 2)(*((0x38, 0x58) if rank == 0 else (0x40, 0x38)))
+    recv = (ctypes.c_uint8 * 4)()
+    size = ctypes.c_size_t
+    calls = {
+        "all-reduce": lambda: lib.ncclAllReduce(send, recv, size(2), NCCL_FLOAT8E4M3, NCCL_SUM, comm, None),
+        "reduce": lambda: lib.ncclReduce(send, recv, size(2), NCCL_FLOAT8E4M3, NCCL_SUM, 0, comm, None),
+        "reduce-scatter": lambda: lib.ncclReduceScatter(send, recv, size(1), NCCL_FLOAT8E4M3, NCCL_SUM, comm, None),
+        "broadcast": lambda: lib.ncclBroadcast(send, recv, size(2), NCCL_FLOAT8E4M3, 0, comm, None),
+        "all-gather": lambda: lib.ncclAllGather(send, recv, size(2), NCCL_FLOAT8E4M3, comm, None),
+    }
+    if os.environ["NCCL_SMOKE_FP8"] == "rejected":
+        for name, call in calls.items():
+            expect_rc(call(), NCCL_INVALID_ARGUMENT, f"FP8 {name} below compute capability 9.0")
+        expect_rc(lib.ncclAllReduce(send, recv, size(0), NCCL_FLOAT8E4M3, NCCL_SUM, comm, None), NCCL_SUCCESS, "empty FP8 all-reduce")
+        value = (ctypes.c_float * 1)(1.0)
+        expect_rc(lib.ncclAllReduce(value, value, size(1), NCCL_FLOAT32, NCCL_SUM, comm, None), NCCL_SUCCESS, "all-reduce after FP8 rejections")
+        if value[0] != 2.0:
+            raise AssertionError(f"rank {rank}: all-reduce after FP8 rejections produced {value[0]}")
+    else:
+        expect_rc(calls["all-reduce"](), NCCL_SUCCESS, "FP8 all-reduce")
+        # 1 + 2 = 3; 16 + 1 rounds back to 16 in e4m3.
+        if list(recv[:2]) != [0x44, 0x58]:
+            raise AssertionError(f"rank {rank}: FP8 all-reduce produced {list(recv[:2])}")
+        expect_rc(lib.ncclAllReduce(send, recv, size(2), NCCL_FLOAT8E4M3, NCCL_AVG, comm, None), NCCL_SUCCESS, "FP8 average")
+        # 0.5 * 1 + 0.5 * 2 = 1.5; 0.5 * 16 + 0.5 * 1 = 8.5 rounds to 8.
+        if list(recv[:2]) != [0x3C, 0x50]:
+            raise AssertionError(f"rank {rank}: FP8 average produced {list(recv[:2])}")
+    peer = 1 - rank
+    if rank == 0:
+        expect_rc(lib.ncclSend(send, size(2), NCCL_FLOAT8E4M3, peer, comm, None), NCCL_SUCCESS, "FP8 ncclSend")
+    else:
+        expect_rc(lib.ncclRecv(recv, size(2), NCCL_FLOAT8E4M3, peer, comm, None), NCCL_SUCCESS, "FP8 ncclRecv")
+        if list(recv[:2]) != [0x38, 0x58]:
+            raise AssertionError(f"rank 1: FP8 ncclRecv produced {list(recv[:2])}")
+    return 0
+
+
 def child_init_all(_rank: int) -> int:
     """ncclCommInitAll validates its device list like init.cc does."""
 
@@ -346,6 +400,13 @@ def check_premul_sum_operators() -> None:
         raise AssertionError("PreMulSum operators do not behave as in NCCL")
 
 
+def check_fp8_compute_capability_gate() -> None:
+    # A100 profiles are sm_80, H100 profiles sm_90; one sm_80 rank decides.
+    for profiles, expected in (("a100:2", "rejected"), ("h100:2", "allowed"), ("h100,a100", "rejected")):
+        if not run_ranks("--fp8-rank", REDUCE_WORLD, 3000, {"FAKEGPU_PROFILES": profiles, "NCCL_SMOKE_FP8": expected}):
+            raise AssertionError(f"FP8 collectives on {profiles} were not {expected} as in NCCL")
+
+
 def check_init_all_device_list() -> None:
     if not run_ranks("--init-all", 1, 3000):
         raise AssertionError("ncclCommInitAll did not validate its device list")
@@ -372,6 +433,8 @@ def main() -> int:
         return child_init_all(int(sys.argv[2]))
     if sys.argv[1:2] == ["--premul-rank"]:
         return child_premul_rank(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--fp8-rank"]:
+        return child_fp8_rank(int(sys.argv[2]))
     if not LIBNCCL.exists():
         print(f"missing NCCL library: {LIBNCCL}", file=sys.stderr)
         return 2
@@ -380,6 +443,7 @@ def main() -> int:
     check_empty_point_to_point()
     check_init_all_device_list()
     check_premul_sum_operators()
+    check_fp8_compute_capability_gate()
     check_split_timeout()
     check_reduce_over_socket_payloads()
     print("nccl stubs smoke test passed")

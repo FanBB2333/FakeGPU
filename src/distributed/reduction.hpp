@@ -119,6 +119,52 @@ void reduce_typed_buffers(
         request, buffers, element_count, identity, identity, reduced_bytes, average_mode);
 }
 
+// FP8 elements are folded pairwise in rank order. Each step computes in
+// float16 and stores FP8 again, as NCCL's FuncSum, FuncProd and FuncMinMax do
+// for __nv_fp8_e4m3 and __nv_fp8_e5m2 (reduce_kernel.h). ncclAvg is PreMulSum
+// with the factor __nv_cvt_float_to_fp8(1/n, __NV_SATFINITE) (enqueue.cc,
+// hostToDevRedOp), applied with the same float16 multiply.
+inline void reduce_fp8_buffers(
+    const CollectiveExecutionRequest& request,
+    const std::vector<std::vector<char>>& buffers,
+    std::size_t element_count,
+    Fp8Format format,
+    std::vector<char>& reduced_bytes) {
+    reduced_bytes.assign(element_count, '\0');
+    if (buffers.empty()) {
+        return;
+    }
+    const bool average = request.reduce_op == CollectiveReduceOp::Avg;
+    const float factor = average
+        ? fp8_bits_to_float(
+              float_to_fp8_bits(
+                  static_cast<float>(1.0 / static_cast<double>(buffers.size())),
+                  format),
+              format)
+        : 1.0f;
+    const auto load = [&](const std::vector<char>& buffer, std::size_t index) {
+        const auto stored = static_cast<std::uint8_t>(buffer[index]);
+        if (!average) {
+            return stored;
+        }
+        return fp8_bits_from_float_via_float16(
+            fp8_bits_to_float(stored, format) * factor, format);
+    };
+    for (std::size_t index = 0; index < element_count; ++index) {
+        std::uint8_t accumulated = load(buffers.front(), index);
+        for (std::size_t buffer_index = 1;
+             buffer_index < buffers.size();
+             ++buffer_index) {
+            const float lhs = fp8_bits_to_float(accumulated, format);
+            const float rhs =
+                fp8_bits_to_float(load(buffers[buffer_index], index), format);
+            accumulated = fp8_bits_from_float_via_float16(
+                apply_reduce_op(lhs, rhs, request.reduce_op), format);
+        }
+        reduced_bytes[index] = static_cast<char>(accumulated);
+    }
+}
+
 inline void reduce_buffers(
     const CollectiveExecutionRequest& request,
     const std::vector<std::vector<char>>& buffers,
@@ -178,6 +224,14 @@ inline void reduce_buffers(
             reduce_typed_buffers<double>(
                 request, buffers, element_count, reduced_bytes,
                 AverageMode::PremultiplyInStorage);
+            break;
+        case CollectiveDataType::Float8E4M3:
+            reduce_fp8_buffers(
+                request, buffers, element_count, Fp8Format::E4M3, reduced_bytes);
+            break;
+        case CollectiveDataType::Float8E5M2:
+            reduce_fp8_buffers(
+                request, buffers, element_count, Fp8Format::E5M2, reduced_bytes);
             break;
     }
 }

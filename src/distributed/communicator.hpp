@@ -15,6 +15,9 @@ struct CommunicatorRegistrationResult {
     std::uint64_t seqno = 0;
     std::string error_code;
     std::string error_detail;
+    // Lowest compute capability (major * 10 + minor) the ranks reported, like
+    // NCCL's comm->minCompCap; 0 when no rank reported one.
+    int min_compute_capability = 0;
 };
 
 struct CommunicatorDestroyResult {
@@ -41,6 +44,7 @@ struct CommunicatorSplitResult {
     int new_world_size = 0;
     std::string error_code;
     std::string error_detail;
+    int new_min_compute_capability = 0;
 };
 
 struct CommunicatorFailureRequest {
@@ -76,6 +80,7 @@ struct CommunicatorShrinkResult {
     int new_world_size = 0;
     std::string error_code;
     std::string error_detail;
+    int new_min_compute_capability = 0;
 };
 
 enum class PointToPointType {
@@ -312,7 +317,8 @@ public:
         const std::string& unique_id,
         int world_size,
         int rank,
-        int timeout_ms);
+        int timeout_ms,
+        int compute_capability = 0);
 
     CommunicatorDestroyResult destroy_communicator(int comm_id, int rank);
     CommunicatorSplitResult split_communicator(const CommunicatorSplitRequest& request);

@@ -64,6 +64,7 @@ struct SplitParticipantResult {
     int new_comm_id = -1;
     int new_rank = -1;
     int new_world_size = 0;
+    int new_min_compute_capability = 0;
 };
 
 struct SplitState {
@@ -81,6 +82,7 @@ struct ShrinkParticipantResult {
     int new_comm_id = -1;
     int new_rank = -1;
     int new_world_size = 0;
+    int new_min_compute_capability = 0;
 };
 
 struct ShrinkState {
@@ -119,6 +121,8 @@ struct CommunicatorState {
     std::uint64_t next_seqno = 1;
     std::vector<int> global_ranks;
     std::unordered_map<int, bool> participants;
+    // Compute capability (major * 10 + minor) each local rank reported.
+    std::unordered_map<int, int> compute_capabilities;
     std::unordered_map<int, bool> destroyed_ranks;
     std::unordered_map<std::uint64_t, std::shared_ptr<CollectiveState>> collectives;
     std::unordered_map<std::uint64_t, std::shared_ptr<BarrierState>> barriers;
@@ -235,6 +239,23 @@ int global_rank_for_local(
     const std::shared_ptr<CommunicatorState>& state,
     int local_rank) {
     return state->global_ranks[static_cast<std::size_t>(local_rank)];
+}
+
+// The lowest compute capability among the ranks that reported one, as NCCL
+// keeps in comm->minCompCap; 0 when none did.
+int min_compute_capability(const CommunicatorState& state) {
+    int minimum = 0;
+    for (const auto& entry : state.compute_capabilities) {
+        if (entry.second > 0 && (minimum == 0 || entry.second < minimum)) {
+            minimum = entry.second;
+        }
+    }
+    return minimum;
+}
+
+int reported_compute_capability(const CommunicatorState& state, int local_rank) {
+    const auto it = state.compute_capabilities.find(local_rank);
+    return it == state.compute_capabilities.end() ? 0 : it->second;
 }
 
 std::size_t operation_timeline_limit() {
@@ -1347,30 +1368,28 @@ CollectiveExecutionResult execute_collective_locked(
 CommunicatorSplitResult split_success(
     std::uint64_t seqno,
     const SplitParticipantResult& per_rank) {
-    return CommunicatorSplitResult{
-        true,
-        seqno,
-        per_rank.participating,
-        per_rank.new_comm_id,
-        per_rank.new_rank,
-        per_rank.new_world_size,
-        "",
-        "",
-    };
+    CommunicatorSplitResult result;
+    result.ok = true;
+    result.seqno = seqno;
+    result.participating = per_rank.participating;
+    result.new_comm_id = per_rank.new_comm_id;
+    result.new_rank = per_rank.new_rank;
+    result.new_world_size = per_rank.new_world_size;
+    result.new_min_compute_capability = per_rank.new_min_compute_capability;
+    return result;
 }
 
 CommunicatorShrinkResult shrink_success(
     std::uint64_t seqno,
     const ShrinkParticipantResult& per_rank) {
-    return CommunicatorShrinkResult{
-        true,
-        seqno,
-        per_rank.new_comm_id,
-        per_rank.new_rank,
-        per_rank.new_world_size,
-        "",
-        "",
-    };
+    CommunicatorShrinkResult result;
+    result.ok = true;
+    result.seqno = seqno;
+    result.new_comm_id = per_rank.new_comm_id;
+    result.new_rank = per_rank.new_rank;
+    result.new_world_size = per_rank.new_world_size;
+    result.new_min_compute_capability = per_rank.new_min_compute_capability;
+    return result;
 }
 
 CollectiveSubmitResult finish_collective_locked(
@@ -1425,7 +1444,8 @@ CommunicatorRegistrationResult CommunicatorRegistry::init_communicator(
     const std::string& unique_id,
     int world_size,
     int rank,
-    int timeout_ms) {
+    int timeout_ms,
+    int compute_capability) {
     if (unique_id.empty()) {
         return make_error("missing_unique_id", "unique_id must be set");
     }
@@ -1474,8 +1494,18 @@ CommunicatorRegistrationResult CommunicatorRegistry::init_communicator(
         }
 
         state->participants.emplace(rank, true);
+        if (compute_capability > 0) {
+            state->compute_capabilities[rank] = compute_capability;
+        }
         remember_world_size_locked(registry, world_size);
         ensure_rank_report_locked(registry, rank).communicator_inits++;
+        const auto registered = [&]() {
+            CommunicatorRegistrationResult result;
+            result.ok = true;
+            result.comm_id = state->comm_id;
+            result.min_compute_capability = min_compute_capability(*state);
+            return result;
+        };
         if (static_cast<int>(state->participants.size()) == state->world_size) {
             state->ready = true;
             state->comm_id = registry.next_comm_id++;
@@ -1483,7 +1513,7 @@ CommunicatorRegistrationResult CommunicatorRegistry::init_communicator(
             registry.pending_by_unique_id.erase(unique_id);
             registry.report.communicator_count++;
             state->cv.notify_all();
-            return CommunicatorRegistrationResult{true, state->comm_id, 0, "", ""};
+            return registered();
         }
 
         if (!wait_for_completion_locked(
@@ -1505,7 +1535,7 @@ CommunicatorRegistrationResult CommunicatorRegistry::init_communicator(
             return make_error(state->failure_code, state->failure_detail);
         }
 
-        return CommunicatorRegistrationResult{true, state->comm_id, 0, "", ""};
+        return registered();
     }
 }
 
@@ -1659,15 +1689,22 @@ CommunicatorSplitResult CommunicatorRegistry::split_communicator(const Communica
             const int global_rank = global_rank_for_local(state, parent_rank);
             child->global_ranks[subgroup_rank] = global_rank;
             child->participants.emplace(static_cast<int>(subgroup_rank), true);
+            const int capability = reported_compute_capability(*state, parent_rank);
+            if (capability > 0) {
+                child->compute_capabilities[static_cast<int>(subgroup_rank)] = capability;
+            }
+            ensure_rank_report_locked(registry, global_rank).communicator_inits++;
+        }
+        for (std::size_t subgroup_rank = 0; subgroup_rank < members.size(); ++subgroup_rank) {
             split->results.emplace(
-                parent_rank,
+                members[subgroup_rank].second,
                 SplitParticipantResult{
                     true,
                     child->comm_id,
                     static_cast<int>(subgroup_rank),
                     child->world_size,
+                    min_compute_capability(*child),
                 });
-            ensure_rank_report_locked(registry, global_rank).communicator_inits++;
         }
 
         registry.active_by_comm_id.emplace(child->comm_id, child);
@@ -1938,15 +1975,23 @@ CommunicatorShrinkResult CommunicatorRegistry::shrink_communicator(
         const int global_rank = global_rank_for_local(state, parent_rank);
         child->global_ranks.push_back(global_rank);
         child->participants.emplace(child_rank, true);
+        const int capability = reported_compute_capability(*state, parent_rank);
+        if (capability > 0) {
+            child->compute_capabilities[child_rank] = capability;
+        }
         shrink->results.emplace(
             parent_rank,
             ShrinkParticipantResult{
                 child->comm_id,
                 child_rank,
                 child->world_size,
+                0,
             });
         ensure_rank_report_locked(registry, global_rank).communicator_inits++;
         child_rank++;
+    }
+    for (auto& entry : shrink->results) {
+        entry.second.new_min_compute_capability = min_compute_capability(*child);
     }
 
     registry.active_by_comm_id.emplace(child->comm_id, child);

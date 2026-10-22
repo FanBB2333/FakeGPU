@@ -45,6 +45,9 @@ struct ncclComm {
     int rank = -1;
     int global_rank = -1;
     int device = -1;
+    // Lowest compute capability (major * 10 + minor) of the communicator's
+    // devices, NCCL's comm->minCompCap.
+    int min_compute_capability = 0;
     std::uint64_t next_seqno = 1;
     void* real_comm = nullptr;
     bool destroyed = false;
@@ -64,6 +67,8 @@ constexpr unsigned int kSimInfoMagic = 0x74685283U;
 
 thread_local int g_group_depth = 0;
 thread_local std::string g_last_error;
+// The device ncclCommInitAll assigns to the rank its worker thread creates.
+thread_local int g_init_device_override = -1;
 
 enum class GroupOperationKind {
     Collective,
@@ -432,6 +437,14 @@ bool map_dtype(
         out = fake_gpu::distributed::CollectiveDataType::Float64;
         return true;
     }
+    if (datatype == ncclFloat8e4m3) {
+        out = fake_gpu::distributed::CollectiveDataType::Float8E4M3;
+        return true;
+    }
+    if (datatype == ncclFloat8e5m2) {
+        out = fake_gpu::distributed::CollectiveDataType::Float8E5M2;
+        return true;
+    }
     return false;
 }
 
@@ -447,6 +460,45 @@ bool lookup_premul_sum_op(ncclRedOp_t op, ncclComm_t comm, PreMulSumOpInfo& out)
 
 // Checks that the operator is a builtin or a PreMulSum operator of this
 // communicator, as NCCL's ArgsCheck does (argcheck.cc).
+// Compute capability of a simulated device as major * 10 + minor, or 0.
+int device_compute_capability(int device) {
+    fake_gpu::GlobalState& state = fake_gpu::GlobalState::instance();
+    state.initialize();
+    if (device < 0 || device >= state.get_device_count()) {
+        return 0;
+    }
+    const fake_gpu::GpuProfile& profile = state.get_device(device).profile;
+    return profile.compute_major * 10 + profile.compute_minor;
+}
+
+bool is_fp8_datatype(ncclDataType_t datatype) {
+    return datatype == ncclFloat8e4m3 || datatype == ncclFloat8e5m2;
+}
+
+// NCCL 2.27.5 rejects every FP8 collective on a communicator whose lowest
+// compute capability is below 9.0 (enqueue.cc, taskAppend: "FP8 reduction
+// support begins with sm90 capable devices"); send and receive are not
+// checked. On an Ampere GPU it returns ncclInvalidArgument for all-reduce,
+// reduce, reduce-scatter, broadcast and all-gather, and accepts empty
+// collectives. ncclAlltoAll first appeared in NCCL 2.28, which exempts data
+// movement (all-gather, broadcast, all-to-all) from the check, so it is
+// exempt here. Real NCCL decides in proxy and passthrough modes.
+ncclResult_t check_fp8_collective(
+    ncclComm_t comm,
+    fake_gpu::distributed::CollectiveType type,
+    ncclDataType_t datatype) {
+    if (!comm || !is_fp8_datatype(datatype) ||
+        comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate ||
+        type == fake_gpu::distributed::CollectiveType::AllToAll ||
+        comm->min_compute_capability >= 90) {
+        return ncclSuccess;
+    }
+    return fail_with(
+        comm,
+        ncclInvalidArgument,
+        "FP8 reduction support begins with sm90 capable devices");
+}
+
 bool map_reduce_op(
     ncclRedOp_t op,
     ncclComm_t comm,
@@ -484,6 +536,8 @@ std::size_t nccl_type_size(ncclDataType_t datatype) {
     switch (datatype) {
         case ncclInt8:
         case ncclUint8:
+        case ncclFloat8e4m3:
+        case ncclFloat8e5m2:
             return 1;
         case ncclFloat16:
         case ncclBfloat16:
@@ -553,6 +607,22 @@ void scale_16bit_elements_inplace(
     }
 }
 
+// The FP8 PreOp converts to float16, multiplies there and stores FP8 with
+// __NV_SATFINITE (reduce_kernel.h, Apply_PreOp<FuncPreMulSum<__nv_fp8_*>>).
+void scale_fp8_elements_inplace(
+    void* data,
+    std::size_t count,
+    const unsigned char* scalar_bytes,
+    fake_gpu::distributed::Fp8Format format) {
+    unsigned char* bytes = static_cast<unsigned char*>(data);
+    const float scalar = fake_gpu::distributed::fp8_bits_to_float(scalar_bytes[0], format);
+    for (std::size_t index = 0; index < count; ++index) {
+        bytes[index] = fake_gpu::distributed::fp8_bits_from_float_via_float16(
+            fake_gpu::distributed::fp8_bits_to_float(bytes[index], format) * scalar,
+            format);
+    }
+}
+
 bool apply_premul_sum_inplace(
     void* data,
     std::size_t element_count,
@@ -564,6 +634,14 @@ bool apply_premul_sum_inplace(
     }
     const unsigned char* scalar = reduction.scalar_bytes.data();
     switch (datatype) {
+        case ncclFloat8e4m3:
+            scale_fp8_elements_inplace(
+                data, element_count, scalar, fake_gpu::distributed::Fp8Format::E4M3);
+            return true;
+        case ncclFloat8e5m2:
+            scale_fp8_elements_inplace(
+                data, element_count, scalar, fake_gpu::distributed::Fp8Format::E5M2);
+            return true;
         case ncclInt8:
             scale_elements_inplace<std::int8_t>(data, element_count, scalar);
             return true;
@@ -802,6 +880,18 @@ bool response_echoes(
            parse_u64_field(response, seqno_key, response_seqno) &&
            response_comm_id == comm.comm_id &&
            response_seqno == seqno;
+}
+
+// A split or shrink child's lowest compute capability is taken over its own
+// members, as NCCL computes minCompCap for every new communicator.
+int child_min_compute_capability(
+    const fake_gpu::distributed::CoordinatorResponse& response,
+    const ncclComm& parent) {
+    int minimum = 0;
+    if (parse_int_field(response, "new_min_compute_capability", minimum) && minimum > 0) {
+        return minimum;
+    }
+    return device_compute_capability(parent.device);
 }
 
 std::string make_staging_name(
@@ -1410,6 +1500,11 @@ ncclResult_t buffer_group_allreduce(
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
     }
+    const ncclResult_t fp8_result = check_fp8_collective(
+        comm, fake_gpu::distributed::CollectiveType::AllReduce, datatype);
+    if (fp8_result != ncclSuccess) {
+        return fp8_result;
+    }
     ResolvedReduction reduction;
     const ncclResult_t reduction_result =
         resolve_reduction(comm, op, datatype, stream, reduction);
@@ -1464,6 +1559,11 @@ ncclResult_t buffer_group_reduce(
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+    const ncclResult_t fp8_result = check_fp8_collective(
+        comm, fake_gpu::distributed::CollectiveType::Reduce, datatype);
+    if (fp8_result != ncclSuccess) {
+        return fp8_result;
     }
     ResolvedReduction reduction;
     const ncclResult_t reduction_result =
@@ -1524,6 +1624,11 @@ ncclResult_t buffer_group_broadcast(
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
     }
+    const ncclResult_t fp8_result = check_fp8_collective(
+        comm, fake_gpu::distributed::CollectiveType::Broadcast, datatype);
+    if (fp8_result != ncclSuccess) {
+        return fp8_result;
+    }
 
     GroupOperation call;
     call.kind = GroupOperationKind::Collective;
@@ -1565,6 +1670,11 @@ ncclResult_t buffer_group_allgather(
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+    const ncclResult_t fp8_result = check_fp8_collective(
+        comm, fake_gpu::distributed::CollectiveType::AllGather, datatype);
+    if (fp8_result != ncclSuccess) {
+        return fp8_result;
     }
 
     GroupOperation call;
@@ -1608,6 +1718,11 @@ ncclResult_t buffer_group_reducescatter(
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+    const ncclResult_t fp8_result = check_fp8_collective(
+        comm, fake_gpu::distributed::CollectiveType::ReduceScatter, datatype);
+    if (fp8_result != ncclSuccess) {
+        return fp8_result;
     }
     ResolvedReduction reduction;
     const ncclResult_t reduction_result =
@@ -1908,6 +2023,10 @@ ncclResult_t submit_collective(
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+    const ncclResult_t fp8_result = check_fp8_collective(comm, collective_type, datatype);
+    if (fp8_result != ncclSuccess) {
+        return fp8_result;
     }
 
     fake_gpu::distributed::DistributedConfig config;
@@ -2767,6 +2886,14 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
         return ncclInvalidUsage;
     }
 
+    // The device is bound before the ranks meet so that every rank learns
+    // the communicator's lowest compute capability, as NCCL's minCompCap.
+    const int device = g_init_device_override >= 0
+        ? g_init_device_override
+        : infer_device_for_rank(rank);
+    const int compute_capability = device_compute_capability(device);
+    int min_compute_capability = compute_capability;
+
     int coordinator_comm_id = -1;
     if (requires_coordinator(config.mode)) {
         std::ostringstream request;
@@ -2774,6 +2901,7 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
                 << " unique_id=" << unique_id
                 << " world_size=" << nranks
                 << " rank=" << rank
+                << " compute_capability=" << compute_capability
                 << " timeout_ms=" << coordinator_timeout_ms();
 
         fake_gpu::distributed::CoordinatorResponse response;
@@ -2782,6 +2910,11 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
         }
         if (!response.ok) {
             return fail_with_response(nullptr, response);
+        }
+        int reported_minimum = 0;
+        if (parse_int_field(response, "min_compute_capability", reported_minimum) &&
+            reported_minimum > 0) {
+            min_compute_capability = reported_minimum;
         }
         if (!parse_int_field(response, "comm_id", coordinator_comm_id) || coordinator_comm_id <= 0) {
             return fail_with(nullptr, ncclInternalError, "coordinator did not return a valid comm_id");
@@ -2824,7 +2957,8 @@ ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks, ncclUniqueId comm_id
     state->world_size = nranks;
     state->rank = rank;
     state->global_rank = rank;
-    state->device = infer_device_for_rank(rank);
+    state->device = device;
+    state->min_compute_capability = min_compute_capability;
     state->real_comm = reinterpret_cast<void*>(real_comm);
     *comm = state;
     clear_last_error(*comm);
@@ -2882,6 +3016,7 @@ ncclResult_t ncclCommInitAll(ncclComm_t* comm, int ndev, const int* devlist) {
 
     for (int rank = 0; rank < ndev; ++rank) {
         threads.emplace_back([&, rank]() {
+            g_init_device_override = devices[static_cast<std::size_t>(rank)];
             results[static_cast<std::size_t>(rank)] =
                 ncclCommInitRank(&local_comms[static_cast<std::size_t>(rank)], ndev, unique_id, rank);
         });
@@ -3042,6 +3177,7 @@ ncclResult_t ncclCommSplit(
         child->rank = new_rank;
         child->global_rank = comm->global_rank;
         child->device = comm->device;
+        child->min_compute_capability = child_min_compute_capability(response, *comm);
         *newcomm = child;
         clear_last_error(*newcomm);
     }
@@ -3187,6 +3323,7 @@ ncclResult_t ncclCommShrink(
     child->rank = new_rank;
     child->global_rank = comm->global_rank;
     child->device = comm->device;
+    child->min_compute_capability = child_min_compute_capability(response, *comm);
     *newcomm = child;
     comm->next_seqno++;
     clear_last_error(*newcomm);
@@ -3518,6 +3655,11 @@ ncclResult_t ncclReduce(
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
     }
+    const ncclResult_t fp8_result = check_fp8_collective(
+        comm, fake_gpu::distributed::CollectiveType::Reduce, datatype);
+    if (fp8_result != ncclSuccess) {
+        return fp8_result;
+    }
     ResolvedReduction reduction;
     const ncclResult_t reduction_result =
         resolve_reduction(comm, op, datatype, stream, reduction);
@@ -3677,6 +3819,11 @@ ncclResult_t ncclAllReduce(
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
     }
+    const ncclResult_t fp8_result = check_fp8_collective(
+        comm, fake_gpu::distributed::CollectiveType::AllReduce, datatype);
+    if (fp8_result != ncclSuccess) {
+        return fp8_result;
+    }
     ResolvedReduction reduction;
     const ncclResult_t reduction_result =
         resolve_reduction(comm, op, datatype, stream, reduction);
@@ -3726,6 +3873,11 @@ ncclResult_t ncclReduceScatter(
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+    const ncclResult_t fp8_result = check_fp8_collective(
+        comm, fake_gpu::distributed::CollectiveType::ReduceScatter, datatype);
+    if (fp8_result != ncclSuccess) {
+        return fp8_result;
     }
     ResolvedReduction reduction;
     const ncclResult_t reduction_result =

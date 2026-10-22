@@ -184,6 +184,45 @@ void check_floating_average_premultiplies() {
             "int8 ncclAvg is not a wrapped sum followed by division");
 }
 
+std::vector<char> fp8(const std::vector<unsigned char>& values) {
+    return std::vector<char>(values.begin(), values.end());
+}
+
+// NCCL's FP8 reductions compute in float16 and store FP8 after every step
+// (reduce_kernel.h), saturating to the largest finite value. ncclAvg is
+// PreMulSum by the FP8 value of 1/n (enqueue.cc, hostToDevRedOp).
+void check_fp8_reductions() {
+    using Op = CollectiveReduceOp;
+    const auto e4m3 = CollectiveDataType::Float8E4M3;
+    const auto e5m2 = CollectiveDataType::Float8E5M2;
+    // 1 + 2 + 4 = 7. 16 + 1 rounds to 16 (ties to even at a spacing of 2),
+    // and so does adding the second 1, where a single rounding of 18 would not.
+    require(allreduce_bytes(e4m3, Op::Sum, {fp8({0x38, 0x58}), fp8({0x40, 0x38}), fp8({0x48, 0x38})}) ==
+                fp8({0x4e, 0x58}),
+            "float8_e4m3 sum");
+    // 448 + 448 saturates to 448 and -2 * 2 * 1 = -4.
+    require(allreduce_bytes(e4m3, Op::Sum, {fp8({0x7e}), fp8({0x7e})}) == fp8({0x7e}),
+            "float8_e4m3 saturation");
+    require(allreduce_bytes(e4m3, Op::Prod, {fp8({0xc0}), fp8({0x40}), fp8({0x38})}) == fp8({0xc8}),
+            "float8_e4m3 product");
+    require(allreduce_bytes(e4m3, Op::Max, {fp8({0x38}), fp8({0xc0}), fp8({0x48})}) == fp8({0x48}),
+            "float8_e4m3 max");
+    // (1 + 3) / 2 premultiplied by 0.5: 0.5 + 1.5 = 2.
+    require(allreduce_bytes(e4m3, Op::Avg, {fp8({0x38}), fp8({0x44})}) == fp8({0x40}),
+            "float8_e4m3 average");
+    // e5m2: 1 + 2 = 3; 57344 + 57344 overflows float16 and saturates to 57344.
+    require(allreduce_bytes(e5m2, Op::Sum, {fp8({0x3c, 0x7b}), fp8({0x40, 0x7b})}) == fp8({0x42, 0x7b}),
+            "float8_e5m2 sum");
+    require(allreduce_bytes(e5m2, Op::Avg, {fp8({0x3c}), fp8({0x40})}) == fp8({0x3e}),
+            "float8_e5m2 average");
+    require(collective_data_type_size(e4m3) == 1 && collective_data_type_size(e5m2) == 1,
+            "FP8 element size");
+    CollectiveDataType parsed = CollectiveDataType::Float32;
+    require(parse_collective_data_type("float8_e4m3", parsed) && parsed == e4m3 &&
+                parse_collective_data_type("float8_e5m2", parsed) && parsed == e5m2,
+            "FP8 dtype names");
+}
+
 }  // namespace
 
 int main() {
@@ -191,6 +230,7 @@ int main() {
         check_transport(BufferTransport::SocketPayload);
         check_transport(BufferTransport::SharedMemory);
         check_floating_average_premultiplies();
+        check_fp8_reductions();
         std::cout << "PASS: 28 collective cases and 28 size errors across socket/shared memory\n";
         return 0;
     } catch (const std::exception& error) {
