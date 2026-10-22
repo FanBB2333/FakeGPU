@@ -33,6 +33,20 @@
 
 ### Changed
 
+- Native simulate mode applies `CUDA_VISIBLE_DEVICES` like the CUDA driver:
+  CUDA ordinals follow the mask (indices, `GPU-` UUIDs or unique prefixes,
+  one `MIG-` id; the list stops at the first unknown entry), while NVML and
+  `nvidia-smi` keep every GPU under its physical index. With no usable GPU
+  (`""`, `-1`) `cuInit` returns `CUDA_ERROR_NO_DEVICE` and
+  `cudaGetDeviceCount` `cudaErrorNoDevice`; a GPU listed twice gives
+  `CUDA_ERROR_INVALID_DEVICE`. Breaking: an empty mask now hides the
+  simulated GPUs too. `CUDA_DEVICE_ORDER=PCI_BUS_ID` is honored; the default
+  `FASTEST_FIRST` heuristic is not modeled (PCI order).
+- One synthetic identity per simulated GPU in native and Python code: the
+  native UUID is the same `uuid5` value fakegpu-smi and the machine daemon
+  use, so a native process and a FakeCUDA process on the same GPU no longer
+  show as two GPUs. MIG UUIDs use the `MIG-` + 8-4-4-4-12 form, and native
+  PCI bus ids are uppercase (`00000000:0A:00.0`) like NVML's.
 - `fakegpu nvidia-smi` CSV output separates fields with `, ` like
   `nvidia-smi` and quotes only cells that contain a comma, quote, or newline.
 - Readings that are modeled say so: console chart titles read `memory
@@ -58,6 +72,14 @@
 
 ### Fixed
 
+- `cuDeviceGetUuid` returns the bytes of the GPU's NVML UUID instead of its
+  ordinal. `cudaDeviceGetPCIBusId` returns the device's bus id instead of
+  `0000:00:00.0`, in the driver's `%04X:%02X:%02X.0` form shared with
+  `cuDeviceGetPCIBusId` and NVML's `busIdLegacy`; a short buffer gets error 1.
+  `cuDeviceGetByPCIBusId` and `cudaDeviceGetByPCIBusId` find the device by
+  any spelling the driver accepts instead of always returning device 0.
+- The `PCI_DEVICE_ID` device attribute (`pciDeviceID`) is the PCI slot
+  number, 0, not the product id; `PCI_DOMAIN_ID` follows the bus id.
 - Multi-process distributed training under FakeCUDA. Processes launched by
   `torchrun`, `accelerate launch` or `mp.spawn` take their rank and world size
   from the launcher and join a real gloo group, so collectives carry real

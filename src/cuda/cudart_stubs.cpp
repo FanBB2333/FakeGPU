@@ -135,6 +135,24 @@ static cudaError_t setLastError(cudaError_t error) {
     return error;
 }
 
+// The error every runtime call that initializes CUDA returns when
+// CUDA_VISIBLE_DEVICES leaves no usable device. Measured on the real runtime:
+// "", "-1" or "7,0" give cudaErrorNoDevice; a repeated device ("0,0") gives
+// cudaErrorInvalidDevice.
+static cudaError_t runtimeInitError() {
+    fake_gpu::GlobalState& state = fake_gpu::GlobalState::instance();
+    state.initialize();
+    switch (state.cuda_visibility()) {
+        case fake_gpu::GlobalState::CudaVisibility::NoDevice:
+            return cudaErrorNoDevice;
+        case fake_gpu::GlobalState::CudaVisibility::InvalidDevice:
+            return cudaErrorInvalidDevice;
+        case fake_gpu::GlobalState::CudaVisibility::Visible:
+        default:
+            return cudaSuccess;
+    }
+}
+
 // Helper: Convert CUresult to cudaError_t
 static cudaError_t convertDriverError(CUresult result) {
     switch (result) {
@@ -146,6 +164,8 @@ static cudaError_t convertDriverError(CUresult result) {
             return cudaErrorMemoryAllocation;
         case CUDA_ERROR_INVALID_DEVICE:
             return cudaErrorInvalidDevice;
+        case CUDA_ERROR_NO_DEVICE:
+            return cudaErrorNoDevice;
         case CUDA_ERROR_NOT_INITIALIZED:
             return cudaErrorInitializationError;
         case CUDA_ERROR_NOT_READY:
@@ -529,6 +549,9 @@ extern "C" {
 
 cudaError_t cudaGetDeviceCount(int *count) {
     if (!count) return setLastError(cudaErrorInvalidValue);
+    // With no visible device the real runtime returns cudaErrorNoDevice and
+    // leaves *count unwritten.
+    if (const cudaError_t error = runtimeInitError(); error != cudaSuccess) return setLastError(error);
 
     CUresult result = cuDeviceGetCount(count);
     last_error = convertDriverError(result);
@@ -537,6 +560,7 @@ cudaError_t cudaGetDeviceCount(int *count) {
 }
 
 cudaError_t cudaSetDevice(int device) {
+    if (const cudaError_t error = runtimeInitError(); error != cudaSuccess) return setLastError(error);
     // Get device handle
     CUdevice cuDevice;
     CUresult result = cuDeviceGet(&cuDevice, device);
@@ -556,6 +580,7 @@ cudaError_t cudaSetDevice(int device) {
 
 cudaError_t cudaGetDevice(int *device) {
     if (!device) return setLastError(cudaErrorInvalidValue);
+    if (const cudaError_t error = runtimeInitError(); error != cudaSuccess) return setLastError(error);
 
     // Get current context
     CUcontext context;
@@ -1002,7 +1027,9 @@ static bool modeled_peer_access(int device, int peerDevice, cudaError_t& error) 
         return false;
     }
     error = cudaSuccess;
-    return state.snapshot_device_topology().can_access_peer(device, peerDevice);
+    // The topology is indexed by physical device, not CUDA ordinal.
+    return state.snapshot_device_topology().can_access_peer(
+        state.physical_index(device), state.physical_index(peerDevice));
 }
 
 cudaError_t cudaDeviceCanAccessPeer(int *canAccessPeer, int device, int peerDevice) {
@@ -1903,19 +1930,22 @@ cudaError_t cudaFuncSetAttribute(const void *func, int attr, int value) {
 // Launch Bounds
 // ============================================================================
 
+// Same identity as the driver API and NVML's busIdLegacy (four-digit domain,
+// uppercase hex, as the real runtime prints it); lookups accept the spellings
+// cuDeviceGetByPCIBusId does.
 cudaError_t cudaDeviceGetByPCIBusId(int *device, const char *pciBusId) {
     if (!device || !pciBusId) return setLastError(cudaErrorInvalidValue);
-
-    // Simplified: always return device 0
-    *device = 0;
-    return setLastError(cudaSuccess);
+    if (const cudaError_t error = runtimeInitError(); error != cudaSuccess) return setLastError(error);
+    CUdevice found = 0;
+    const CUresult result = cuDeviceGetByPCIBusId(&found, pciBusId);
+    if (result == CUDA_SUCCESS) *device = found;
+    return setLastError(convertDriverError(result));
 }
 
 cudaError_t cudaDeviceGetPCIBusId(char *pciBusId, int len, int device) {
-    if (!pciBusId || len < 13) return setLastError(cudaErrorInvalidValue);
-
-    snprintf(pciBusId, len, "0000:00:00.0");
-    return setLastError(cudaSuccess);
+    if (!pciBusId || len <= 0) return setLastError(cudaErrorInvalidValue);
+    if (const cudaError_t error = runtimeInitError(); error != cudaSuccess) return setLastError(error);
+    return setLastError(convertDriverError(cuDeviceGetPCIBusId(pciBusId, len, device)));
 }
 
 // ============================================================================

@@ -290,7 +290,7 @@ nvmlReturn_t nvmlShutdown() {
 nvmlReturn_t nvmlDeviceGetCount(unsigned int *deviceCount) {
     if (!deviceCount) return NVML_ERROR_INVALID_ARGUMENT;
     if (nvml_bridge::enabled()) return nvml_bridge::count(deviceCount);
-    *deviceCount = GlobalState::instance().get_device_count();
+    *deviceCount = GlobalState::instance().get_physical_device_count();
     FGPU_LOG("[FakeNVML] nvmlDeviceGetCount returning %d\n", *deviceCount);
     return NVML_SUCCESS;
 }
@@ -298,11 +298,11 @@ nvmlReturn_t nvmlDeviceGetCount(unsigned int *deviceCount) {
 nvmlReturn_t nvmlDeviceGetHandleByIndex(unsigned int index, nvmlDevice_t *device) {
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     if (nvml_bridge::enabled()) return nvml_bridge::handle(index, device);
-    if (index >= GlobalState::instance().get_device_count()) {
+    if (index >= GlobalState::instance().get_physical_device_count()) {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     // Just cast index to device pointer for simplicity, or use address of Device object
-    Device& dev = GlobalState::instance().get_device(index);
+    Device& dev = GlobalState::instance().get_physical_device(index);
     *device = (nvmlDevice_t)&dev;
     FGPU_LOG("[FakeNVML] nvmlDeviceGetHandleByIndex(%d) returning %p\n", index, *device);
     return NVML_SUCCESS;
@@ -1101,7 +1101,7 @@ nvmlReturn_t nvmlDeviceGetNvLinkRemotePciInfo_v2(
         return NVML_SUCCESS;
     }
     Device& remote =
-        GlobalState::instance().get_device(peer.peer_index);
+        GlobalState::instance().get_physical_device(peer.peer_index);
     fill_pci_info(remote, *pci);
     return NVML_SUCCESS;
 }
@@ -1301,9 +1301,9 @@ nvmlReturn_t nvmlDeviceGetHandleByUUID(const char *uuid, nvmlDevice_t *device) {
     if (!uuid || !device) return NVML_ERROR_INVALID_ARGUMENT;
     if (nvml_bridge::enabled()) return nvml_bridge::lookup(uuid, true, device);
     GlobalState& state = GlobalState::instance();
-    const int count = state.get_device_count();
+    const int count = state.get_physical_device_count();
     for (int index = 0; index < count; ++index) {
-        Device& parent = state.get_device(index);
+        Device& parent = state.get_physical_device(index);
         if (parent.uuid == uuid) {
             *device = (nvmlDevice_t)&parent;
             return NVML_SUCCESS;
@@ -1329,9 +1329,9 @@ nvmlReturn_t nvmlDeviceGetHandleByPciBusId(const char *pciBusId, nvmlDevice_t *d
     if (!pciBusId || !device) return NVML_ERROR_INVALID_ARGUMENT;
     if (nvml_bridge::enabled()) return nvml_bridge::lookup(pciBusId, false, device);
     GlobalState& state = GlobalState::instance();
-    const int count = state.get_device_count();
+    const int count = state.get_physical_device_count();
     for (int index = 0; index < count; ++index) {
-        Device& dev = state.get_device(index);
+        Device& dev = state.get_physical_device(index);
         if (nvml_pci_bus_id_matches(dev.pci_bus_id.c_str(), pciBusId)) {
             *device = (nvmlDevice_t)&dev;
             return NVML_SUCCESS;

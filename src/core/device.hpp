@@ -9,7 +9,7 @@ namespace fake_gpu {
 
 constexpr std::size_t kMaximumModeledNvLinksPerDevice = 18;
 // Remote PCI bus ID reported for NVLink ports that lead into an NVSwitch.
-constexpr const char* kNvSwitchPciBusId = "00000000:c0:00.0";
+constexpr const char* kNvSwitchPciBusId = "00000000:C0:00.0";
 constexpr std::size_t kMaximumModeledFaultTypes = 128;
 constexpr uint64_t kMaximumModeledFaultCount = 1'000'000'000;
 constexpr std::size_t kMaximumModeledMigSlicesPerDevice = 8;
@@ -119,6 +119,45 @@ struct ModeledMigLayout {
     std::string error;
     std::vector<ModeledMigInstance> instances;
 };
+
+// Synthetic device identity. fakegpu/_smi_state.py derives the same strings,
+// so a GPU keeps one UUID and one bus id in CUDA, NVML, nvidia-smi and torch.
+//
+// GPU UUID: "GPU-" + uuid5(NAMESPACE_DNS, "fakegpu:<host>:<index>:<profile>"),
+// lowercase 8-4-4-4-12 like nvmlDeviceGetUUID.
+std::string synthetic_gpu_uuid(
+    const std::string& host,
+    int index,
+    const std::string& profile_id);
+// MIG UUID in the modern nvidia-smi form "MIG-" + 8-4-4-4-12:
+// uuid5(NAMESPACE_DNS, "fakegpu:mig:<parent uuid>:<gi>:<ci>").
+std::string synthetic_mig_uuid(
+    const std::string& parent_uuid,
+    unsigned int gpu_instance_id,
+    unsigned int compute_instance_id);
+// NVML_DEVICE_PCI_BUS_ID_FMT "%08X:%02X:%02X.0": bus index % 255 + 1 on
+// domain index / 255, device 0.
+std::string synthetic_pci_bus_id(int index);
+// The 16 bytes of a "GPU-"/"MIG-" 8-4-4-4-12 UUID, as cuDeviceGetUuid returns
+// them for the same device (byte i = hex digits 2i, 2i+1 after the prefix).
+bool uuid_string_bytes(const std::string& uuid, unsigned char bytes[16]);
+// gethostname(), or "localhost"; the host part of the synthetic UUIDs.
+const std::string& local_hostname();
+
+// A PCI address as CUDA and NVML spell it, all fields hexadecimal.
+struct PciAddress {
+    unsigned int domain = 0;
+    unsigned int bus = 0;
+    unsigned int device = 0;
+    unsigned int function = 0;
+};
+// Accepts the forms cuDeviceGetByPCIBusId documents (cuda.h):
+// domain:bus:device.function, domain:bus:device and bus:device.function,
+// in either case and with any domain width.
+bool parse_pci_address(const std::string& text, PciAddress& address);
+// cuDeviceGetPCIBusId / cudaDeviceGetPCIBusId: "%04X:%02X:%02X.%X" (the
+// driver prints uppercase hex with a four-digit domain).
+std::string cuda_pci_bus_id(const PciAddress& address);
 
 struct Device {
     int index;

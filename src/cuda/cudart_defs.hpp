@@ -20,6 +20,7 @@ typedef enum cudaError_enum {
     cudaErrorInvalidSymbol = 13,
     cudaErrorNotReady = 600,
     cudaErrorNotSupported = 801,
+    cudaErrorNoDevice = 100,
     cudaErrorInvalidDevice = 101,
     cudaErrorInvalidDeviceFunction = 98,
     cudaErrorInvalidKernelImage = 200,

@@ -48,11 +48,30 @@ GEMM/Lt 不支持的 dtype、布局和指针模式，以及跳过 CPU 计算的�
 python3 -m fakegpu capabilities --source-root . --build-dir build --strict
 ```
 
+## 设备可见性
+
+simulate 模式下，原生库按 CUDA driver 的规则处理 `CUDA_VISIBLE_DEVICES`：CUDA
+ordinal 跟随这个掩码，NVML 和 `nvidia-smi` 仍按物理索引列出所有 GPU。每一项可以是
+索引、`nvidia-smi -L` 显示的 `GPU-` UUID（或足以唯一匹配一块 GPU 的前缀），也可以是
+单个 `MIG-` id。列表在第一个找不到 GPU 的项处结束，所以空字符串或 `-1` 会隐藏所有
+GPU；同一块 GPU 出现两次时，`cuInit` 返回 `CUDA_ERROR_INVALID_DEVICE`。
+`fakegpu.init(runtime="fakecuda")` 对模拟的 GPU 应用同样的掩码；掩码隐藏全部 GPU
+时不再 patch `torch.cuda`。
+
+`CUDA_DEVICE_ORDER=PCI_BUS_ID` 按 PCI 总线顺序枚举 GPU。CUDA 的默认值
+`FASTEST_FIRST` 使用 NVIDIA 未公开的启发式规则，FakeGPU 不建模它，同样按 PCI 总线
+顺序枚举。在混插不同 GPU 的真实机器上，设置 `CUDA_DEVICE_ORDER=PCI_BUS_ID` 可以得到
+相同顺序。
+
+每块模拟 GPU 只有一个 UUID 和一个 PCI bus id，CUDA（`cuDeviceGetUuid`、
+`cudaDeviceGetPCIBusId`、`cuDeviceGetByPCIBusId`）、NVML、`nvidia-smi` 和
+`torch.cuda.get_device_properties()` 报告的都是它们。
+
 ## Hybrid 模式
 
 原生 hybrid 模式下，CUDA runtime 和 cuBLAS 保持原生。设置了
 `CUDA_VISIBLE_DEVICES`（按索引或 UUID）时会保留物理 NVML 发现，让框架能正确解析
-这个选择。否则使用建模的 NVML 设备清单。子环境切换模式时，`fakegpu.env()` 会移除
+这个选择，掩码交给真实 driver 处理。否则使用建模的 NVML 设备清单。子环境切换模式时，`fakegpu.env()` 会移除
 残留的 FakeGPU preload。
 
 ## macOS

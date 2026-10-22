@@ -50,12 +50,33 @@ the capability manifest:
 python3 -m fakegpu capabilities --source-root . --build-dir build --strict
 ```
 
+## Device visibility
+
+In simulate mode the native libraries apply `CUDA_VISIBLE_DEVICES` the way
+the CUDA driver does. CUDA ordinals follow the mask, while NVML and
+`nvidia-smi` keep listing every GPU under its physical index. An entry is an
+index, a `GPU-` UUID as `nvidia-smi -L` prints it (or enough of its beginning
+to match one GPU), or a single `MIG-` id. The list stops at the first entry
+that names no GPU, so an empty mask or `-1` hides every GPU; a GPU listed
+twice makes `cuInit` fail with `CUDA_ERROR_INVALID_DEVICE`.
+`fakegpu.init(runtime="fakecuda")` applies the same mask to the GPUs it
+simulates and leaves `torch.cuda` unpatched when the mask hides all of them.
+
+`CUDA_DEVICE_ORDER=PCI_BUS_ID` enumerates GPUs in PCI bus order. The CUDA
+default, `FASTEST_FIRST`, uses a heuristic NVIDIA does not publish; FakeGPU
+does not model it and enumerates in PCI bus order as well. On a real machine
+with different GPUs, set `CUDA_DEVICE_ORDER=PCI_BUS_ID` to get the same order.
+
+Each simulated GPU has one UUID and one PCI bus id. CUDA (`cuDeviceGetUuid`,
+`cudaDeviceGetPCIBusId`, `cuDeviceGetByPCIBusId`), NVML, `nvidia-smi` and
+`torch.cuda.get_device_properties()` all report them.
+
 ## Hybrid mode
 
 In native hybrid mode, the CUDA runtime and cuBLAS stay native. If
 `CUDA_VISIBLE_DEVICES` is set (by index or UUID), physical NVML discovery is
-kept so frameworks resolve that selection. Otherwise the modeled NVML
-inventory is used. `fakegpu.env()` removes stale FakeGPU preloads when a child
+kept so frameworks resolve that selection, and the real driver applies the
+mask. Otherwise the modeled NVML inventory is used. `fakegpu.env()` removes stale FakeGPU preloads when a child
 environment switches modes.
 
 ## macOS

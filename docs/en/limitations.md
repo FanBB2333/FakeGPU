@@ -42,6 +42,10 @@
 - Modeled fault events only appear in reports. They do not change CUDA
   execution and do not represent real ECC or Xid data.
 - Hybrid and passthrough modes require a compatible physical CUDA stack.
+- `CUDA_DEVICE_ORDER=FASTEST_FIRST`, the CUDA default, is not modeled:
+  simulated GPUs enumerate in PCI bus order, as with `PCI_BUS_ID`. FakeCUDA
+  does not expose MIG instances as CUDA devices, so a `MIG-` entry in
+  `CUDA_VISIBLE_DEVICES` ends the list there.
 - macOS System Integrity Protection can remove `DYLD_*` variables from system
   binaries. Use a Homebrew, conda, or pyenv Python for native interception.
 

@@ -32,6 +32,9 @@
   [`fakegpu run` 的限制](commands.md#limits-of-fakegpu-run)。
 - 建模故障事件只出現在報告中，不會改變 CUDA 執行，也不代表真實的 ECC/Xid 資料。
 - Hybrid 與 passthrough 模式需要相容的實體 CUDA 環境。
+- 不建模 CUDA 預設的 `CUDA_DEVICE_ORDER=FASTEST_FIRST`：模擬 GPU 與 `PCI_BUS_ID`
+  一樣依 PCI 匯流排順序列舉。FakeCUDA 不把 MIG 實例當作 CUDA 裝置提供，
+  `CUDA_VISIBLE_DEVICES` 中的 `MIG-` 項目會讓清單在該處結束。
 - macOS System Integrity Protection 可能移除系統程式的 `DYLD_*` 環境變數。
   原生攔截建議使用 Homebrew、conda 或 pyenv Python。
 

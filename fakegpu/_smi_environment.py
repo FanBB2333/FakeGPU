@@ -11,6 +11,7 @@ file and the readers normalize back out.
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -53,14 +54,18 @@ def _synthetic_mig_uuid(
     gpu_instance_id: int,
     compute_instance_id: int,
 ) -> str:
-    suffix = (
-        parent_uuid[4:]
-        if parent_uuid.startswith("GPU-")
-        else parent_uuid
+    """A MIG instance UUID in the modern ``MIG-`` + 8-4-4-4-12 form.
+
+    nvidia-smi -L prints MIG devices as ``(UUID: MIG-xxxxxxxx-xxxx-...)``; the
+    native core derives the same value (src/core/device.cpp
+    synthetic_mig_uuid).
+    """
+
+    identity = uuid.uuid5(
+        uuid.NAMESPACE_DNS,
+        f"fakegpu:mig:{parent_uuid}:{gpu_instance_id}:{compute_instance_id}",
     )
-    return (
-        f"MIG-{suffix}/{gpu_instance_id}/{compute_instance_id}"
-    )
+    return f"MIG-{identity}"
 
 
 def _modeled_device_topology(
@@ -124,7 +129,7 @@ def _modeled_device_topology(
     }
 
 
-NVSWITCH_PCI_BUS_ID = "00000000:c0:00.0"
+NVSWITCH_PCI_BUS_ID = "00000000:C0:00.0"
 
 
 def device_topology_record(
