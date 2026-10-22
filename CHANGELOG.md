@@ -88,6 +88,9 @@
   legend: PyTorch's inductor looks for `NV` before `Legend`, so a host name
   or configuration error containing `NV` read as an NVLink. GPUs of several
   hosts share one matrix, labeled `GPU0#1`, `GPU0#2`.
+- `fakegpu metrics` leaves out a sample whose value is unknown instead of
+  exporting 0: an idle machine GPU or a state without a timestamp no longer
+  reports a state age of 0 seconds, which read as fresh.
 
 ### Fixed
 

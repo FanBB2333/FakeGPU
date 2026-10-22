@@ -1000,6 +1000,10 @@ def _metric_family(
     output.append(f"# HELP {name} {help_text}")
     output.append(f"# TYPE {name} gauge")
     for labels, value in samples:
+        if value is None:
+            # An unknown value is left out, not exported as 0: an age of 0
+            # would read as fresh state.
+            continue
         suffix = _prometheus_labels(labels)
         output.append(f"{name}{suffix} {_format_number(value)}")
 

@@ -338,3 +338,40 @@ def test_metrics_cli_rejects_missing_source_and_invalid_limits() -> None:
         main(["--state", "state.json", "--max-process-series", "257"])
     with pytest.raises(SystemExit):
         main(["--state", "state.json", "--serve", "--json"])
+
+
+def test_metrics_omit_samples_whose_value_is_unknown() -> None:
+    # A layout-only device (the background machine's idle GPU) and a
+    # runtime state without a timestamp have no age. Prometheus convention
+    # leaves an unknown value out; exporting 0 would read as fresh state.
+    inventory = build_inventory(
+        [
+            {
+                "hostname": "node",
+                "layout_only": True,
+                "devices": [
+                    {
+                        "index": 0,
+                        "name": "Fake NVIDIA A100-SXM4-80GB",
+                        "profile_id": "a100",
+                        "total_memory": 80 * 2**30,
+                    }
+                ],
+            },
+            {"hostname": "node", "pid": 7, "running": True, "devices": []},
+        ]
+    )
+    snapshot = build_metrics_snapshot(inventory)
+    assert snapshot["devices"][0]["age_seconds"] is None
+    assert snapshot["runtimes"][0]["age_seconds"] is None
+
+    rendered = render_prometheus(snapshot)
+    samples = [line for line in rendered.splitlines() if not line.startswith("#")]
+    assert "# TYPE fakegpu_device_state_age_seconds gauge" in rendered
+    assert not any(
+        line.startswith("fakegpu_device_state_age_seconds") for line in samples
+    )
+    assert not any(
+        line.startswith("fakegpu_runtime_state_age_seconds") for line in samples
+    )
+    assert any(line.startswith("fakegpu_device_memory_bytes{") for line in samples)
