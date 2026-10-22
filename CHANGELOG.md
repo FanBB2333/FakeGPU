@@ -396,6 +396,11 @@
   Accelerate's `Accelerator().device` and transformers'
   `TrainingArguments.device` chose MPS before CUDA, so single-process
   training ran on MPS and bypassed the simulated GPUs.
+- Checkpoint inspection reads every dtype a safetensors 0.8 header accepts:
+  `F8_E4M3FNUZ`, `F8_E5M2FNUZ` and `F8_E8M0` (1 byte), `C64` (8 bytes), and
+  the packed `F4` (2 elements per byte) and `F6_E2M3`/`F6_E3M2` (4 elements
+  per 3 bytes). These checkpoints were rejected before; low-precision ones
+  count as quantized storage, and FP4 storage declares 4-bit weights.
 
 ## v1.6.0 - 2026-10-17
 
