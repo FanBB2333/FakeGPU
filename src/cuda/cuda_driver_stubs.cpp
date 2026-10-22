@@ -916,8 +916,10 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
         case CU_DEVICE_ATTRIBUTE_CONCURRENT_KERNELS:
             *pi = 1;
             break;
+        // Per-SKU attributes: profile values or their class defaults
+        // (src/core/gpu_profile.cpp, resolve_device_attributes).
         case CU_DEVICE_ATTRIBUTE_ECC_ENABLED:
-            *pi = 1;
+            *pi = device.profile.ecc_enabled;
             break;
         // The PCI address of the bus id NVML and the SMI state report. The
         // "device ID" is the slot number in domain:bus:device.function (cuda.h:
@@ -945,7 +947,7 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = device.profile.max_threads_per_multiprocessor;
             break;
         case CU_DEVICE_ATTRIBUTE_ASYNC_ENGINE_COUNT:
-            *pi = 2;
+            *pi = device.profile.async_engine_count;
             break;
         case CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING:
             *pi = 1;
@@ -984,10 +986,10 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = 0;
             break;
         case CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO:
-            *pi = 2;
+            *pi = device.profile.single_to_double_precision_perf_ratio;
             break;
         case CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS:
-            *pi = 1;
+            *pi = device.profile.pageable_memory_access;
             break;
         case CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS:
             *pi = 1;
@@ -1008,7 +1010,7 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = device.profile.shared_mem_per_block_optin;
             break;
         case CU_DEVICE_ATTRIBUTE_CAN_FLUSH_REMOTE_WRITES:
-            *pi = 1;
+            *pi = device.profile.can_flush_remote_writes;
             break;
         case CU_DEVICE_ATTRIBUTE_HOST_REGISTER_SUPPORTED:
             *pi = 1;
@@ -1038,16 +1040,16 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = 1;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_PERSISTING_L2_CACHE_SIZE:
-            *pi = device.profile.l2_cache_bytes;
+            *pi = device.profile.max_persisting_l2_cache_bytes;
             break;
         case CU_DEVICE_ATTRIBUTE_MAX_ACCESS_POLICY_WINDOW_SIZE:
-            *pi = 134217728;
+            *pi = device.profile.max_access_policy_window_bytes;
             break;
         case CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED:
             *pi = 1;
             break;
         case CU_DEVICE_ATTRIBUTE_RESERVED_SHARED_MEMORY_PER_BLOCK:
-            *pi = 0;
+            *pi = device.profile.reserved_shared_mem_per_block;
             break;
         case CU_DEVICE_ATTRIBUTE_SPARSE_CUDA_ARRAY_SUPPORTED:
             *pi = 1;

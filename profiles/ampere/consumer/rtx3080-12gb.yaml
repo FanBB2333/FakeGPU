@@ -1,7 +1,7 @@
 # Additional source: https://www.nvidia.com/en-us/geforce/graphics-cards/30-series/rtx-3080-3080ti/
 id: rtx3080-12gb
 name: Fake NVIDIA GeForce RTX 3080 12 GB
-torch_name: NVIDIA GeForce RTX 3080 12 GB
+torch_name: NVIDIA GeForce RTX 3080
 official_model: GeForce RTX 3080
 architecture: ampere
 compute_major: 8

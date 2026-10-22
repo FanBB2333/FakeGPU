@@ -1610,6 +1610,26 @@ def test_point_to_point_rejects_an_unknown_rank_sent_to_itself() -> None:
         simulate_point_to_point(topology, src_rank=7, dst_rank=7, payload_bytes=1)
 
 
+def test_nvlink_domain_default_is_nvlink4_per_direction_in_gbit() -> None:
+    # Topology bandwidths are Gbit/s per direction. NVIDIA's 900 GB/s for H100
+    # NVLink is bidirectional: 450 GB/s, or 3600 Gbit/s, each way.
+    config = {
+        "nodes": [{"id": "n0", "nics": [{"id": "n0.nic0", "switch": "leaf0"}]}],
+        "ranks": [
+            {"rank": 0, "node": "n0", "nvlink_domain": "d0"},
+            {"rank": 1, "node": "n0", "nvlink_domain": "d0"},
+        ],
+    }
+    topology = Topology.from_mapping(config)
+    (nvlink,) = [link for link in topology.links if link.scope == "nvlink_domain"]
+    assert nvlink.bandwidth_gbps == 3600
+    payload = 2**30
+    seconds = (nvlink.transfer_time_us(payload) - nvlink.latency_us) / 1e6
+    assert payload / seconds / 1e9 == pytest.approx(450)
+    report = simulate_point_to_point(topology, src_rank=0, dst_rank=1, payload_bytes=payload)
+    assert report["transfers"][0]["path_scopes"] == ["nvlink_domain"]
+
+
 def test_trace_replay_reports_overlap_pairs_memory_and_recovery() -> None:
     trace = {
         "traceEvents": [

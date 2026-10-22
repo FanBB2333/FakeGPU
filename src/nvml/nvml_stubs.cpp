@@ -805,6 +805,10 @@ nvmlReturn_t nvmlDeviceGetMigMode(nvmlDevice_t device, unsigned int *currentMode
     if (nvml_bridge::enabled()) return NVML_ERROR_NOT_SUPPORTED;
     if (!device) return NVML_ERROR_INVALID_ARGUMENT;
     Device* dev = (Device*)device;
+    // nvml.h: NVML_ERROR_NOT_SUPPORTED if the device doesn't support MIG mode.
+    if (!dev->is_mig_device && !dev->profile.mig_supported()) {
+        return NVML_ERROR_NOT_SUPPORTED;
+    }
     const unsigned int enabled =
         dev->is_mig_device ||
         GlobalState::instance().get_mig_device_count(
@@ -1592,8 +1596,15 @@ nvmlReturn_t nvmlDeviceGetMaxMigDeviceCount(nvmlDevice_t device, unsigned int *c
     if (dev->is_mig_device) {
         return NVML_ERROR_NOT_SUPPORTED;
     }
-    *count = GlobalState::instance().get_mig_device_count(
-        dev->index);
+    // nvml.h: the maximum number of MIG devices that can exist under the
+    // parent, and zero if MIG is not supported or not enabled (a GPU with MIG
+    // disabled reports 0). MIG mode is enabled when a layout configures
+    // instances on this GPU; the maximum is the profile's mig_max_instances.
+    const unsigned int configured =
+        GlobalState::instance().get_mig_device_count(dev->index);
+    *count = configured > 0
+        ? std::max(configured, dev->profile.mig_max_instances)
+        : 0U;
     return NVML_SUCCESS;
 }
 

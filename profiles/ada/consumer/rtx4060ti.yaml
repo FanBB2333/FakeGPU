@@ -2,6 +2,7 @@
 id: rtx4060ti
 name: Fake NVIDIA GeForce RTX 4060 Ti
 torch_name: NVIDIA GeForce RTX 4060 Ti
+canonical: true
 official_model: GeForce RTX 4060 Ti
 architecture: ada
 compute_major: 8

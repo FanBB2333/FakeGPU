@@ -90,6 +90,8 @@ file(WRITE ${FAKEGPU_GENERATED_PROFILE_HEADER}
 "namespace fake_gpu {\n"
 "struct ProfileYamlBlob {\n"
 "    const char* filename;\n"
+"    // Path below profiles/, <architecture>/<segment>/<id>.yaml.\n"
+"    const char* relative_path;\n"
 "    const char* yaml;\n"
 "};\n"
 "inline const std::vector<ProfileYamlBlob>& builtin_profile_yamls() {\n"
@@ -99,8 +101,9 @@ set(_profile_idx 0)
 foreach(_profile_path ${FAKEGPU_PROFILE_FILES})
     file(READ ${_profile_path} _profile_content)
     get_filename_component(_profile_name ${_profile_path} NAME)
+    file(RELATIVE_PATH _profile_relative_path ${FAKEGPU_PROFILE_DIR} ${_profile_path})
     file(APPEND ${FAKEGPU_GENERATED_PROFILE_HEADER}
-"        {\"${_profile_name}\", R\"fakegpu_${_profile_idx}(\n${_profile_content})fakegpu_${_profile_idx}\"},\n"
+"        {\"${_profile_name}\", \"${_profile_relative_path}\", R\"fakegpu_${_profile_idx}(\n${_profile_content})fakegpu_${_profile_idx}\"},\n"
 )
     math(EXPR _profile_idx "${_profile_idx} + 1")
 endforeach()

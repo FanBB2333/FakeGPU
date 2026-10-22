@@ -82,7 +82,30 @@ _OPTIONAL_INTEGER_FIELDS = (
     "nvlink_links",
     "mig_max_instances",
     "min_power_limit_mw",
+    # The device total an NVIDIA document shows the driver reporting
+    # (nvidia-smi memory.total or deviceQuery's global memory); CUDA and NVML
+    # report it instead of the nominal memory_bytes.
+    "reported_memory_bytes",
+    # Per-SKU CUDA device attributes; an absent key takes the class default
+    # documented in profiles/README.md.
+    "ecc_enabled",
+    "async_engine_count",
+    "single_to_double_precision_perf_ratio",
+    "max_persisting_l2_cache_bytes",
+    "pageable_memory_access",
+    "can_flush_remote_writes",
+    "max_access_policy_window_bytes",
 )
+DEVICE_ATTRIBUTE_FIELDS = (
+    "ecc_enabled",
+    "async_engine_count",
+    "single_to_double_precision_perf_ratio",
+    "max_persisting_l2_cache_bytes",
+    "pageable_memory_access",
+    "can_flush_remote_writes",
+    "max_access_policy_window_bytes",
+)
+_BOOLEAN_ATTRIBUTE_FIELDS = ("ecc_enabled", "pageable_memory_access", "can_flush_remote_writes")
 _OPTIONAL_NUMBER_FIELDS = (
     "memory_bandwidth_gbps",
     "nvlink_bandwidth_gbps",
@@ -165,6 +188,18 @@ class GpuProfile:
     c2c_bandwidth_gbps: float | None = None
     mig_max_instances: int | None = None
     min_power_limit_mw: int | None = None
+    reported_memory_bytes: int | None = None
+    ecc_enabled: int | None = None
+    async_engine_count: int | None = None
+    single_to_double_precision_perf_ratio: int | None = None
+    max_persisting_l2_cache_bytes: int | None = None
+    pageable_memory_access: int | None = None
+    can_flush_remote_writes: int | None = None
+    max_access_policy_window_bytes: int | None = None
+    # Several profiles may report the same driver name (memory or laptop
+    # variants of one product). ``canonical`` marks the one a name lookup such
+    # as FAKEGPU_DEVICE_NAME resolves to.
+    canonical: bool = False
     throughput: dict[str, float] = dataclass_field(default_factory=dict)
     throughput_basis: dict[str, str] = dataclass_field(default_factory=dict)
     throughput_source: str = ""
@@ -180,6 +215,12 @@ class GpuProfile:
     @property
     def compiler_target(self) -> str:
         return f"sm_{self.compute_major}{self.compute_minor}"
+
+    @property
+    def device_memory_bytes(self) -> int:
+        """Memory total CUDA and NVML report: the published driver total, else nominal."""
+
+        return self.reported_memory_bytes or self.memory_bytes
 
     @property
     def unavailable_fields(self) -> tuple[str, ...]:
@@ -380,6 +421,15 @@ def validate_catalog(
             errors.append(
                 f"{prefix} fp4 is not valid for architecture {profile.architecture}"
             )
+        # CUDA Programming Guide, "Input Data Types Supported by Tensor Core
+        # Acceleration": INT4 only on compute capability 7.5 through 8.9.
+        if "int4" in profile.supported_types and not (
+            (7, 5) <= profile.compute_capability <= (8, 9)
+        ):
+            errors.append(
+                f"{prefix} int4 is not a Tensor Core input type on compute capability "
+                f"{profile.compute_capability_text}"
+            )
         if profile.shared_mem_per_block > profile.shared_mem_per_block_optin:
             errors.append(
                 f"{prefix} shared_mem_per_block exceeds shared_mem_per_block_optin"
@@ -414,7 +464,61 @@ def validate_catalog(
             if profile.profile_status != "synthetic" and not official_host:
                 warnings.append(f"{prefix} {field} is not an NVIDIA URL")
 
+    errors.extend(_shared_name_errors(catalog))
     return CatalogValidation(errors=tuple(errors), warnings=tuple(warnings))
+
+
+def _profiles_by_name(catalog: Mapping[str, GpuProfile]) -> dict[str, list[GpuProfile]]:
+    groups: dict[str, list[GpuProfile]] = {}
+    for profile in catalog.values():
+        groups.setdefault(profile.torch_name.lower(), []).append(profile)
+    return groups
+
+
+def _shared_name_errors(catalog: Mapping[str, GpuProfile]) -> list[str]:
+    """A driver name shared by several profiles needs exactly one canonical profile."""
+
+    errors = []
+    for name, group in sorted(_profiles_by_name(catalog).items()):
+        canonical = sorted(profile.id for profile in group if profile.canonical)
+        if len(group) == 1:
+            if canonical:
+                errors.append(f"{canonical[0]}: canonical is set but no other profile reports {name!r}")
+        elif len(canonical) != 1:
+            ids = ", ".join(sorted(profile.id for profile in group))
+            errors.append(
+                f"profiles {ids} report the same name {name!r}; exactly one needs canonical: true "
+                f"(found {len(canonical)})"
+            )
+    return errors
+
+
+def profile_id_for_device_name(
+    device_name: str,
+    *,
+    profiles: Mapping[str, GpuProfile] | None = None,
+) -> str | None:
+    """Return the profile a reported device name selects, or None.
+
+    An exact (case-sensitive) ``torch_name`` match wins over a case-insensitive
+    one, so ``NVIDIA GeForce RTX 2070 Super`` (the laptop part) and
+    ``NVIDIA GeForce RTX 2070 SUPER`` (the desktop card) stay distinct. When
+    several profiles share the name, the one marked ``canonical`` is chosen.
+    """
+
+    catalog = profiles if profiles is not None else load_profiles()
+    name = device_name.strip()
+    if not name:
+        return None
+    candidates = [profile for profile in catalog.values() if profile.torch_name == name]
+    if not candidates:
+        candidates = _profiles_by_name(catalog).get(name.lower(), [])
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0].id
+    canonical = sorted(profile.id for profile in candidates if profile.canonical)
+    return canonical[0] if canonical else min(profile.id for profile in candidates)
 
 
 def _optional_spec_errors(profile: GpuProfile, prefix: str) -> list[str]:
@@ -430,6 +534,13 @@ def _optional_spec_errors(profile: GpuProfile, prefix: str) -> list[str]:
     for key, value in numbers.items():
         if value is not None and (value < 0 or value != value):
             errors.append(f"{prefix} {key} must not be negative")
+    if profile.reported_memory_bytes is not None and not 0 < profile.reported_memory_bytes <= profile.memory_bytes:
+        errors.append(f"{prefix} reported_memory_bytes must be positive and at most memory_bytes")
+    for key in _BOOLEAN_ATTRIBUTE_FIELDS:
+        if getattr(profile, key) not in (None, 0, 1):
+            errors.append(f"{prefix} {key} must be 0 or 1")
+    if profile.single_to_double_precision_perf_ratio == 0 or profile.async_engine_count == 0:
+        errors.append(f"{prefix} single_to_double_precision_perf_ratio and async_engine_count must be positive")
     if profile.nvlink_generation == 0 and (profile.nvlink_links or profile.nvlink_bandwidth_gbps):
         errors.append(f"{prefix} nvlink_generation 0 (none) contradicts NVLink links or bandwidth")
     if profile.base_clock_mhz and profile.core_clock_mhz and profile.base_clock_mhz > profile.core_clock_mhz:
@@ -569,12 +680,22 @@ def _profile_from_mapping(
         memory_type=optional_text("memory_type"),
         ecc=optional_text("ecc").lower(),
         form_factor=optional_text("form_factor").lower(),
+        canonical=_optional_bool(raw, "canonical", path),
         throughput=throughput,
         throughput_basis=throughput_basis,
         throughput_source=optional_text("throughput_source"),
         **integers,
         **optional,
     )
+
+
+def _optional_bool(raw: Mapping[str, object], key: str, path: Path) -> bool:
+    value = raw.get(key)
+    if value is None:
+        return False
+    if value not in ("true", "false"):
+        raise ProfileCatalogError(f"{path}: {key!r} must be true or false")
+    return value == "true"
 
 
 def _parse_simple_yaml(path: Path) -> dict[str, object]:

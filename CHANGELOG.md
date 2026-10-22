@@ -222,6 +222,62 @@
 - Native NVML counts `nvmlInit` calls. Queries return
   `NVML_ERROR_UNINITIALIZED` before the first `nvmlInit` and after the
   matching last `nvmlShutdown`, as the driver does.
+- `FAKEGPU_DEVICE_NAME` selects the base profile when memory or laptop
+  variants report the same driver name. The catalog marks one profile per
+  shared name `canonical: true`, and an exact-case match wins, so
+  `NVIDIA GeForce RTX 2070 Super` (the driver's notebook spelling) selects
+  the laptop profile and `NVIDIA GeForce RTX 2070 SUPER` the desktop card.
+  Before, the variant that sorted last won: `NVIDIA GeForce GTX 1080`
+  selected `gtx1080-laptop`, `Quadro P4000` the mobile part,
+  `NVIDIA GeForce RTX 4070` the GDDR6 variant and `NVIDIA L20` `l20-lc`.
+- Turing laptop profiles (RTX 2060/2070/2080 and their Super parts, GTX 1650,
+  1650 Ti and 1660 Ti) and the RTX 3080 12 GB, RTX 3060 8 GB, RTX 3060 Ti
+  GDDR6X, RTX 3050 6 GB, RTX 3080 Laptop 8 GB, RTX 2060 12 GB and GTX 1650
+  GDDR6 profiles report the names the NVIDIA driver gives them, such as
+  `NVIDIA GeForce RTX 2060` and `NVIDIA GeForce RTX 3080`.
+- Hopper and Blackwell profiles no longer list `int4` in `supported_types`.
+  The field's reduced-precision entries are Tensor Core input types, and the
+  CUDA Programming Guide gives INT4 Tensor Core inputs only to compute
+  capability 7.5–8.9. `doctor` and `fakegpu nvidia-smi` stop showing INT4 for
+  H100, B200 or RTX 50 GPUs, and strict cuBLAS dtype checks reject INT4
+  there. `profiles/README.md` documents the field.
+- The topology simulator (`fakegpu simulate-topology` and
+  `fakegpu replay-trace --topology`) documents its bandwidths as Gbit/s per
+  direction, and an `nvlink_domain` without `nvlink_bandwidth_gbps` now runs
+  at 3600 Gbit/s, NVLink 4's 450 GB/s per direction. The old default of 900
+  was NVIDIA's bidirectional GB/s figure read as Gbit/s, which made NVLink
+  transfers 4× too slow. Simulation outputs for configs that omit the value
+  change.
+- CUDA, NVML and `torch.cuda` report the memory total an NVIDIA document
+  shows the driver reporting, where one exists, instead of the nominal
+  capacity: H100 80GB HBM3 and H100 PCIe 81559 MiB, L4 23034 MiB (ECC on),
+  GH200 96GB 97871 MiB, A100 PCIe 40GB 42405855232 bytes and Jetson T5000
+  131881811968 bytes. Profiles record it as `reported_memory_bytes`;
+  `memory_bytes` stays nominal. Memory-fit results for these GPUs shrink
+  accordingly.
+- `cuDeviceGetAttribute` and `cudaGetDeviceProperties` read ECC, copy-engine
+  count, FP32:FP64 throughput ratio, persisting-L2 maximum, pageable memory
+  access, remote-write flushing and the access-policy window from the
+  profile, with per-class defaults documented in `profiles/README.md`.
+  GeForce, Jetson and GDDR workstation GPUs now report ECC off; the FP32:FP64
+  ratio follows the CUDA Programming Guide (64 on RTX 30/40/50, 32 on Turing);
+  the persisting-L2 maximum is 75% of L2 on compute capability 8.0 and newer
+  and 0 before; GPUs older than Turing report no pageable memory access;
+  `CAN_FLUSH_REMOTE_WRITES` is 0; and the access-policy window is 0 before
+  compute capability 8.0 and 134213632 bytes after. The reserved shared
+  memory per block is 1 KB from compute capability 8.0 (was 0), the system
+  reservation the CUDA Programming Guide describes, which occupancy
+  calculations subtract per block. NVIDIA's deviceQuery
+  outputs set A100 PCIe 40GB to 3 copy engines and Jetson T5000 to 1 copy
+  engine with ECC off.
+- `nvmlDeviceGetMigMode` returns `NVML_ERROR_NOT_SUPPORTED` for GPUs without
+  MIG, and `nvmlDeviceGetMaxMigDeviceCount` returns the profile's maximum
+  (7 on A100) while a MIG layout is configured and 0 otherwise, as nvml.h
+  documents. It returned the configured instance count before.
+- The GH200 96GB profile reports `NVIDIA GH200 120GB`, the name NVIDIA's
+  GH200 MGX quick start guide shows, and the Jetson T5000 profile reports
+  `NVIDIA Thor` with a 32 MiB L2, as deviceQuery on the Jetson AGX Thor
+  Developer Kit does.
 
 ### Fixed
 

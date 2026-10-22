@@ -11,7 +11,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from fakegpu.profile_catalog import get_profile, load_profiles, profile_directory, validate_catalog
+from fakegpu.profile_catalog import (
+    get_profile,
+    load_profiles,
+    profile_directory,
+    profile_id_for_device_name,
+    validate_catalog,
+)
 from scripts.render_gpu_catalog import OUTPUT, WEBSITE, render, render_website
 
 
@@ -78,6 +84,9 @@ def test_researched_variants_keep_product_specific_resources(
         ("h800-pcie-80gb", 0x2322, "NVIDIA H800 PCIe"),
         ("h800-nvl-94gb", 0x233A, "NVIDIA H800 NVL"),
         ("gh200-144gb", 0x2348, "NVIDIA GH200 144G HBM3e"),
+        # 2342 is GH200 120GB or 480GB by subsystem; NVIDIA's GH200 MGX quick
+        # start guide shows a 96 GB GH200 reporting GH200 120GB.
+        ("gh200-96gb", 0x2342, "NVIDIA GH200 120GB"),
         ("l20-lc", 0x26BA, "NVIDIA L20"),
         ("l40s", 0x26B9, "NVIDIA L40S"),
         ("t4", 0x1EB8, "Tesla T4"),
@@ -86,6 +95,27 @@ def test_researched_variants_keep_product_specific_resources(
         # Every device ID the list gives these products carries this one name.
         ("rtx3050-laptop-6gb", None, "NVIDIA GeForce RTX 3050 6GB Laptop GPU"),
         ("rtx2050-laptop", None, "NVIDIA GeForce RTX 2050"),
+        # Turing notebook parts: the list names the full-power (non-Max-Q)
+        # subsystems after the product alone (1F11/1F15, 1F10/1F14, 1E90,
+        # 1E91/1ED1 "Super", 1E93/1ED3 "Super", 1F99/1F9D, 1F95, 2191); only
+        # specific OEM subsystems add "with Max-Q Design".
+        ("rtx2060-laptop", None, "NVIDIA GeForce RTX 2060"),
+        ("rtx2070-laptop", None, "NVIDIA GeForce RTX 2070"),
+        ("rtx2070-super-laptop", None, "NVIDIA GeForce RTX 2070 Super"),
+        ("rtx2080-laptop", None, "NVIDIA GeForce RTX 2080"),
+        ("rtx2080-super-laptop", None, "NVIDIA GeForce RTX 2080 Super"),
+        ("gtx1650-laptop", None, "NVIDIA GeForce GTX 1650"),
+        ("gtx1650ti-laptop", None, "NVIDIA GeForce GTX 1650 Ti"),
+        ("gtx1660ti-laptop", None, "NVIDIA GeForce GTX 1660 Ti"),
+        # Memory variants: the list has no "12 GB", "8 GB", "GDDR6X" or
+        # "GDDR6" names, so these report the product name.
+        ("rtx3080-12gb", None, "NVIDIA GeForce RTX 3080"),
+        ("rtx3060-8gb", None, "NVIDIA GeForce RTX 3060"),
+        ("rtx3060ti-gddr6x", None, "NVIDIA GeForce RTX 3060 Ti"),
+        ("rtx3050-6gb", None, "NVIDIA GeForce RTX 3050"),
+        ("rtx3080-laptop-8gb", None, "NVIDIA GeForce RTX 3080 Laptop GPU"),
+        ("rtx2060-12gb", None, "NVIDIA GeForce RTX 2060"),
+        ("gtx1650-gddr6", None, "NVIDIA GeForce GTX 1650"),
     ],
 )
 def test_device_names_follow_the_driver_supported_chips_list(
@@ -95,6 +125,64 @@ def test_device_names_follow_the_driver_supported_chips_list(
     if device_id is not None:
         assert profile.pci_device_id >> 16 == device_id
     assert profile.torch_name == driver_name
+
+
+def test_jetson_thor_follows_the_developer_kit_device_query() -> None:
+    # deviceQuery on the Jetson AGX Thor Developer Kit (CUDA 13.0), NVIDIA's
+    # setup guide: Device 0 "NVIDIA Thor", L2 Cache Size 33554432 bytes,
+    # 131881811968 bytes of global memory.
+    profile = get_profile("jetson-t5000")
+    assert profile.torch_name == "NVIDIA Thor"
+    assert profile.l2_cache_bytes == 33554432
+    assert profile.device_memory_bytes == 131881811968
+
+
+@pytest.mark.parametrize(
+    ("device_name", "profile_id"),
+    [
+        # Base products, not the laptop or memory variant that shares the name.
+        ("NVIDIA GeForce GTX 1080", "gtx1080"),
+        ("Quadro P4000", "quadro-p4000"),
+        ("NVIDIA GeForce RTX 4070", "rtx4070"),
+        ("NVIDIA L20", "l20"),
+        ("NVIDIA GeForce RTX 3060", "rtx3060"),
+        ("nvidia geforce rtx 3060", "rtx3060"),
+        ("NVIDIA GeForce RTX 2060", "rtx2060"),
+        # The driver spells the notebook part "Super" and the desktop card "SUPER".
+        ("NVIDIA GeForce RTX 2070 Super", "rtx2070-super-laptop"),
+        ("NVIDIA GeForce RTX 2070 SUPER", "rtx2070-super"),
+        ("NVIDIA H100 80GB HBM3", "h100"),
+        ("NVIDIA Unknown GPU", None),
+    ],
+)
+def test_device_name_lookup_prefers_the_canonical_profile(device_name: str, profile_id: str | None) -> None:
+    assert profile_id_for_device_name(device_name) == profile_id
+
+
+def test_int4_is_listed_only_where_tensor_cores_accept_it() -> None:
+    # CUDA Programming Guide, "Input Data Types Supported by Tensor Core
+    # Acceleration": INT4 on compute capability 7.5-8.9, none on 9.0 and newer.
+    catalog = load_profiles()
+    for profile in catalog.values():
+        if profile.compute_capability >= (9, 0):
+            assert "int4" not in profile.supported_types, profile.id
+            assert "int8" in profile.supported_types, profile.id
+    h100 = replace(catalog["h100"], supported_types=catalog["h100"].supported_types + ("int4",))
+    assert any("int4 is not a Tensor Core input" in error for error in validate_catalog({"h100": h100}).errors)
+
+
+def test_shared_device_names_need_exactly_one_canonical_profile() -> None:
+    catalog = load_profiles()
+    assert validate_catalog(catalog).ok
+    variant = replace(catalog["rtx3060-8gb"], canonical=True)
+    errors = validate_catalog({**catalog, variant.id: variant}).errors
+    assert any("exactly one needs canonical" in error and "rtx3060-8gb" in error for error in errors)
+    base = replace(catalog["rtx3060"], canonical=False)
+    errors = validate_catalog({**catalog, base.id: base}).errors
+    assert any("found 0" in error for error in errors)
+    unique = replace(catalog["a100"], canonical=True)
+    errors = validate_catalog({**catalog, unique.id: unique}).errors
+    assert any(error.startswith("a100: canonical is set") for error in errors)
 
 
 # Resident blocks, resident threads, shared memory per SM and per block (opt-in)

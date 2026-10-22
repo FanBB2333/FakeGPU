@@ -3,6 +3,7 @@
 id: quadro-p1000
 name: Fake NVIDIA Quadro P1000
 torch_name: Quadro P1000
+canonical: true
 official_model: Quadro P1000
 architecture: pascal
 compute_major: 6

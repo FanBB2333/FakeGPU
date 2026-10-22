@@ -1,3 +1,16 @@
+"""Route and time communication over a configured cluster topology.
+
+Units: every ``bandwidth_gbps`` in a topology config (``nics[].bandwidth_gbps``,
+``links[].bandwidth_gbps``, ``endpoint_bandwidth_gbps``,
+``nvlink_bandwidth_gbps``) is in gigabits per second (Gbit/s) per direction.
+A bidirectional link carries that rate in each direction independently.
+``latency_us`` values are microseconds.
+
+NVIDIA quotes NVLink bandwidth in GB/s summed over both directions, so convert
+before using it here: H100's 900 GB/s is 450 GB/s, or 3600 Gbit/s, per
+direction.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -21,6 +34,12 @@ from .structured_io import load_mapping
 
 SCHEMA_VERSION = "fakegpu.topology_simulation.v1"
 
+# Default per-GPU NVLink rate inside an ``nvlink_domain``, in Gbit/s per
+# direction: NVLink 4 (Hopper, 18 links), from NVIDIA's 900 GB/s
+# bidirectional figure for H100 (https://developer.nvidia.com/blog/
+# introducing-nvidia-hgx-h100-an-accelerated-server-platform-for-ai-and-high-performance-computing/).
+DEFAULT_NVLINK_BANDWIDTH_GBPS = 900 / 2 * 8
+
 
 class TopologyError(ValueError):
     pass
@@ -28,6 +47,8 @@ class TopologyError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class Link:
+    """One link; ``bandwidth_gbps`` is Gbit/s per direction."""
+
     src: str
     dst: str
     bandwidth_gbps: float
@@ -232,7 +253,7 @@ class Topology:
                 nvlink_domains[str(domain)].append(endpoint)
 
         nvlink_bandwidth = _positive_float(
-            config.get("nvlink_bandwidth_gbps", 900),
+            config.get("nvlink_bandwidth_gbps", DEFAULT_NVLINK_BANDWIDTH_GBPS),
             "nvlink_bandwidth_gbps",
         )
         nvlink_latency = _nonnegative_float(

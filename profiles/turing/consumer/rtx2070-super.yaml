@@ -4,6 +4,7 @@
 id: rtx2070-super
 name: Fake NVIDIA GeForce RTX 2070 SUPER
 torch_name: NVIDIA GeForce RTX 2070 SUPER
+canonical: true
 official_model: GeForce RTX 2070 SUPER
 architecture: turing
 compute_major: 7

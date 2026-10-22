@@ -2,6 +2,7 @@
 id: gtx1050
 name: Fake NVIDIA GeForce GTX 1050
 torch_name: NVIDIA GeForce GTX 1050
+canonical: true
 official_model: GeForce GTX 1050
 architecture: pascal
 compute_major: 6

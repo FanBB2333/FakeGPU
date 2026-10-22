@@ -5,6 +5,7 @@
 # Additional source: https://docs.nvidia.com/nim/benchmarking/llm/1.0.0/performance
 # Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/u5hh6fv4r7564i4y673484y3m20083nj.pdf
 # Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
+# Reported memory: nvidia-smi shows NVIDIA H100 80GB HBM3 with 81559MiB (driver 580.95.05): https://docs.nvidia.com/nim/large-language-models/2.0.13/get-started/advanced/get-started-muse-spark-open.html
 id: h100
 name: Fake NVIDIA H100-SXM-80GB
 torch_name: NVIDIA H100 80GB HBM3
@@ -35,6 +36,7 @@ max_power_limit_mw: 700000
 pci_device_id: 590352606
 memory_type: HBM3
 memory_bandwidth_gbps: 3352
+reported_memory_bytes: 85520809984
 ecc: supported
 form_factor: sxm
 pcie_generation: 5
@@ -62,7 +64,6 @@ supported_types:
   - fp16
   - bf16
   - int8
-  - int4
   - fp8
 throughput_published:
   - fp64_tflops

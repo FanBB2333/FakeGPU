@@ -2,6 +2,7 @@
 id: rtx4070
 name: Fake NVIDIA GeForce RTX 4070
 torch_name: NVIDIA GeForce RTX 4070
+canonical: true
 official_model: GeForce RTX 4070
 architecture: ada
 compute_major: 8

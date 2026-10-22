@@ -26,6 +26,7 @@ SPEC_KEYS = (
     "base_clock_mhz",
     "memory_type",
     "memory_bandwidth_gbps",
+    "reported_memory_bytes",
     "ecc",
     "form_factor",
     "pcie_generation",
@@ -36,6 +37,13 @@ SPEC_KEYS = (
     "c2c_bandwidth_gbps",
     "mig_max_instances",
     "min_power_limit_mw",
+    "ecc_enabled",
+    "async_engine_count",
+    "single_to_double_precision_perf_ratio",
+    "max_persisting_l2_cache_bytes",
+    "pageable_memory_access",
+    "can_flush_remote_writes",
+    "max_access_policy_window_bytes",
 )
 assert set(SPEC_KEYS) >= set(_OPTIONAL_INTEGER_FIELDS + _OPTIONAL_NUMBER_FIELDS)
 SCALAR_KEYS = SPEC_KEYS + THROUGHPUT_FIELDS + ("throughput_source",)
