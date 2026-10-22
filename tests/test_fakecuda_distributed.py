@@ -473,3 +473,267 @@ def test_simulated_async_work_completes_with_its_outputs(tmp_path: Path) -> None
         results["barrier"] = [work.is_completed(), work.get_future().wait()]
     """)
     assert results == {"all_reduce": [True, True, True, True], "barrier": [True, []]}
+
+
+# A single-rank job, as the real-GPU oracle ran (init_process_group("nccl") at world size 1).
+SINGLE_RANK = """
+import json, os, warnings
+for name in ("MASTER_ADDR", "MASTER_PORT", "WORLD_SIZE", "RANK", "TORCHELASTIC_RUN_ID", "FAKEGPU_DIST_COLLECTIVES"):
+    os.environ.pop(name, None)
+os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+import fakegpu
+fakegpu.init(runtime="fakecuda", profile="a100", device_count=1)
+import torch, torch.distributed as dist
+results = {}
+def probe(name, fn):
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results[name] = fn()
+    except Exception as exc:
+        results[name] = [type(exc).__name__, str(exc).splitlines()[0] if str(exc) else ""]
+"""
+
+
+def _single_rank(tmp_path: Path, body: str) -> dict:
+    code = SINGLE_RANK + textwrap.dedent(body) + "\nprint('RESULTS ' + json.dumps(results, sort_keys=True))\n"
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path, env=_environment(tmp_path), text=True,
+        capture_output=True, timeout=240,
+    )
+    assert completed.returncode == 0, completed.stderr[-3000:]
+    line = next(line for line in completed.stdout.splitlines() if line.startswith("RESULTS "))
+    return json.loads(line[len("RESULTS "):])
+
+
+NO_CPU_BACKEND = ["RuntimeError", "No backend type associated with device type cpu"]
+NOT_INITIALIZED = ["ValueError",
+                   "Default process group has not been initialized, please make sure to call init_process_group."]
+
+
+def test_cpu_tensors_need_a_cpu_backend(tmp_path: Path) -> None:
+    # Oracle: init_process_group("nccl") on a GPU (torch 2.9.1); torch 2.14.1 maps devices the same way.
+    results = _single_rank(tmp_path, """
+        def all_reduced(tensor):
+            dist.all_reduce(tensor)
+            return tensor.tolist()
+        cpu = torch.ones(1)
+        for backend in ("nccl", None, "cpu:gloo,cuda:nccl", "gloo"):
+            name = str(backend)
+            dist.init_process_group(backend, world_size=1, rank=0)
+            probe(name + "/get_backend", lambda: str(dist.get_backend()))
+            probe(name + "/cpu", lambda: all_reduced(torch.ones(1)))
+            probe(name + "/cuda", lambda: all_reduced(torch.ones(1, device="cuda")))
+            if backend == "nccl":
+                probe("nccl/async", lambda: dist.all_reduce(torch.ones(1), async_op=True))
+                probe("nccl/broadcast", lambda: dist.broadcast(torch.ones(1), src=0))
+                probe("nccl/all_gather", lambda: dist.all_gather([torch.zeros(1)], torch.ones(1)))
+                probe("nccl/mixed_all_gather",
+                      lambda: dist.all_gather([torch.zeros(1)], torch.ones(1, device="cuda")))
+                probe("nccl/mixed_into_tensor",
+                      lambda: dist.all_gather_into_tensor(torch.zeros(1), torch.ones(1, device="cuda")))
+                probe("nccl/reduce_scatter_tensor",
+                      lambda: dist.reduce_scatter_tensor(torch.zeros(1), torch.ones(1)))
+                probe("nccl/all_to_all_single", lambda: dist.all_to_all_single(torch.zeros(1), torch.ones(1)))
+                probe("nccl/gather", lambda: dist.gather(torch.ones(1), [torch.zeros(1)], dst=0))
+                probe("nccl/barrier", lambda: dist.barrier())
+                probe("nccl/all_gather_object", lambda: dist.all_gather_object([None], {"a": 1}))
+                gloo = dist.new_group([0], backend="gloo")
+                probe("nccl/gloo_group", lambda: (dist.all_reduce(cpu, group=gloo), cpu.tolist())[1])
+                probe("nccl/nccl_group", lambda: dist.all_reduce(torch.ones(1), group=dist.new_group([0])))
+            dist.destroy_process_group()
+    """)
+    assert results["nccl/get_backend"] == "nccl"
+    for name in ("nccl/cpu", "nccl/async", "nccl/broadcast", "nccl/all_gather", "nccl/reduce_scatter_tensor",
+                 "nccl/all_to_all_single", "nccl/gather", "nccl/nccl_group"):
+        assert results[name] == NO_CPU_BACKEND, name
+    assert results["nccl/cuda"] == [1.0]
+    assert results["nccl/mixed_all_gather"] is None
+    assert results["nccl/mixed_into_tensor"] == ["ValueError", "Tensors must be CUDA and dense"]
+    assert results["nccl/barrier"] is None
+    assert results["nccl/all_gather_object"] is None
+    assert results["nccl/gloo_group"] == [1.0]
+    # No backend named: torch reports "undefined" and gives only CUDA its NCCL backend.
+    assert results["None/get_backend"] == "undefined"
+    assert results["None/cpu"] == NO_CPU_BACKEND
+    assert results["None/cuda"] == [1.0]
+    for backend in ("cpu:gloo,cuda:nccl", "gloo"):
+        assert results[backend + "/get_backend"] == backend
+        assert results[backend + "/cpu"] == [1.0]
+        assert results[backend + "/cuda"] == [1.0]
+
+
+def test_monitored_barrier_needs_a_cpu_backend(tmp_path: Path) -> None:
+    results = _single_rank(tmp_path, """
+        for backend in ("nccl", None, "cpu:gloo,cuda:nccl", "gloo"):
+            dist.init_process_group(backend, world_size=1, rank=0)
+            probe(str(backend), lambda: dist.monitored_barrier())
+            dist.destroy_process_group()
+        results["new_check"] = torch.torch_version.TorchVersion(torch.__version__) >= (2, 14)
+    """)
+    if results["new_check"]:
+        # torch 2.14 distributed_c10d.monitored_barrier: the group needs a CPU device type.
+        refused = ["ValueError", "monitored_barrier requires a group with a CPU-capable backend (e.g. GLOO)."]
+        assert results["cpu:gloo,cuda:nccl"] is None
+    else:
+        # Oracle, torch 2.9.1 on a GPU: only a gloo group qualifies.
+        refused = ["ValueError", "monitored_barrier is only implemented for GLOO backend."]
+        assert results["cpu:gloo,cuda:nccl"] == refused
+    assert results["nccl"] == refused
+    assert results["None"] == refused
+    assert results["gloo"] is None
+
+
+def test_premul_sum_scales_before_summing(tmp_path: Path) -> None:
+    # Oracle at world size 1 on a GPU: factor 0.5 turns [2, 4] into [1, 2]; ProcessGroupNCCL getNcclReduceOp.
+    results = _single_rank(tmp_path, """
+        dist.init_process_group("nccl", world_size=1, rank=0)
+        def reduced(dtype, factor, call="all_reduce"):
+            def run():
+                tensor = torch.tensor([2.0, 4.0], device="cuda").to(dtype)
+                op = dist._make_nccl_premul_sum(factor)
+                if call == "all_reduce":
+                    dist.all_reduce(tensor, op=op)
+                    return tensor.float().tolist()
+                out = torch.empty(2, device="cuda", dtype=dtype)
+                dist.reduce_scatter_tensor(out, tensor, op=op)
+                return out.float().tolist()
+            return run
+        for dtype in (torch.float32, torch.float16, torch.float64, torch.bfloat16, torch.int32):
+            probe(str(dtype), reduced(dtype, 0.5))
+        probe("tensor_factor", reduced(torch.float32, torch.tensor([0.25], device="cuda")))
+        probe("tensor_factor_dtype",
+              reduced(torch.float32, torch.tensor([0.25], device="cuda", dtype=torch.float64)))
+        probe("reduce_scatter_tensor", reduced(torch.float32, 0.5, "reduce_scatter_tensor"))
+        probe("bare_enum", lambda: dist.all_reduce(torch.ones(1, device="cuda"), op=dist.ReduceOp.PREMUL_SUM))
+        probe("cpu", lambda: dist.all_reduce(torch.ones(1), op=dist._make_nccl_premul_sum(0.5)))
+        results["fixed_bf16"] = torch.torch_version.TorchVersion(torch.__version__) >= (2, 14)
+    """)
+    for dtype in ("torch.float32", "torch.float16", "torch.float64"):
+        assert results[dtype] == [1.0, 2.0], dtype
+    # torch < 2.14 handed NCCL a float factor for bfloat16, which read its low two bytes: 0 for 0.5,
+    # as the GPU run with torch 2.9.1 shows. torch 2.14 passes a bfloat16 factor.
+    assert results["torch.bfloat16"] == ([1.0, 2.0] if results["fixed_bf16"] else [0.0, 0.0])
+    assert results["torch.int32"] == ["TypeError", "PreMulSum Data type must be half, float, bfloat16 or double"]
+    assert results["tensor_factor"] == [0.5, 1.0]
+    assert results["tensor_factor_dtype"] == ["RuntimeError", "expected scalar type Float but found Double"]
+    assert results["reduce_scatter_tensor"] == [1.0, 2.0]
+    assert results["bare_enum"][0] == "TypeError"
+    assert results["cpu"] == NO_CPU_BACKEND
+
+
+def test_launched_premul_sum_matches_nccl(tmp_path: Path) -> None:
+    # NCCL computes sum(factor * x_r); a gloo group still rejects PREMUL_SUM, as gloo does.
+    ranks = _torchrun(tmp_path, """
+        def reduced(make_op, call="all_reduce"):
+            def run():
+                tensor = t(rank + 1.0, 10.0 * (rank + 1))
+                if call == "all_reduce":
+                    dist.all_reduce(tensor, op=make_op())
+                    return tensor.tolist()
+                if call == "reduce":
+                    dist.reduce(tensor, dst=1, op=make_op())
+                    return tensor.tolist()
+                out = torch.empty(1, device="cuda")
+                if call == "reduce_scatter":
+                    dist.reduce_scatter(out, [t(rank + 1.0), t(10.0 * (rank + 1)), t(100.0)], op=make_op())
+                else:
+                    dist.reduce_scatter_tensor(out, t(rank + 1.0, 10.0 * (rank + 1), 100.0), op=make_op())
+                return out.tolist()
+            return run
+        half = lambda: dist._make_nccl_premul_sum(0.5)
+        probe("all_reduce", reduced(half))
+        probe("tensor_factor", reduced(lambda: dist._make_nccl_premul_sum(torch.tensor([0.5], device="cuda"))))
+        probe("reduce", reduced(half, "reduce"))
+        probe("reduce_scatter", reduced(half, "reduce_scatter"))
+        probe("reduce_scatter_tensor", reduced(half, "reduce_scatter_tensor"))
+        try:
+            dist.ReduceOp.PREMUL_SUM(0.5)  # FSDP2's form in torch 2.14
+            probe("enum_call", reduced(lambda: dist.ReduceOp.PREMUL_SUM(0.5)))
+        except TypeError:
+            pass
+        everyone = dist.new_group([0, 1, 2], backend="gloo")
+        probe("gloo_group", lambda: dist.all_reduce(t(1.0), op=dist._make_nccl_premul_sum(0.5), group=everyone))
+    """)
+    for rank in range(3):
+        results = ranks[rank]
+        assert results["all_reduce"] == [3.0, 30.0]
+        assert results["tensor_factor"] == [3.0, 30.0]
+        assert results["reduce"] == ([3.0, 30.0] if rank == 1 else [rank + 1.0, 10.0 * (rank + 1)])
+        assert results["reduce_scatter"] == [[3.0], [30.0], [150.0]][rank]
+        assert results["reduce_scatter_tensor"] == [[3.0], [30.0], [150.0]][rank]
+        if "enum_call" in results:
+            assert results["enum_call"] == [3.0, 30.0]
+        assert results["gloo_group"][0] == "RuntimeError"
+        assert "PREMUL_SUM" in results["gloo_group"][1]
+
+
+def test_queries_before_init_process_group_fail_like_torch(tmp_path: Path) -> None:
+    # Oracle: torch 2.9.1 on a GPU raises for each query before init and after destroy.
+    results = _single_rank(tmp_path, """
+        probe("get_rank", dist.get_rank)
+        probe("get_world_size", dist.get_world_size)
+        probe("get_backend", dist.get_backend)
+    """)
+    assert results == {"get_rank": NOT_INITIALIZED, "get_world_size": NOT_INITIALIZED,
+                       "get_backend": NOT_INITIALIZED}
+
+
+def test_simulated_gather_and_scatter_use_every_slot(tmp_path: Path) -> None:
+    # gloo, 3 ranks: dst gathers one tensor per rank, rank r receives scatter_list[r], and a list on the
+    # wrong rank fails. A simulated rank's peers send what it sends.
+    results = _simulate(tmp_path, """
+        def gather(dst):
+            def run():
+                slots = [torch.full((2,), -1.0, device="cuda") for _ in range(8)] if dst == 5 else None
+                dist.gather(torch.full((2,), 5.0, device="cuda"), slots, dst=dst)
+                return None if slots is None else [slot.tolist() for slot in slots]
+            return run
+        probe("gather/dst", gather(5))
+        probe("gather/missing_list", lambda: dist.gather(torch.ones(2, device="cuda"), None, dst=5))
+        probe("gather/list_elsewhere", lambda: dist.gather(torch.ones(2, device="cuda"),
+                                                           [torch.ones(2, device="cuda")] * 8, dst=1))
+        def scatter():
+            out = torch.full((2,), -1.0, device="cuda")
+            dist.scatter(out, [torch.full((2,), 10.0 * r, device="cuda") for r in range(8)], src=5)
+            return out.tolist()
+        probe("scatter/src", scatter)
+        probe("scatter/list_elsewhere", lambda: dist.scatter(torch.ones(2, device="cuda"),
+                                                             [torch.ones(2, device="cuda")] * 8, src=0))
+        group = dist.new_group([4, 5, 6, 7])
+        def group_scatter():
+            out = torch.zeros(1, device="cuda")
+            dist.scatter(out, [torch.full((1,), float(r), device="cuda") for r in range(4)], src=5, group=group)
+            return out.tolist()
+        probe("scatter/group", group_scatter)
+    """)
+    assert results["gather/dst"] == [[5.0, 5.0]] * 8
+    assert results["gather/missing_list"] == [
+        "ValueError", "Argument ``gather_list`` must be specified on destination rank."]
+    assert results["gather/list_elsewhere"] == [
+        "ValueError", "Argument ``gather_list`` must NOT be specified on non-destination ranks."]
+    assert results["scatter/src"] == [50.0, 50.0]
+    assert results["scatter/list_elsewhere"] == [
+        "ValueError", "Argument ``scatter_list`` must NOT be specified on non-source ranks."]
+    assert results["scatter/group"] == [1.0]
+
+
+def test_new_group_binds_positional_arguments_like_torch(tmp_path: Path) -> None:
+    results = _simulate(tmp_path, """
+        import datetime, warnings
+        group = dist.new_group([4, 5, 6, 7], datetime.timedelta(seconds=60), "gloo", None, False, "tensor_parallel")
+        results["group"] = [dist.get_backend(group), dist.get_world_size(group), group.group_desc]
+        probe("too_many", lambda: dist.new_group([4, 5, 6, 7], None, None, None, False, None, None, True, 1))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            dist.all_gather_into_tensor(torch.empty(2, device="cuda"), torch.ones(1, device="cuda"),
+                                        group=dist.new_group([0, 1]))
+        results["warning"] = [str(w.message) for w in caught if "does not belong" in str(w.message)]
+        results["single_name"] = hasattr(dist.distributed_c10d, "all_gather_single")
+    """)
+    assert results["group"] == ["gloo", 4, "tensor_parallel"]
+    assert results["too_many"][0] == "TypeError"
+    # torch names the operation after the function that warns (all_gather_single since 2.10).
+    name = "all_gather_single" if results["single_name"] else "all_gather_into_tensor"
+    assert results["warning"] == [f"Running {name} on global rank 5 which does not belong to the given group."]
+

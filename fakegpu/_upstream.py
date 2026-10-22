@@ -23,6 +23,7 @@ import contextlib
 import functools
 import inspect
 import os
+import struct
 import weakref
 from collections import OrderedDict
 from typing import Any
@@ -59,8 +60,12 @@ _GROUP_BACKENDS: dict[Any, str] = {}
 _REAL_COLLECTIVES = (
     "barrier", "all_reduce", "broadcast", "all_gather", "all_gather_object", "reduce",
     "gather", "scatter", "all_to_all", "all_to_all_single", "broadcast_object_list",
-    "get_rank", "get_world_size", "new_group",
+    "get_rank", "get_world_size", "get_backend", "new_group", "monitored_barrier",
+    "_make_nccl_premul_sum",
 )
+# Factors of the ReduceOps made by _make_nccl_premul_sum, by id(op); the C++
+# op keeps its factor where Python cannot read it.
+_PREMUL_FACTORS: dict[int, Any] = {}
 _DEFAULT_STREAMS = {}
 _CURRENT_STREAMS = {}
 _NEXT_STREAM_ID = 1
@@ -602,12 +607,12 @@ def _dist_init_process_group(
         # A failed rendezvous must surface, as it would on real GPUs.
         _ORIG_DIST_INIT(**options)
         _DIST_INITIALIZED = _DIST_REAL = True
-        _DIST_BACKEND = "nccl" if backend is None else str(backend)
+        _DIST_BACKEND = _backend_name(backend)
         _DIST_WORLD_SIZE, _DIST_RANK = size, index
         return None
 
     _DIST_INITIALIZED = True
-    _DIST_BACKEND = "nccl" if backend is None else str(backend)
+    _DIST_BACKEND = _backend_name(backend)
     _DIST_WORLD_SIZE = 1 if world_size in (-1, None) else int(world_size)
     _DIST_RANK = 0 if rank in (-1, None) else int(rank)
 
@@ -639,6 +644,16 @@ def _dist_init_process_group(
             for key in _env_set:
                 os.environ.pop(key, None)
     return None
+
+
+def _backend_name(backend: Any) -> str:
+    """What ``get_backend()`` reports, as torch's ``Backend`` names it.
+
+    Without a backend torch reports ``undefined`` and gives the machine's
+    accelerator, CUDA here, its default backend (NCCL) only.
+    """
+
+    return "undefined" if backend is None else str(backend).lower()
 
 
 def _real_launch(world_size: Any, rank: Any, init_method: Any, store: Any) -> tuple[int, int] | None:
@@ -703,7 +718,10 @@ def _dist_destroy_process_group(group: Any = None) -> None:
 
 
 def _dist_get_backend(group: Any = None) -> str | None:
-    return _requested_backend(group) if _DIST_INITIALIZED else None
+    if _DIST_INITIALIZED:
+        return _requested_backend(group)
+    # Before init_process_group torch raises "Default process group has not been initialized".
+    return _ORIG_DIST["get_backend"](group)
 
 
 def _requested_backend(group: Any) -> str:
@@ -714,17 +732,146 @@ def _requested_backend(group: Any) -> str:
     return _GROUP_BACKENDS.get(group, _DIST_BACKEND)
 
 
+def _backend_for(group: Any, device_type: str) -> str | None:
+    """The backend that ``group`` runs collectives of ``device_type`` tensors on, if any.
+
+    As in torch: ``nccl`` handles CUDA tensors only; no named backend
+    (``undefined``) gives the CUDA machine's accelerator its NCCL backend
+    only; ``cpu:gloo,cuda:nccl`` maps each device; gloo and other backends
+    handle both devices.
+    """
+
+    backend = _requested_backend(group).lower().replace(" ", "")
+    if ":" in backend:
+        devices = dict(item.split(":", 1) for item in backend.split(",") if ":" in item)
+        return devices.get(device_type)
+    if backend in ("nccl", "undefined"):
+        return "nccl" if device_type == "cuda" else None
+    return backend
+
+
 def _nccl_handles(tensor: Any, group: Any) -> bool:
     """Whether NCCL would run a collective on ``tensor``: a CUDA tensor in a group whose backend is NCCL."""
 
-    backend = _requested_backend(group).lower().replace(" ", "")
-    return isinstance(tensor, FakeCudaTensor) and (backend == "nccl" or "cuda:nccl" in backend.split(","))
+    return isinstance(tensor, FakeCudaTensor) and _backend_for(group, "cuda") == "nccl"
+
+
+def _check_devices(group: Any, *tensors: Any) -> None:
+    """Fail as ProcessGroup::getBackend does when no backend serves the tensors' device.
+
+    The dispatcher picks the CUDA kernel when any tensor is on a GPU;
+    otherwise the CPU one, which a plain NCCL group lacks.
+    """
+
+    present = [tensor for tensor in tensors if isinstance(tensor, torch.Tensor)]
+    if not present or any(tensor.device.type == "cuda" for tensor in present):
+        return
+    device_type = present[0].device.type
+    if _backend_for(group, device_type) is None:
+        raise RuntimeError(f"No backend type associated with device type {device_type}")
+
+
+def _check_single_device(group: Any, output: Any, source: Any) -> None:
+    """ProcessGroupNCCL's check of the two tensors of an ``*_into_tensor``/``*_tensor`` collective."""
+
+    devices = {output.device.type, source.device.type}
+    if "cuda" in devices and len(devices) > 1 and _backend_for(group, "cuda") == "nccl":
+        raise ValueError("Tensors must be CUDA and dense")
+
+
+# c10 ScalarType names, as torch's dtype errors print them.
+_SCALAR_TYPE_NAMES = {
+    torch.float16: "Half", torch.float32: "Float", torch.float64: "Double", torch.bfloat16: "BFloat16",
+    torch.int8: "Char", torch.uint8: "Byte", torch.int16: "Short", torch.int32: "Int", torch.int64: "Long",
+    torch.bool: "Bool",
+}
+
+
+def _torch_at_least(major: int, minor: int) -> bool:
+    try:
+        return torch.torch_version.TorchVersion(torch.__version__) >= (major, minor)
+    except Exception:
+        return True
+
+
+def _premul_scalar_dtype(dtype: torch.dtype) -> torch.dtype:
+    """The C++ type ProcessGroupNCCL reads a PREMUL_SUM factor as (unpackPreMulSum<T>).
+
+    Before PyTorch 2.14 bfloat16 tensors used a float factor.
+    """
+
+    if dtype == torch.bfloat16 and not _torch_at_least(2, 14):
+        return torch.float32
+    return dtype
+
+
+def _dist_make_nccl_premul_sum(factor: Any) -> Any:
+    op = _ORIG_DIST["_make_nccl_premul_sum"](factor)
+    key = id(op)
+    _PREMUL_FACTORS[key] = factor
+    try:
+        weakref.finalize(op, _PREMUL_FACTORS.pop, key, None)
+    except TypeError:
+        pass
+    return op
+
+
+def _remember_premul_factors_of_calls() -> None:
+    """Also remember the factor of ``ReduceOp.PREMUL_SUM(factor)`` (FSDP2 in PyTorch 2.14)."""
+
+    red_op_type = type(torch.distributed.ReduceOp.PREMUL_SUM)
+    original = red_op_type.__call__
+
+    def __call__(self: Any, *args: Any, **kwargs: Any) -> Any:
+        op = original(self, *args, **kwargs)
+        if args and isinstance(op, torch.distributed.ReduceOp):
+            _PREMUL_FACTORS[id(op)] = args[0]
+            try:
+                weakref.finalize(op, _PREMUL_FACTORS.pop, id(op), None)
+            except TypeError:
+                pass
+        return op
+
+    try:
+        red_op_type.__call__ = __call__
+    except (AttributeError, TypeError):
+        pass
+
+
+def _premul_factor(op: Any) -> Any:
+    """The factor of a ``_make_nccl_premul_sum`` op, or None for any other op."""
+
+    if op is None or not isinstance(op, torch.distributed.ReduceOp):
+        return None
+    if not op == torch.distributed.ReduceOp.PREMUL_SUM:
+        return None
+    return _PREMUL_FACTORS.get(id(op))
+
+
+def _premul_multiplier(factor: Any, dtype: torch.dtype) -> float:
+    """The factor NCCL multiplies each input by.
+
+    NCCL reads ``sizeof(dtype)`` bytes of the factor. Before PyTorch 2.14 a
+    bfloat16 reduction passed a 4-byte float, so NCCL took its low two bytes
+    as the bfloat16 factor (zero for 0.5 and other powers of two).
+    """
+
+    value = float(unwrap_tensor(factor).reshape(-1)[0]) if isinstance(factor, torch.Tensor) else float(factor)
+    if dtype == torch.bfloat16 and _premul_scalar_dtype(dtype) == torch.float32:
+        low = struct.unpack("<I", struct.pack("<f", value))[0] & 0xFFFF
+        return struct.unpack("<f", struct.pack("<I", low << 16))[0]
+    return value
 
 
 def _check_reduce_op(tensor: Any, op: Any, group: Any) -> None:
-    """Reject the reductions ProcessGroupNCCL rejects for a CUDA tensor (getNcclReduceOp)."""
+    """Reject the reductions torch rejects: invalid ops, and for a CUDA tensor what getNcclReduceOp rejects."""
 
-    if op is None or not _nccl_handles(tensor, group):
+    if op is None:
+        return
+    # Converting the op into the collective's options raises torch's TypeError,
+    # e.g. for a bare ReduceOp.PREMUL_SUM without its factor.
+    torch.distributed.distributed_c10d.AllreduceOptions().reduceOp = op
+    if not _nccl_handles(tensor, group):
         return
     reduce_op = torch.distributed.ReduceOp
     for name in ("BAND", "BOR", "BXOR"):
@@ -732,6 +879,30 @@ def _check_reduce_op(tensor: Any, op: Any, group: Any) -> None:
             raise ValueError(f"Cannot use ReduceOp.{name} with NCCL")
     if _is_avg(op) and tensor.dtype == torch.bool:
         raise TypeError("Cannot use ReduceOp.AVG with boolean inputs")
+    factor = _premul_factor(op)
+    if factor is not None:
+        if tensor.dtype not in (torch.float16, torch.float32, torch.bfloat16, torch.float64):
+            raise TypeError("PreMulSum Data type must be half, float, bfloat16 or double")
+        expected = _premul_scalar_dtype(tensor.dtype)
+        if isinstance(factor, torch.Tensor) and factor.dtype != expected:
+            raise RuntimeError(
+                f"expected scalar type {_SCALAR_TYPE_NAMES.get(expected, expected)} "
+                f"but found {_SCALAR_TYPE_NAMES.get(factor.dtype, factor.dtype)}"
+            )
+
+
+def _premultiply(tensor: Any, raw: torch.Tensor, op: Any, group: Any) -> Any:
+    """Apply an NCCL PREMUL_SUM's factor to ``raw`` and return the SUM that finishes it.
+
+    Other ops come back unchanged; gloo rejects PREMUL_SUM on a gloo group.
+    """
+
+    factor = _premul_factor(op)
+    if factor is None or not _nccl_handles(tensor, group):
+        return op
+    with torch.no_grad():
+        raw.mul_(torch.tensor(_premul_multiplier(factor, raw.dtype), dtype=raw.dtype))
+    return _sum_op()
 
 
 def _torch_knows(group: Any) -> bool:
@@ -747,23 +918,30 @@ def _torch_knows(group: Any) -> bool:
 def _dist_get_world_size(group: Any = None) -> int:
     if _torch_knows(group):
         return _ORIG_DIST["get_world_size"](group)
-    return _DIST_WORLD_SIZE if _DIST_INITIALIZED else 1
+    if _DIST_INITIALIZED:
+        return _DIST_WORLD_SIZE
+    # Before init_process_group torch raises "Default process group has not been initialized".
+    return _ORIG_DIST["get_world_size"](group)
 
 
 def _dist_get_rank(group: Any = None) -> int:
     if _torch_knows(group):
         return _ORIG_DIST["get_rank"](group)
-    return _DIST_RANK if _DIST_INITIALIZED else 0
+    if _DIST_INITIALIZED:
+        return _DIST_RANK
+    return _ORIG_DIST["get_rank"](group)
 
 
 def _dist_new_group(*args: Any, **kwargs: Any) -> Any:
     # Subgroups use the default group's backend, gloo across launched
     # processes or torch's fake backend in a simulated job; NCCL is not there.
-    backend = kwargs.pop("backend", args[2] if len(args) > 2 else None)
-    kwargs.pop("pg_options", None)
-    group = _ORIG_DIST["new_group"](*args[:2], **kwargs)
+    original = _ORIG_DIST["new_group"]
+    arguments = dict(inspect.signature(original).bind(*args, **kwargs).arguments)
+    backend = arguments.pop("backend", None)
+    arguments.pop("pg_options", None)
+    group = original(**arguments)
     if backend is not None and not torch.distributed.distributed_c10d._rank_not_in_group(group):
-        _GROUP_BACKENDS[group] = str(backend)
+        _GROUP_BACKENDS[group] = str(backend).lower()
     return group
 
 
@@ -792,6 +970,12 @@ def _not_in_group(group: Any, name: str) -> bool:
         return False
     c10d._warn_not_in_group(name)
     return True
+
+
+def _torch_name(new: str, old: str) -> str:
+    """The name the installed torch gives an operation in its warnings (renamed after 2.9)."""
+
+    return new if hasattr(torch.distributed.distributed_c10d, new) else old
 
 
 def _real_all_reduce(raw: torch.Tensor, op: Any, group: Any) -> None:
@@ -827,13 +1011,29 @@ def _dist_barrier(group: Any = None, async_op: bool = False, device_ids: Any = N
     return _done(async_op)
 
 
+def _dist_monitored_barrier(group: Any = None, timeout: Any = None, wait_all_ranks: bool = False) -> Any:
+    if _not_in_group(group, "monitored_barrier"):
+        return None
+    if _torch_at_least(2, 14):
+        # PyTorch 2.14 accepts any group with a CPU backend.
+        if _backend_for(group, "cpu") is None:
+            raise ValueError("monitored_barrier requires a group with a CPU-capable backend (e.g. GLOO).")
+    elif _requested_backend(group).lower() != "gloo":
+        raise ValueError("monitored_barrier is only implemented for GLOO backend.")
+    if _DIST_REAL:
+        return _ORIG_DIST["monitored_barrier"](group=group, timeout=timeout, wait_all_ranks=wait_all_ranks)
+    return None
+
+
 def _dist_all_reduce(tensor: torch.Tensor, op: Any = None, group: Any = None, async_op: bool = False) -> Any:
     if _not_in_group(group, "all_reduce"):
         return None
+    _check_devices(group, tensor)
     _check_reduce_op(tensor, op, group)
+    raw = unwrap_tensor(tensor)
+    op = _premultiply(tensor, raw, op, group)
     if _DIST_REAL:
-        _real_all_reduce(unwrap_tensor(tensor), op, group)
-        return _done(async_op, [tensor])
+        _real_all_reduce(raw, op, group)
     return _done(async_op, [tensor])
 
 
@@ -846,6 +1046,7 @@ def _dist_broadcast(
 ) -> Any:
     if _not_in_group(group, "broadcast"):
         return None
+    _check_devices(group, tensor)
     if _DIST_REAL:
         options = {"group_src": group_src} if group_src is not None else {"src": src}
         return _ORIG_DIST["broadcast"](unwrap_tensor(tensor), group=group, async_op=async_op, **options)
@@ -860,6 +1061,7 @@ def _dist_all_gather(
 ) -> Any:
     if _not_in_group(group, "all_gather"):
         return None
+    _check_devices(group, tensor, *tensor_list)
     if _DIST_REAL:
         return _ORIG_DIST["all_gather"](
             [unwrap_tensor(item) for item in tensor_list], unwrap_tensor(tensor), group=group, async_op=async_op
@@ -908,8 +1110,10 @@ def _dist_all_gather_into_tensor(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
-    if _not_in_group(group, "all_gather_into_tensor"):
+    if _not_in_group(group, _torch_name("all_gather_single", "all_gather_into_tensor")):
         return None
+    _check_devices(group, output_tensor, input_tensor)
+    _check_single_device(group, output_tensor, input_tensor)
     if _nccl_handles(output_tensor, group):
         # ProcessGroupNCCL::all_gather_single checks these.
         if input_tensor.dtype != output_tensor.dtype:
@@ -938,56 +1142,92 @@ def _dist_reduce(
 ) -> Any:
     if _not_in_group(group, "reduce"):
         return None
+    _check_devices(group, tensor)
     _check_reduce_op(tensor, op, group)
+    c10d = torch.distributed.distributed_c10d
+    if group_dst is not None:
+        dst = group_dst if group is None else c10d.get_global_rank(group, group_dst)
+    if dst is None:
+        dst = 0
+    raw = unwrap_tensor(tensor)
     if _DIST_REAL:
-        raw = unwrap_tensor(tensor)
-        if group_dst is not None:
-            c10d = torch.distributed.distributed_c10d
-            dst = group_dst if group is None else c10d.get_global_rank(group, group_dst)
+        # Only the destination ends with the reduction; scale a copy elsewhere.
+        is_dst = c10d.get_rank() == dst
+        source = raw if is_dst else raw.clone()
+        op = _premultiply(tensor, source, op, group)
         if _is_avg(op):
-            _ORIG_DIST["reduce"](raw, dst=dst, op=_sum_op(), group=group)
-            if torch.distributed.distributed_c10d.get_rank() == dst:
+            _ORIG_DIST["reduce"](source, dst=dst, op=_sum_op(), group=group)
+            if is_dst:
                 _divide(raw, _ORIG_DIST["get_world_size"](group))
             return _done(async_op, [tensor])
-        return _ORIG_DIST["reduce"](raw, dst=dst, op=_sum_op() if op is None else op, group=group, async_op=async_op)
+        work = _ORIG_DIST["reduce"](source, dst=dst, op=_sum_op() if op is None else op, group=group,
+                                    async_op=async_op)
+        return work if source is raw else _done(async_op, [tensor])
+    if _dist_get_rank() == dst:
+        _premultiply(tensor, raw, op, group)
     return _done(async_op, [tensor])
+
+
+def _group_root(group: Any, rank: Any, group_rank: Any) -> int:
+    """The group rank of a collective's root, given as a global rank or a group rank."""
+
+    if group_rank is not None:
+        return int(group_rank)
+    rank = 0 if rank is None else int(rank)
+    if group is None or group is torch.distributed.GroupMember.WORLD:
+        return rank
+    return torch.distributed.distributed_c10d.get_group_rank(group, rank)
 
 
 def _dist_gather(
     tensor: torch.Tensor,
     gather_list: list[torch.Tensor] | None = None,
-    dst: int = 0,
+    dst: int | None = None,
     group: Any = None,
     async_op: bool = False,
     group_dst: Any = None,
 ) -> Any:
     if _not_in_group(group, "gather"):
         return None
+    _check_devices(group, tensor, *(gather_list or []))
     if _DIST_REAL:
-        options = {"group_dst": group_dst} if group_dst is not None else {"dst": dst}
+        options = {"group_dst": group_dst} if group_dst is not None else {"dst": 0 if dst is None else dst}
         targets = [unwrap_tensor(item) for item in gather_list] if gather_list else None
         return _ORIG_DIST["gather"](unwrap_tensor(tensor), targets, group=group, async_op=async_op, **options)
-    if gather_list:
-        unwrap_tensor(gather_list[0]).copy_(unwrap_tensor(tensor))
+    # torch's checks (_validate_output_list_for_rank); every rank sends this rank's tensor.
+    if _group_root(group, dst, group_dst) == _dist_get_rank(group):
+        if not gather_list:
+            raise ValueError("Argument ``gather_list`` must be specified on destination rank.")
+        for target in gather_list:
+            _copy_collective_tensor(target, tensor)
+    elif gather_list:
+        raise ValueError("Argument ``gather_list`` must NOT be specified on non-destination ranks.")
     return _done(async_op, gather_list or [])
 
 
 def _dist_scatter(
     tensor: torch.Tensor,
     scatter_list: list[torch.Tensor] | None = None,
-    src: int = 0,
+    src: int | None = None,
     group: Any = None,
     async_op: bool = False,
     group_src: Any = None,
 ) -> Any:
     if _not_in_group(group, "scatter"):
         return None
+    _check_devices(group, tensor, *(scatter_list or []))
     if _DIST_REAL:
-        options = {"group_src": group_src} if group_src is not None else {"src": src}
+        options = {"group_src": group_src} if group_src is not None else {"src": 0 if src is None else src}
         sources = [unwrap_tensor(item) for item in scatter_list] if scatter_list else None
         return _ORIG_DIST["scatter"](unwrap_tensor(tensor), sources, group=group, async_op=async_op, **options)
-    if scatter_list:
-        unwrap_tensor(tensor).copy_(unwrap_tensor(scatter_list[0]))
+    rank = _dist_get_rank(group)
+    if _group_root(group, src, group_src) == rank:
+        if not scatter_list:
+            raise ValueError("Argument ``scatter_list`` must be specified on source rank.")
+        # The source keeps its own slot.
+        unwrap_tensor(tensor).copy_(unwrap_tensor(scatter_list[rank]))
+    elif scatter_list:
+        raise ValueError("Argument ``scatter_list`` must NOT be specified on non-source ranks.")
     return _done(async_op, [tensor])
 
 
@@ -1000,15 +1240,18 @@ def _dist_reduce_scatter(
 ) -> Any:
     if _not_in_group(group, "reduce_scatter"):
         return None
+    _check_devices(group, output, *input_list)
     _check_reduce_op(output, op, group)
     if _DIST_REAL:
         stacked = torch.stack([unwrap_tensor(item).reshape(-1) for item in input_list])
+        op = _premultiply(output, stacked, op, group)
         _real_all_reduce(stacked, op, group)
         target = unwrap_tensor(output)
         target.copy_(stacked[_ORIG_DIST["get_rank"](group)].reshape(target.shape))
         return _done(async_op, [output])
     if input_list:
         _copy_collective_tensor(output, input_list[0])
+        _premultiply(output, unwrap_tensor(output), op, group)
     return _done(async_op, [output])
 
 
@@ -1019,8 +1262,10 @@ def _dist_reduce_scatter_tensor(
     group: Any = None,
     async_op: bool = False,
 ) -> Any:
-    if _not_in_group(group, "reduce_scatter_tensor"):
+    if _not_in_group(group, _torch_name("reduce_scatter_single", "reduce_scatter_tensor")):
         return None
+    _check_devices(group, output, input)
+    _check_single_device(group, output, input)
     if _nccl_handles(output, group):
         # ProcessGroupNCCL::reduce_scatter_single checks these.
         if input.dtype != output.dtype:
@@ -1030,12 +1275,14 @@ def _dist_reduce_scatter_tensor(
     _check_reduce_op(output, op, group)
     if _DIST_REAL:
         reduced = unwrap_tensor(input).clone()
+        op = _premultiply(output, reduced, op, group)
         _real_all_reduce(reduced, op, group)
         target = unwrap_tensor(output)
         size = _ORIG_DIST["get_world_size"](group)
         target.copy_(reduced.reshape(size, -1)[_ORIG_DIST["get_rank"](group)].reshape(target.shape))
         return _done(async_op, [output])
     _copy_collective_tensor(output, input)
+    _premultiply(output, unwrap_tensor(output), op, group)
     return _done(async_op, [output])
 
 
@@ -1047,6 +1294,7 @@ def _dist_all_to_all(
 ) -> Any:
     if _not_in_group(group, "all_to_all"):
         return None
+    _check_devices(group, *output_tensor_list, *input_tensor_list)
     if _DIST_REAL:
         return _ORIG_DIST["all_to_all"](
             [unwrap_tensor(item) for item in output_tensor_list],
@@ -1069,6 +1317,7 @@ def _dist_all_to_all_single(
 ) -> Any:
     if _not_in_group(group, "all_to_all_single"):
         return None
+    _check_devices(group, output, input)
     if _DIST_REAL:
         return _ORIG_DIST["all_to_all_single"](
             unwrap_tensor(output),
@@ -1085,7 +1334,7 @@ def _dist_all_to_all_single(
 
 def _dist_broadcast_object_list(
     object_list: list[Any],
-    src: int = 0,
+    src: int | None = None,
     group: Any = None,
     device: Any = None,
     group_src: Any = None,
@@ -1094,7 +1343,7 @@ def _dist_broadcast_object_list(
     if _not_in_group(group, "broadcast_object_list"):
         return None
     if _DIST_REAL:
-        options = {"group_src": group_src} if group_src is not None else {"src": src}
+        options = {"group_src": group_src} if group_src is not None else {"src": 0 if src is None else src}
         # The objects travel through gloo on the CPU, whatever device is named.
         return _ORIG_DIST["broadcast_object_list"](
             object_list, group=group, **options, **_weights_only(weights_only)
@@ -1871,6 +2120,11 @@ def enable() -> None:
     torch.distributed._reduce_scatter_base = _dist_reduce_scatter_tensor
     if "new_group" in _ORIG_DIST:
         torch.distributed.new_group = _dist_new_group
+    if "monitored_barrier" in _ORIG_DIST:
+        torch.distributed.monitored_barrier = _dist_monitored_barrier
+    if "_make_nccl_premul_sum" in _ORIG_DIST:
+        torch.distributed._make_nccl_premul_sum = _dist_make_nccl_premul_sum
+        _remember_premul_factors_of_calls()
     _install_legacy_cuda_types()
 
     for name in [
