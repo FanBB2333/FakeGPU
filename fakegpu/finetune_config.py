@@ -496,11 +496,12 @@ def _optimizer_options(
     decay = _nonnegative_float(
         _alias(values, "weight_decay", default=0.0), "weight_decay"
     )
-    grad_norm = _alias(
-        values, "max_grad_norm", default=None if source == "axolotl" else 1.0
+    # Axolotl 0.18.0 forwards max_grad_norm only when it is set
+    # (core/builders/base.py _set_base_training_args), so an unset value leaves
+    # TrainingArguments' default of 1.0 and Trainer clips gradients.
+    grad_norm = _nonnegative_float(
+        _alias(values, "max_grad_norm", default=1.0), "max_grad_norm"
     )
-    if grad_norm is not None:
-        grad_norm = _nonnegative_float(grad_norm, "max_grad_norm")
     return {
         "lr_scheduler_type": scheduler,
         "warmup_steps": steps,
@@ -756,6 +757,16 @@ def _adapter_options(
 ) -> dict[str, Any]:
     if rank is None:
         return {"lora_alpha": None, "lora_dropout": 0.0, "lora_bias": "none"}
+    if source == "axolotl" and all(
+        mapping.get(key) is None
+        for mapping, key in ((values, "lora_rank"), (values, "lora_r"), (peft, "r"))
+    ):
+        # Axolotl 0.18.0 has no lora_r default and passes LoraConfig(r=None),
+        # which PEFT rejects when it builds the adapter layers.
+        assumptions.append(
+            f"Axolotl lora_r is unspecified; the estimate assumes r={rank}. "
+            "Provide it before execution."
+        )
     fields = {
         "lora_alpha": values.get("lora_alpha"),
         "peft.lora_alpha": peft.get("lora_alpha"),

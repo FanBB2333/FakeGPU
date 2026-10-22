@@ -187,7 +187,9 @@ def test_scheduler_defaults_and_explicit_optimizer_options() -> None:
     assert axolotl["lr_scheduler_type"] == "cosine"
     assert axolotl["warmup_steps"] is None
     assert axolotl["warmup_ratio"] is None
-    assert axolotl["max_grad_norm"] is None
+    # Axolotl 0.18.0 passes max_grad_norm to TrainingArguments only when set,
+    # so Trainer's default 1.0 clips gradients.
+    assert axolotl["max_grad_norm"] == 1.0
     explicit = normalize_finetune_config(
         hf_config(
             lr_scheduler_type="cosine",
@@ -734,6 +736,26 @@ def test_axolotl_automatic_precision_requires_explicit_choice() -> None:
     for changes in ({}, {"bf16": "auto"}):
         with pytest.raises(FinetuneConfigError, match="[Aa]uto"):
             normalize_finetune_config({"base_model": "Qwen/Qwen3.5-0.8B", **changes})
+
+
+def test_axolotl_unset_lora_rank_is_a_declared_assumption() -> None:
+    # Axolotl 0.18.0 schemas/peft.py has lora_r: int | None = None and
+    # loaders/adapter.py builds LoraConfig(r=cfg.lora_r); PEFT rejects r=None.
+    config = {
+        "base_model": "Qwen/Qwen3.5-0.8B",
+        "adapter": "lora",
+        "bf16": True,
+        "lora_alpha": 16,
+        "lora_target_modules": ["q_proj"],
+    }
+    unset = normalize_finetune_config(config)
+    assert unset["lora_rank"] == 8
+    assert any("lora_r is unspecified" in item for item in unset["assumptions"])
+    explicit = normalize_finetune_config({**config, "lora_r": 8})
+    assert not any("lora_r" in item for item in explicit["assumptions"])
+    factory = normalize_finetune_config(hf_config(finetuning_type="lora", bf16=True))
+    assert factory["lora_rank"] == 8
+    assert not any("lora_r" in item for item in factory["assumptions"])
 
 
 def test_qlora_quantization_config_and_all_linear() -> None:

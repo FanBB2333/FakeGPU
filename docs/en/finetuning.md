@@ -34,6 +34,10 @@ does not import the frameworks or load the weights.
 - Unpacked Axolotl configs convert epochs as Axolotl does:
   `ceil(samples * epochs / (micro_batch_size * gradient_accumulation_steps))`
   updates, which Axolotl passes to Trainer as `max_steps`.
+- Axolotl passes `max_grad_norm` to Trainer only when it is set, so an unset
+  value means Trainer's default of 1.0. An unset Axolotl `lora_r` has no
+  default (PEFT rejects it); the estimate assumes 8 and says so in
+  `assumptions`.
 
 ```bash
 python -m fakegpu estimate-finetune \

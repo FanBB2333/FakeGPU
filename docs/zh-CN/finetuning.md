@@ -33,6 +33,9 @@ QLoRA 的显存与**训练循环**耗时。它不导入训练框架，也不加�
 - 未打包的 Axolotl 配置按 Axolotl 自己的规则换算 epochs：
   `ceil(samples * epochs / (micro_batch_size * gradient_accumulation_steps))`
   次更新，Axolotl 会把它作为 `max_steps` 传给 Trainer。
+- Axolotl 只在设置了 `max_grad_norm` 时才把它传给 Trainer，未设置即使用 Trainer
+  的默认值 1.0。Axolotl 的 `lora_r` 没有默认值（PEFT 会拒绝）；未设置时估算按 8
+  计算，并在 `assumptions` 中注明。
 
 ```bash
 python -m fakegpu estimate-finetune \

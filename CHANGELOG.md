@@ -55,6 +55,13 @@
 - Mixed-precision training plans size Adam and momentum state in FP32 next
   to the master copy, as DeepSpeed and PyTorch AMP keep it: 4 more bytes per
   parameter than before.
+- Axolotl fine-tuning configs without `max_grad_norm` normalize to 1.0, the
+  Trainer default Axolotl leaves in place, instead of `None`, so
+  `probe-finetune` clips gradients as Axolotl does. This changes the
+  calibration workload signature: probe observations saved for such configs
+  no longer match and need a new probe. Native `run-finetune` reports are
+  unaffected: they record the value the real Trainer used, which was
+  already 1.0.
 
 ### Fixed
 
@@ -403,6 +410,8 @@
   Local pipelines whose class has no recorded call defaults list the
   borrowed Stable Diffusion steps, guidance and text tokens in
   `generation_defaults.assumed_inputs` and `assumptions`.
+- Axolotl fine-tuning configs without `lora_r` list the assumed rank 8 in
+  `assumptions`; Axolotl has no default and PEFT rejects the unset rank.
 
 ## v1.6.0 - 2026-10-17
 
