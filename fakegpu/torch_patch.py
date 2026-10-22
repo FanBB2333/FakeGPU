@@ -975,6 +975,30 @@ def _install_torch_accelerator_compat(torch_mod: Any) -> None:
     accelerator.device_count = lambda: int(torch_mod.cuda.device_count())
 
 
+def _hide_mps_backend(torch_mod: Any) -> None:
+    """Report no MPS backend, as on a CUDA machine.
+
+    Accelerate's ``PartialState.default_device`` and transformers'
+    ``TrainingArguments.device`` pick MPS before CUDA when
+    ``torch.backends.mps`` is available and built. On Apple Silicon a
+    single-process ``Accelerator`` or ``Trainer`` would then train on MPS and
+    bypass the simulated GPUs.
+    """
+
+    mps = getattr(torch_mod.backends, "mps", None)
+    if mps is None:
+        return
+
+    # Cached like the original: torch._dynamo constant-folds
+    # ``is_available.__wrapped__``.
+    @functools.lru_cache
+    def _is_available() -> bool:
+        return False
+
+    mps.is_available = _is_available
+    mps.is_built = lambda: False
+
+
 # ---------------------------------------------------------------------------
 # Fake device properties
 # ---------------------------------------------------------------------------
@@ -2057,6 +2081,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     _install_upstream_memory_category_hooks(upstream, torch_mod)
     _patch_upstream_all_gather_object(upstream, torch_mod)
     _install_torch_accelerator_compat(torch_mod)
+    _hide_mps_backend(torch_mod)
     _install_dynamo_friendly_tree_map(upstream, torch_mod)
 
     fake_ddp_cls = torch_mod.nn.parallel.DistributedDataParallel

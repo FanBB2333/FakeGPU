@@ -392,6 +392,10 @@
   cannot run. The metrics exporter keeps label values valid UTF-8.
 - Jetson profiles use the CUDA per-SM block and thread limits, and RTX A4500,
   A5000, A5500 and A6000 model NVLink bridges as four x4 links.
+- On Apple Silicon, FakeCUDA reports no MPS backend, as on a CUDA machine.
+  Accelerate's `Accelerator().device` and transformers'
+  `TrainingArguments.device` chose MPS before CUDA, so single-process
+  training ran on MPS and bypassed the simulated GPUs.
 
 ## v1.6.0 - 2026-10-17
 

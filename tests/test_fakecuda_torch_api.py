@@ -438,3 +438,26 @@ assert torch.equal(state, torch.random.get_rng_state())
 print("fork_rng passed")
 """
     )
+
+
+def test_mps_is_hidden_so_frameworks_pick_the_simulated_gpus() -> None:
+    _run(
+        """
+fakegpu.init(runtime="fakecuda", devices="a100:1")
+import importlib.util
+import torch
+
+# A CUDA machine has no MPS backend; Accelerate and transformers check MPS
+# before CUDA, so on Apple Silicon they would otherwise skip the fake GPUs.
+assert not torch.backends.mps.is_available() and not torch.backends.mps.is_built()
+if importlib.util.find_spec("accelerate") is not None:
+    from accelerate import Accelerator
+
+    assert Accelerator().device.type == "cuda", Accelerator().device
+if importlib.util.find_spec("transformers") is not None:
+    from transformers import TrainingArguments
+
+    device = TrainingArguments(output_dir="out", report_to=[]).device
+    assert device.type == "cuda", device
+"""
+    )
