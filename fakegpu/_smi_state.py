@@ -54,6 +54,13 @@ SUPPORTED_SCHEMA_VERSIONS = frozenset(
 DEFAULT_STALE_AFTER_SECONDS = 2.0
 
 
+# A modeled NVIDIA driver version, the one FakeGPU's native NVML reports
+# (src/nvml/nvml_stubs.cpp kDriverVersion, CUDA 12.8 driver API). It parses
+# as a version, unlike the "simulated" placeholder older publishers wrote.
+MODELED_DRIVER_VERSION = "570.195.03"
+_LEGACY_DRIVER_PLACEHOLDER = "simulated"
+
+
 # A state with this key set lists GPUs without a process using them: the
 # background machine's layout (see fakegpu.machine.layout).
 LAYOUT_ONLY_KEY = "layout_only"
@@ -771,9 +778,7 @@ def _state_software_metadata(
     state: Mapping[str, Any],
 ) -> dict[str, Any]:
     raw = state.get("software")
-    if isinstance(raw, Mapping):
-        return dict(raw)
-    return {
+    software: dict[str, Any] = {
         "python_version": None,
         "python_implementation": None,
         "python_executable": None,
@@ -782,8 +787,17 @@ def _state_software_metadata(
         "torch_cuda_build": None,
         "cuda_version": None,
         "cuda_version_source": None,
-        "driver_version": "simulated",
+        "driver_version": None,
     }
+    if isinstance(raw, Mapping):
+        software = dict(raw)
+    # States without a driver version, or with the old "simulated"
+    # placeholder (the native publisher's default), get the modeled one.
+    if software.get("driver_version") in (None, "", _LEGACY_DRIVER_PLACEHOLDER):
+        software["driver_version"] = MODELED_DRIVER_VERSION
+        software["driver_version_source"] = "modeled_default"
+    software.setdefault("driver_version_source", "FAKEGPU_DRIVER_VERSION")
+    return software
 
 
 def _state_age_seconds(

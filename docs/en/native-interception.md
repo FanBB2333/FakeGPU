@@ -50,6 +50,28 @@ the capability manifest:
 python3 -m fakegpu capabilities --source-root . --build-dir build --strict
 ```
 
+## Library names and CUDA versions
+
+On Linux the launcher preloads `libcudart.so.12`, `libcublas.so.12`,
+`libcuda.so.1`, `libnvidia-ml.so.1` and `libnccl.so.2`. FakeGPU's runtime and
+cuBLAS follow the CUDA 12 ABI and report CUDA 12.0, so native interception
+targets programs built for CUDA 12, including PyTorch builds whose
+`torch.version.cuda` starts with `12.`.
+
+A CUDA 13 build links `libcudart.so.13` and `libcublas.so.13`. FakeGPU
+provides neither name nor the CUDA 13 ABI. The real CUDA 13 libraries still
+load, preloaded FakeGPU functions take over the calls they share a name with,
+and the other calls reach the real runtime, so such a run is not a supported
+simulation. The default Linux `torch` 2.14 wheels on PyPI depend on CUDA
+13.0. Install a CUDA 12 build of PyTorch for native interception, or use
+Python FakeCUDA, which does not depend on the CUDA libraries.
+
+The build directory also links `libcudart.so`, which nvitop loads on Linux,
+and on macOS `libnvidia-ml.so.1`, which nvidia-ml-py (`pynvml`) loads on every
+platform except Windows. The wheel ships copies of these names. A copy loads
+as a second library, but it shares FakeGPU's process state, so `pynvml` under
+the launcher sees the simulated GPUs and their memory.
+
 ## Hybrid mode
 
 In native hybrid mode, the CUDA runtime and cuBLAS stay native. If

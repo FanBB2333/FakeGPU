@@ -65,16 +65,35 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 - `-q` 显示 FakeGPU 版本、runtime 策略、软件版本、状态更新时间、profile 目录与
   原生 API 覆盖、设备标识、插槽、建模的拷贝与链路吞吐、显存分类、allocator 活动、
   dispatch 跟踪和各进程峰值。
-- `-i` 按设备索引、UUID、PCI Bus ID 或 profile ID 筛选。`--json` 输出完整的标准化
-  数据。FakeGPU 写入 state schema v2，仍可读取 v1。
+- `-L` 输出 nvidia-smi 格式的 `GPU 0: NAME (UUID: GPU-...)` 行，MIG 设备缩进
+  列在所属 GPU 下方。只有同时显示多台主机时，索引后才带主机名。profile、
+  compute capability 和 PCI Bus ID 见 `-q` 与 `--json`。
+- `topo -m` 输出 nvidia-smi 格式的制表符分隔矩阵和图例。FakeGPU 的主机、平台和
+  拓扑来源说明位于图例之后，读取 `Legend` 之前内容的工具（如 PyTorch 的 NVLink
+  检测）只会看到矩阵。CPU Affinity 和 GPU NUMA ID 输出 `N/A`。
+- `-i` 按设备索引、UUID、PCI Bus ID 或 profile ID 筛选；没有匹配的 GPU 时和
+  nvidia-smi 一样输出 `No devices were found` 并以状态 6 退出。`--json`
+  输出完整的标准化数据。FakeGPU 写入 state schema v2，仍可读取 v1。
 - `--query-runtime` 以 CSV 或 JSON 输出相同的运行时信息。`--help-query-runtime`
   列出全部字段。
 - CSV 输出和 `nvidia-smi` 一样用 `, ` 分隔字段，只有包含逗号、引号或换行的单元格
-  才加引号。`--query-gpu=count` 在每一行重复 GPU 数量，符合 Accelerate 的预期；
+  才加引号。`--format` 的 `csv`、`noheader`、`nounits` 可按任意顺序给出，
+  默认输出 CSV。`--query-gpu=count` 在每一行重复 GPU 数量，符合 Accelerate 的预期；
   用 `-i` 选择部分 GPU 时仍计入全部 GPU。
 - `--query-gpu` 与 `--query-compute-apps` 还接受 nvidia-smi 590 `--help-query-*`
   列出的全部字段与别名，列名与 nvidia-smi 一致。FakeGPU 未建模的字段（如
   `utilization.gpu`、`temperature.gpu`）输出 `[N/A]`。
+- `--query-retired-pages` 与 `--query-remapped-rows` 接受 nvidia-smi 580 的字段，
+  行结构与之相同：每个 GPU 的每种退役原因一行，以及每个 GPU 一行。FakeGPU
+  不建模页面退役和行重映射，地址与计数输出 `[N/A]`。`--query-accounted-apps`
+  只输出表头，与 nvidia-smi 在 accounting 模式关闭时一致。
+- `memory.reserved` 在 nvidia-smi 中表示“NVIDIA 驱动和固件保留的显存”，
+  FakeGPU 不建模，因此输出 `[N/A]`。此前 `memory.reserved` 报告的 caching
+  allocator 保留显存改为 `memory.allocator_reserved`。
+- 表格开头和 nvidia-smi 的标题行一样带有 `Driver Version:` 与 `CUDA Version:`。
+  驱动版本是建模值 `570.195.03`，与 FakeGPU 原生 NVML 报告的版本一致；
+  `--query-gpu=driver_version` 输出同一个值。在 workload 启动前设置
+  `FAKEGPU_DRIVER_VERSION` 可建模其他版本。
 - 原生拦截还会发布 allocation 生命周期、传输量、kernel launch、GEMM 调用与 FLOP、
   兼容性事件和 unsupported API 次数。`FAKEGPU_SMI_DETAIL_LIMIT` 与
   `FAKEGPU_SMI_MAX_STATE_BYTES` 分别限制保留的明细和状态文件大小。
@@ -135,6 +154,16 @@ curl http://127.0.0.1:9400/api/v1/history
 - 进程序列优先保留显存占用最高的进程，默认 128 个，最多 256 个。
   `--max-process-series 0` 可以关闭。历史默认保留 300 个样本，最多 1,440 个。
 - 数据只保存在内存中。长期留存请用 Prometheus 或其他采集系统。
+- 指标名遵循 Prometheus 命名规范：每个指标族只用一种单位，使用基本单位（bytes、
+  seconds、bytes per second），计数器以 `_total` 结尾。NVLink 数值为
+  `fakegpu_device_nvlink_active_links`、`fakegpu_device_nvlink_peers` 和
+  `fakegpu_device_nvlink_bandwidth_bytes_per_second`；原生活动是一组
+  `fakegpu_device_native_*_total` 计数器；发布器健康状态为
+  `fakegpu_publisher_writes_total{result}` 与
+  `fakegpu_publisher_{last,max}_duration_seconds`。旧的 `fakegpu_device_nvlink`、
+  `fakegpu_device_native_activity`、`fakegpu_publisher_writes` 和
+  `fakegpu_publisher_duration_microseconds` 在本版本中保留，HELP 文本标注为已弃用。
+- FakeGPU 不知道的数值（如空闲机器 GPU 的状态时长）不输出样本。
 - 服务只监听 `127.0.0.1`，不提供认证。对外开放前应放在带认证的代理后面。导出的
   数据沿用 FakeGPU-SMI 对建模值和观测值的区分。
 

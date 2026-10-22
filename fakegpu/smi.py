@@ -29,9 +29,13 @@ from ._smi_environment import (
     _nonnegative_int,
 )
 from ._smi_query import (
+    ACCOUNTED_APPS_QUERY_FIELDS,
     GPU_QUERY_FIELDS,
     PROCESS_QUERY_FIELDS,
     QueryField,
+    REMAPPED_ROWS_QUERY_FIELDS,
+    RETIRED_PAGE_CAUSES,
+    RETIRED_PAGES_QUERY_FIELDS,
     RUNTIME_QUERY_FIELDS,
 )
 from ._smi_render import (
@@ -46,6 +50,7 @@ from ._smi_render import (
 )
 from ._smi_state import (
     DEFAULT_STALE_AFTER_SECONDS,
+    MODELED_DRIVER_VERSION,
     SCHEMA_VERSION,
     _catalog_metadata,
     _discover_state_paths,
@@ -85,7 +90,29 @@ _QUERIES = (
         RUNTIME_QUERY_FIELDS,
         "runtimes",
     ),
+    (
+        "retired-pages",
+        "query_retired_pages",
+        "help_query_retired_pages",
+        RETIRED_PAGES_QUERY_FIELDS,
+        "devices",
+    ),
+    (
+        "remapped-rows",
+        "query_remapped_rows",
+        "help_query_remapped_rows",
+        REMAPPED_ROWS_QUERY_FIELDS,
+        "devices",
+    ),
+    (
+        "accounted-apps",
+        "query_accounted_apps",
+        "help_query_accounted_apps",
+        ACCOUNTED_APPS_QUERY_FIELDS,
+        "devices",
+    ),
 )
+_QUERY_ARGUMENTS = tuple(attr for _kind, attr, *_rest in _QUERIES)
 
 
 def configured_state_path() -> Path | None:
@@ -558,7 +585,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "-L",
         "--list-gpus",
         action="store_true",
-        help="List simulated GPUs with UUID, profile, and compute capability.",
+        help="List simulated GPUs and their UUIDs in nvidia-smi -L's format.",
     )
     output_group.add_argument(
         "-q",
@@ -580,6 +607,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "--query-runtime",
         metavar="FIELDS",
         help="Query comma-separated FakeGPU runtime and publisher fields.",
+    )
+    output_group.add_argument(
+        "--query-retired-pages",
+        metavar="FIELDS",
+        help="Query retired-page fields; addresses are not modeled ([N/A]).",
+    )
+    output_group.add_argument(
+        "--query-remapped-rows",
+        metavar="FIELDS",
+        help="Query remapped-row fields; counts are not modeled ([N/A]).",
+    )
+    output_group.add_argument(
+        "--query-accounted-apps",
+        metavar="FIELDS",
+        help="Query accounted-process fields; accounting is not modeled.",
     )
     parser.add_argument(
         "-m",
@@ -610,7 +652,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--format",
         default=None,
         help=(
-            "Query output format: csv, csv,noheader, csv,nounits, or json."
+            "Query output format: csv, noheader and nounits in any order "
+            "(CSV is the default), or json."
         ),
     )
     parser.add_argument(
@@ -649,6 +692,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "--help-query-runtime",
         action="store_true",
         help="List supported --query-runtime fields and exit.",
+    )
+    parser.add_argument(
+        "--help-query-retired-pages",
+        action="store_true",
+        help="List supported --query-retired-pages fields and exit.",
+    )
+    parser.add_argument(
+        "--help-query-remapped-rows",
+        action="store_true",
+        help="List supported --query-remapped-rows fields and exit.",
+    )
+    parser.add_argument(
+        "--help-query-accounted-apps",
+        action="store_true",
+        help="List supported --query-accounted-apps fields and exit.",
     )
     loop_group = parser.add_mutually_exclusive_group()
     loop_group.add_argument(
@@ -693,24 +751,22 @@ def _check_view_arguments(
         or args.list_compute_instances
     ) and args.view != "mig":
         parser.error("-lgi/-lci require the mig view")
+    querying = any(
+        getattr(args, attr) is not None for attr in _QUERY_ARGUMENTS
+    )
     if args.view and (
         args.json
         or args.list_gpus
         or args.detail
-        or args.query_gpu
-        or args.query_compute_apps
-        or args.query_runtime
+        or querying
     ):
         parser.error(
             "topo, nvlink, events, and mig views cannot be combined "
             "with another output mode"
         )
-    if args.format is not None and not (
-        args.query_gpu or args.query_compute_apps or args.query_runtime
-    ):
+    if args.format is not None and not querying:
         parser.error(
-            "--format requires --query-gpu, --query-compute-apps, "
-            "or --query-runtime"
+            "--format requires a --query-* option"
         )
 
 
@@ -777,6 +833,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 device_selectors=selectors,
                 stale_after_seconds=args.stale_after_seconds,
             )
+            if selectors and states and not inventory["devices"]:
+                # nvidia-smi 580.178.04 with -i 9, -i GPU-<unknown> or an
+                # unknown bus ID prints this on stdout and exits 6 ("A query
+                # to find an object was unsuccessful").
+                print("No devices were found")
+                for error in errors:
+                    print(f"warning: {error}", file=sys.stderr)
+                return 6
 
             # Like nvidia-smi, a looping query appends rows under one header.
             if refresh and not args.json and query is None:
@@ -797,20 +861,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else:
                     print(json.dumps(payload, sort_keys=True))
             elif args.list_gpus:
-                print(render_gpu_list(inventory, errors=errors))
+                print(render_gpu_list(inventory))
             elif args.detail:
-                print(render_detail(inventory, errors=errors))
+                print(render_detail(inventory))
             elif args.view == "topo":
-                print(render_topology_matrix(inventory, errors=errors))
+                print(render_topology_matrix(inventory))
             elif args.view == "nvlink":
-                print(render_nvlink_status(inventory, errors=errors))
+                print(render_nvlink_status(inventory))
             elif args.view == "events":
-                print(render_health_events(inventory, errors=errors))
+                print(render_health_events(inventory))
             elif args.view == "mig":
                 print(
                     render_mig_view(
                         inventory,
-                        errors=errors,
                         instance_kind=(
                             "gpu"
                             if args.list_gpu_instances
@@ -829,6 +892,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if selectors and "count" in fields:
                         count = len(build_inventory(states, stale_after_seconds=args.stale_after_seconds)["devices"])
                     records = [{**device, "count": count} for device in records]
+                elif query_kind == "retired-pages":
+                    # One row per cause and GPU, as nvidia-smi 580.178.04
+                    # prints for GPUs without retired-page data.
+                    records = [
+                        {**device, "retired_pages": {"cause": cause}}
+                        for device in records
+                        for cause in RETIRED_PAGE_CAUSES
+                    ]
+                elif query_kind == "accounted-apps":
+                    # Accounting is not modeled; nvidia-smi 580.178.04 prints
+                    # only the header while accounting mode is disabled.
+                    records = []
                 text = render_query(
                     records,
                     fields=fields,
@@ -846,13 +921,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(
                     render_table(
                         states,
-                        errors=errors,
                         device_selectors=selectors,
                         stale_after_seconds=args.stale_after_seconds,
                         inventory=inventory,
                     )
                 )
             sys.stdout.flush()
+            if not args.json:
+                # nvidia-smi's stdout carries only its report; line counters
+                # such as `nvidia-smi -L | wc -l` must not count warnings.
+                for error in errors:
+                    print(f"warning: {error}", file=sys.stderr)
 
             refresh += 1
             if args.loop is None:
@@ -909,14 +988,16 @@ def _parse_query_format(
     )
     if parts == ("json",):
         return {"kind": "json", "noheader": True, "nounits": True}
-    if not parts or parts[0] != "csv":
-        parser.error("--format must start with csv or equal json")
-    options = set(parts[1:])
-    unknown = options - {"noheader", "nounits"}
+    # nvidia-smi 580.178.04 accepts its modifiers in any order and repeated,
+    # and prints CSV without "csv" too: --format=noheader,csv and
+    # --format=noheader both exit 0. An unknown modifier exits 2.
+    options = set(parts)
+    unknown = options - {"csv", "noheader", "nounits"}
     if unknown:
         parser.error(
-            "unsupported --format option(s): "
+            "Format modifier is not recognized: "
             + ", ".join(sorted(unknown))
+            + " (use csv, noheader and nounits, or json alone)"
         )
     return {
         "kind": "csv",
@@ -936,6 +1017,8 @@ def _render_query_help(
             suffix += f" (alias of {spec.header})"
         if spec.path is None:
             suffix += " (not modeled; always [N/A])"
+        if spec.note:
+            suffix += f" ({spec.note})"
         lines.append(f"  {name}{suffix}")
     return "\n".join(lines)
 
@@ -957,6 +1040,7 @@ def _software_metadata() -> dict[str, Any]:
         if torch_cuda
         else "fakecuda_default"
     )
+    configured_driver = os.environ.get("FAKEGPU_DRIVER_VERSION", "").strip()
     return {
         "python_version": platform.python_version(),
         "python_implementation": platform.python_implementation(),
@@ -968,9 +1052,9 @@ def _software_metadata() -> dict[str, Any]:
         ),
         "cuda_version": cuda_version,
         "cuda_version_source": cuda_source,
-        "driver_version": os.environ.get(
-            "FAKEGPU_DRIVER_VERSION",
-            "simulated",
+        "driver_version": configured_driver or MODELED_DRIVER_VERSION,
+        "driver_version_source": (
+            "FAKEGPU_DRIVER_VERSION" if configured_driver else "modeled_default"
         ),
     }
 

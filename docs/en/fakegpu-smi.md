@@ -69,19 +69,43 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   freshness, catalog and native API coverage, device identity, slot, modeled
   copies and link throughput, memory categories, allocator activity, dispatch
   tracking, and per-process peaks.
-- `-i` selects devices by index, UUID, PCI bus ID, or profile ID. `--json`
-  prints the full normalized inventory. FakeGPU writes state schema v2 and can
-  still read v1.
+- `-L` prints nvidia-smi's `GPU 0: NAME (UUID: GPU-...)` lines, with MIG
+  devices indented below their GPU. A host name follows the index only when
+  several hosts are shown. Profile, compute capability and PCI bus ID are in
+  `-q` and `--json`.
+- `topo -m` prints nvidia-smi's tab-separated matrix and legend. FakeGPU's
+  host, platform and topology-source notes follow the legend, so tools
+  that read the part before `Legend`, like PyTorch's NVLink check, see
+  only the matrix. CPU Affinity and GPU NUMA ID print `N/A`.
+- `-i` selects devices by index, UUID, PCI bus ID, or profile ID. When it
+  matches no GPU, the command prints `No devices were found` and exits 6,
+  like nvidia-smi. `--json` prints the full normalized inventory. FakeGPU
+  writes state schema v2 and can still read v1.
 - `--query-runtime` exposes the same runtime details as CSV or JSON.
   `--help-query-runtime` lists every field.
 - CSV output separates fields with `, ` like `nvidia-smi` and quotes only
-  cells that contain a comma, quote, or newline. `--query-gpu=count` repeats
-  the number of GPUs on every row, as Accelerate expects, and still counts
-  every GPU when `-i` selects some.
+  cells that contain a comma, quote, or newline. `--format` takes `csv`,
+  `noheader` and `nounits` in any order, and CSV is the default.
+  `--query-gpu=count` repeats the number of GPUs on every row, as Accelerate
+  expects, and still counts every GPU when `-i` selects some.
 - `--query-gpu` and `--query-compute-apps` also accept every field and alias
   of nvidia-smi 590's `--help-query-*` lists, headed by nvidia-smi's column
   names. Fields FakeGPU does not model, such as `utilization.gpu` or
   `temperature.gpu`, print `[N/A]`.
+- `--query-retired-pages` and `--query-remapped-rows` accept nvidia-smi
+  580's fields and print its rows: one per retirement cause and GPU, and one
+  per GPU. FakeGPU models neither page retirement nor row remapping, so
+  addresses and counts print `[N/A]`. `--query-accounted-apps` prints only
+  its header, as nvidia-smi does while accounting mode is disabled.
+- `memory.reserved` is nvidia-smi's "memory reserved by the NVIDIA driver
+  and firmware", which FakeGPU does not model, so it prints `[N/A]`. The
+  caching allocator's reserved memory, which `memory.reserved` reported
+  before, is `memory.allocator_reserved`.
+- The table's first lines carry `Driver Version:` and `CUDA Version:` like
+  nvidia-smi's banner. The driver version is a modeled `570.195.03`, the
+  version FakeGPU's native NVML reports, and `--query-gpu=driver_version`
+  prints the same value. Set `FAKEGPU_DRIVER_VERSION` before the workload
+  starts to model another one.
 - Native interception also publishes allocation lifetime, transfer volume,
   kernel launches, GEMM calls and FLOPs, compatibility events, and unsupported
   API counts. `FAKEGPU_SMI_DETAIL_LIMIT` and `FAKEGPU_SMI_MAX_STATE_BYTES` limit
@@ -151,6 +175,19 @@ curl http://127.0.0.1:9400/api/v1/history
   samples by default and 1,440 at most.
 - Everything stays in memory. Use Prometheus or another scraper for long-term
   retention.
+- Metric names follow Prometheus's naming practices: one unit per family,
+  base units (bytes, seconds, bytes per second), and `_total` on counters.
+  NVLink values are `fakegpu_device_nvlink_active_links`,
+  `fakegpu_device_nvlink_peers` and
+  `fakegpu_device_nvlink_bandwidth_bytes_per_second`; native activity is a
+  set of `fakegpu_device_native_*_total` counters; publisher health is
+  `fakegpu_publisher_writes_total{result}` and
+  `fakegpu_publisher_{last,max}_duration_seconds`. The previous
+  `fakegpu_device_nvlink`, `fakegpu_device_native_activity`,
+  `fakegpu_publisher_writes` and `fakegpu_publisher_duration_microseconds`
+  families remain for this release, marked deprecated in their HELP text.
+- A value FakeGPU does not know, such as the state age of an idle machine
+  GPU, has no sample.
 - The server binds to `127.0.0.1` without authentication. Put it behind an
   authenticated proxy before exposing it. Exported values keep FakeGPU-SMI's
   distinction between modeled and observed data.

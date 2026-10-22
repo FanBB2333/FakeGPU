@@ -88,11 +88,12 @@ and `cuDeviceGetP2PAttribute` answer from the topology, and
 `cudaDeviceEnablePeerAccess` returns `cudaErrorPeerAccessUnsupported` for a
 pair without peer access.
 
-`fakegpu nvidia-smi topo -m` shows the result with NVIDIA's legend:
+`fakegpu nvidia-smi topo -m` shows the result in nvidia-smi's
+tab-separated layout and legend, followed by FakeGPU's platform notes:
 
 ```text
-      GPU0  GPU1  GPU2  GPU3  GPU4  GPU5  GPU6  GPU7  NUMA Affinity
-GPU0  X     NV1   NV1   NV2   NV2   SYS   SYS   SYS   0
+        GPU0    GPU1    GPU2    GPU3    GPU4    GPU5    GPU6    GPU7    CPU Affinity    NUMA Affinity   GPU NUMA ID
+GPU0     X      NV1     NV1     NV2     NV2     SYS     SYS     SYS     N/A     0               N/A
 ```
 
 ## Copy time and throughput

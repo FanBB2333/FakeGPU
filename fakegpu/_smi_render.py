@@ -27,13 +27,16 @@ from ._smi_query import (
     _query_timestamp,
     _query_value,
 )
-from ._smi_state import DEFAULT_STALE_AFTER_SECONDS, build_inventory
+from ._smi_state import (
+    DEFAULT_STALE_AFTER_SECONDS,
+    MODELED_DRIVER_VERSION,
+    build_inventory,
+)
 
 
 def render_table(
     states: Sequence[dict[str, Any]],
     *,
-    errors: Sequence[str] = (),
     device_selectors: Sequence[str] = (),
     stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
     inventory: Mapping[str, Any] | None = None,
@@ -56,10 +59,19 @@ def render_table(
             for item in inventory["runtimes"]
         }
     )
+    driver_versions = sorted(
+        {
+            str(item["software"].get("driver_version") or MODELED_DRIVER_VERSION)
+            for item in inventory["runtimes"]
+        }
+    ) or [MODELED_DRIVER_VERSION]
+    # nvidia-smi's banner carries "Driver Version: X " and "CUDA Version: Y";
+    # torch and vLLM collect_env read them with r"Driver Version: (.*?) ".
     lines = [
         "FakeGPU-SMI (simulated CUDA telemetry)",
         (
             f"FakeGPU Version: {', '.join(versions) if versions else 'unknown'}"
+            f" | Driver Version: {', '.join(driver_versions)} (modeled)"
             f" | CUDA Version: "
             f"{', '.join(cuda_versions) if cuda_versions else 'N/A'}"
             " | Hardware-only telemetry: N/A"
@@ -118,161 +130,123 @@ def render_table(
                 f"{_table_cell(item['tracking_confidence'])} | "
                 f"{item['status']} | {_format_age(item['age_seconds'])} |"
             )
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 
-def render_gpu_list(
-    inventory: Mapping[str, Any],
-    *,
-    errors: Sequence[str] = (),
-) -> str:
+def render_gpu_list(inventory: Mapping[str, Any]) -> str:
+    """List GPUs in nvidia-smi -L's format.
+
+    nvidia-smi 580's format strings are "GPU %u: %s (%s: %s)" and, for MIG
+    devices, "  %-15s Device %2u: (%s: %s)" with "MIG <profile>" as the
+    first field. Profile, compute capability and PCI bus ID are in -q and
+    --json. Only a view of several hosts names each GPU's host.
+    """
+
+    devices = list(inventory.get("devices") or [])
+    several_hosts = len({str(item["host"]) for item in devices}) > 1
     lines = []
-    for item in inventory.get("devices") or []:
+    for item in devices:
+        host = f" @ {item['host']}" if several_hosts else ""
         lines.append(
-            f"GPU {item['index']} @ {item['host']}: {item['name']} "
-            f"(UUID: {item['uuid']}, Profile: {item['profile_id']}, "
-            f"CC: {item['compute_capability'] or 'N/A'}, "
-            f"PCI: {item['pci_bus_id']})"
+            f"GPU {item['index']}{host}: {item['name']} (UUID: {item['uuid']})"
         )
         for instance in item["mig"]["instances"]:
             lines.append(
-                "  MIG "
-                f"{instance['profile']} Device "
-                f"{instance['index']}: "
-                f"(UUID: {instance['uuid']}, "
-                f"GI: {instance['gpu_instance_id']}, "
-                f"CI: {instance['compute_instance_id']}, "
-                "Memory: "
-                f"{_format_bytes(instance['memory_total_bytes'])})"
+                f"  {'MIG ' + str(instance['profile']):<15} "
+                f"Device {instance['index']:>2}: (UUID: {instance['uuid']})"
             )
     if not lines:
         lines.append("No published FakeCUDA GPUs found.")
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 
-def render_topology_matrix(
-    inventory: Mapping[str, Any],
-    *,
-    errors: Sequence[str] = (),
-) -> str:
+# nvidia-smi topo -m's legend, as nvidia-smi 580.178.04 prints it.
+_TOPOLOGY_LEGEND = (
+    "Legend:",
+    "",
+    "  X    = Self",
+    "  SYS  = Connection traversing PCIe as well as the SMP interconnect "
+    "between NUMA nodes (e.g., QPI/UPI)",
+    "  NODE = Connection traversing PCIe as well as the interconnect between "
+    "PCIe Host Bridges within a NUMA node",
+    "  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge "
+    "(typically the CPU)",
+    "  PXB  = Connection traversing multiple PCIe bridges (without "
+    "traversing the PCIe Host Bridge)",
+    "  PIX  = Connection traversing at most a single PCIe bridge",
+    "  NV#  = Connection traversing a bonded set of # NVLinks",
+)
+
+
+def render_topology_matrix(inventory: Mapping[str, Any]) -> str:
+    """Render ``nvidia-smi topo -m``'s matrix and legend, then FakeGPU's notes.
+
+    nvidia-smi 580 separates cells with tabs and underlines the header row
+    with ANSI escapes even when stdout is not a terminal. The self cell is
+    " X ", and an empty cell follows NUMA Affinity. Callers split the output
+    on "Legend": torch's inductor looks for "NV" before it to detect NVLink,
+    so FakeGPU's host, platform and source notes come after the legend.
+    """
+
     devices = list(inventory.get("devices") or [])
-    lines = ["FakeGPU modeled topology matrix"]
     if not devices:
-        lines.append("No published FakeCUDA GPUs found.")
-    else:
-        devices_by_host: dict[str, list[Mapping[str, Any]]] = {}
-        for device in devices:
-            devices_by_host.setdefault(device["host"], []).append(device)
-        for host, host_devices in sorted(devices_by_host.items()):
-            host_devices.sort(key=lambda item: (item["index"], item["uuid"]))
-            if len(devices_by_host) > 1 or lines[-1] != lines[0]:
-                lines.append("")
-            lines.append(f"Host: {host}")
-            platforms = sorted(
-                {
-                    str(device["topology"].get("platform") or "")
-                    for device in host_devices
-                }
-                - {""}
-            )
-            for platform in platforms:
-                lines.append(f"Platform: {_platform_label(platform)}")
-            labels = _topology_labels(host_devices)
-            placed = any(
-                device["topology"].get("slot") for device in host_devices
-            )
-            rows = [["", *labels, *(["NUMA Affinity"] if placed else [])]]
-            for row_index, device in enumerate(host_devices):
-                slot = device["topology"].get("slot") or {}
-                rows.append(
-                    [
-                        labels[row_index],
-                        *[
-                            _topology_relation(device, target)
-                            for target in host_devices
-                        ],
-                        *(
-                            [str(slot.get("numa_node", "N/A")) if slot else "N/A"]
-                            if placed
-                            else []
-                        ),
-                    ]
-                )
-            widths = [
-                max(len(str(row[column])) for row in rows)
-                for column in range(len(rows[0]))
-            ]
-            for row in rows:
-                lines.append(
-                    "  ".join(
-                        str(value).ljust(widths[column])
-                        for column, value in enumerate(row)
-                    ).rstrip()
-                )
-            source_values = sorted(
-                {device["topology"]["source"] for device in host_devices}
-            )
-            lines.append(
-                "Topology source: "
-                + ", ".join(source_values)
-                + " (modeled, not measured)"
-            )
-            config_errors = sorted(
-                {
-                    str(device["topology"].get("error") or "")
-                    for device in host_devices
-                    if device["topology"].get("error")
-                }
-            )
-            for config_error in config_errors:
-                lines.append(f"Configuration error: {config_error}")
-        lines.extend(
-            [
-                "",
-                "Legend:",
-                "",
-                "  X    = Self",
-                (
-                    "  SYS  = Connection traversing PCIe as well as the "
-                    "SMP interconnect between NUMA nodes"
-                ),
-                (
-                    "  NODE = Connection traversing PCIe as well as the "
-                    "interconnect between PCIe Host Bridges within a "
-                    "NUMA node"
-                ),
-                (
-                    "  PHB  = Connection traversing PCIe as well as a "
-                    "PCIe Host Bridge (typically the CPU)"
-                ),
-                (
-                    "  PXB  = Connection traversing multiple PCIe bridges "
-                    "(without traversing the PCIe Host Bridge)"
-                ),
-                (
-                    "  PIX  = Connection traversing at most a single "
-                    "PCIe bridge"
-                ),
-                (
-                    "  NV#  = Connection traversing a bonded set of # "
-                    "NVLinks"
-                ),
-            ]
+        return "No published FakeCUDA GPUs found."
+    labels = _topology_labels(devices)
+    header = [*labels, "CPU Affinity", "NUMA Affinity", "GPU NUMA ID"]
+    lines = ["\t\x1b[4m" + "\t".join(header) + "\x1b[0m"]
+    for label, device in zip(labels, devices):
+        slot = device["topology"].get("slot") or {}
+        numa = slot.get("numa_node") if slot else None
+        cells = [
+            " X " if target is device else _topology_relation(device, target)
+            for target in devices
+        ]
+        # CPU affinity and the GPU's own NUMA ID are not modeled.
+        numa_text = "N/A" if numa is None else str(numa)
+        lines.append("\t".join([label, *cells, "N/A", numa_text, "", "N/A"]))
+    lines.extend(["", *_TOPOLOGY_LEGEND, "", "FakeGPU modeled topology matrix"])
+    devices_by_host: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
+    for label, device in zip(labels, devices):
+        devices_by_host.setdefault(str(device["host"]), []).append(
+            (label, device)
         )
-    for error in errors:
-        lines.append(f"warning: {error}")
+    for host, entries in devices_by_host.items():
+        host_devices = [device for _label, device in entries]
+        host_labels = ", ".join(label for label, _device in entries)
+        lines.append(f"Host: {host} ({host_labels})")
+        platforms = sorted(
+            {
+                str(device["topology"].get("platform") or "")
+                for device in host_devices
+            }
+            - {""}
+        )
+        for platform in platforms:
+            lines.append(f"Platform: {_platform_label(platform)}")
+        source_values = sorted(
+            {device["topology"]["source"] for device in host_devices}
+        )
+        lines.append(
+            "Topology source: "
+            + ", ".join(source_values)
+            + " (modeled, not measured)"
+        )
+        config_errors = sorted(
+            {
+                str(device["topology"].get("error") or "")
+                for device in host_devices
+                if device["topology"].get("error")
+            }
+        )
+        for config_error in config_errors:
+            lines.append(f"Configuration error: {config_error}")
+    if len(devices_by_host) > 1:
+        lines.append("GPUs on different hosts show SYS.")
+    lines.append("CPU Affinity and GPU NUMA ID are not modeled.")
     return "\n".join(lines)
 
 
-def render_nvlink_status(
-    inventory: Mapping[str, Any],
-    *,
-    errors: Sequence[str] = (),
-) -> str:
+def render_nvlink_status(inventory: Mapping[str, Any]) -> str:
     devices = list(inventory.get("devices") or [])
     lines = [
         "FakeGPU modeled NVLink status",
@@ -312,15 +286,12 @@ def render_nvlink_status(
                 f"  Link {link['link']}: Active -> {remote}, "
                 f"{_format_gbps(link['bandwidth_gbps'])} GB/s"
             )
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 
 def render_mig_view(
     inventory: Mapping[str, Any],
     *,
-    errors: Sequence[str] = (),
     instance_kind: str = "all",
 ) -> str:
     devices = list(inventory.get("devices") or [])
@@ -389,16 +360,10 @@ def render_mig_view(
                     "memory tracking "
                     f"{instance['memory_tracking']}"
                 )
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 
-def render_health_events(
-    inventory: Mapping[str, Any],
-    *,
-    errors: Sequence[str] = (),
-) -> str:
+def render_health_events(inventory: Mapping[str, Any]) -> str:
     records = _health_event_records(inventory)
     maximum_severity = _maximum_fault_severity(records)
     rank = FAULT_SEVERITY_RANK.get(maximum_severity, 0)
@@ -458,8 +423,6 @@ def render_health_events(
             "Some modeled fault details were omitted by "
             "FAKEGPU_SMI_DETAIL_LIMIT."
         )
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 
@@ -588,11 +551,7 @@ def _health_event_records(
     return records
 
 
-def render_detail(
-    inventory: Mapping[str, Any],
-    *,
-    errors: Sequence[str] = (),
-) -> str:
+def render_detail(inventory: Mapping[str, Any]) -> str:
     lines = ["FakeGPU-SMI detailed report"]
     runtimes = list(inventory.get("runtimes") or [])
     if runtimes:
@@ -605,8 +564,6 @@ def render_detail(
         lines.append("No published FakeCUDA GPUs found.")
     for item in devices:
         lines.extend(_device_detail_lines(item))
-    for error in errors:
-        lines.append(f"warning: {error}")
     return "\n".join(lines)
 
 
@@ -668,7 +625,8 @@ def _runtime_detail_lines(item: Mapping[str, Any]) -> list[str]:
                 f"Python {software.get('python_version') or 'N/A'}, "
                 f"PyTorch {software.get('torch_version') or 'N/A'}, "
                 f"CUDA {software.get('cuda_version') or 'N/A'}, "
-                f"driver {software.get('driver_version') or 'N/A'}, "
+                f"driver {software.get('driver_version') or 'N/A'}"
+                f"{' (modeled)' if software.get('driver_version_source') == 'modeled_default' else ''}, "
                 f"platform {software.get('platform') or 'N/A'}"
             ),
             (
@@ -1010,7 +968,7 @@ def render_query(
             _csv_row(
                 _query_csv_value(
                     record[field],
-                    unit=available[field].unit,
+                    spec=available[field],
                     nounits=bool(output_format["nounits"]),
                 )
                 for field in fields

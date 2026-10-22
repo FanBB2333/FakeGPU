@@ -256,7 +256,12 @@ def test_smi_shows_the_platform_matrix_slots_and_links(tmp_path: Path, monkeypat
     assert smi_main(["topo", "-m", "--state", str(path)]) == 0
     matrix = capsys.readouterr().out
     assert "Platform: PCIe server, 8 slots (pcie-server)" in matrix
-    assert "GPU0  X     PIX   NODE  NODE  SYS" in matrix
+    assert "\nGPU0\t X \tPIX\tNODE\tNODE\tSYS\t" in matrix
+    # CPU Affinity, NUMA Affinity, an empty cell and GPU NUMA ID, as nvidia-smi
+    # prints them; GPU 5 sits on NUMA node 1 (see the query below).
+    rows = {line.split("\t")[0]: line for line in matrix.splitlines()}
+    assert rows["GPU0"].endswith("\tN/A\t0\t\tN/A")
+    assert rows["GPU5"].endswith("\tN/A\t1\t\tN/A")
     assert "NUMA Affinity" in matrix and "PXB  = Connection traversing multiple PCIe bridges" in matrix
 
     assert smi_main([

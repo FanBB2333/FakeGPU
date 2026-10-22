@@ -38,6 +38,16 @@
 - `estimate-llm` and `plan-serving` take `--mla-kv-cache-layout`
   (`auto`, `latent`, `decompressed`) and `--kv-cache-group-size` (quantized
   caches, default 64).
+- `fakegpu nvidia-smi --query-retired-pages` and `--query-remapped-rows`
+  with nvidia-smi 580's fields and rows (sos report runs the first).
+  Retirement addresses and remap counts print `[N/A]`.
+  `--query-accounted-apps` prints its header only, as nvidia-smi does with
+  accounting disabled.
+- On macOS the build directory links `libnvidia-ml.so.1` and the wheel ships
+  it, so unmodified `pynvml` (and nvitop's NVML) under the native launcher
+  find FakeGPU's NVML; nvidia-ml-py loads that name on every platform but
+  Windows. The Linux wheel also ships `libcudart.so`, which nvitop loads.
+  Both are copies in the wheel and share FakeGPU's process state.
 
 ### Changed
 
@@ -110,6 +120,57 @@
   quantized at prefill, at most `--kv-cache-residual-tokens` minus one
   generated tokens stay unquantized, and each quantization group adds a
   scale and a zero point at the compute dtype.
+- `fakegpu nvidia-smi` reports a modeled driver version, `570.195.03` (the
+  one FakeGPU's native NVML returns), instead of `simulated`, so
+  `--query-gpu=driver_version` parses as a version. The table banner carries
+  `Driver Version:` next to `CUDA Version:`, where torch and vLLM
+  `collect_env` look for it. `FAKEGPU_DRIVER_VERSION` still overrides it.
+- `fakegpu nvidia-smi` writes warnings about unreadable state files to
+  stderr instead of appending them to the report, so `nvidia-smi -L | wc -l`
+  counts GPUs only. Queries report them too.
+- `fakegpu nvidia-smi -L` prints nvidia-smi's lines, `GPU 0: NAME (UUID:
+  GPU-...)` and `  MIG 1g.10gb     Device  0: (UUID: MIG-...)`, so
+  `GPU (\d+):` and `UUID: ([^)]+)` parsers work. Profile, compute capability,
+  PCI bus ID and the MIG GI/CI/memory details moved to `-q` and `--json`. The
+  `GPU 0 @ host` form remains only when several hosts are shown.
+- `fakegpu nvidia-smi -i` with a selector that matches no GPU prints `No
+  devices were found` and exits 6, as nvidia-smi does, instead of printing
+  nothing and exiting 0. `--format` accepts `csv`, `noheader` and `nounits`
+  in any order (`--format=noheader,csv`), as nvidia-smi 580 does.
+- `fakegpu nvidia-smi` prints power limits with two decimals, `400.00 W`,
+  like nvidia-smi.
+- **Breaking:** `fakegpu nvidia-smi --query-gpu=memory.reserved` prints
+  `[N/A]`. In nvidia-smi the field is the memory the driver and firmware
+  reserve (total = reserved + used + free), which FakeGPU does not model.
+  The caching allocator's reserved memory that it reported before is now
+  `memory.allocator_reserved`; `--help-query-gpu` notes the move.
+- `fakegpu nvidia-smi topo -m` prints nvidia-smi's tab-separated matrix
+  with the CPU Affinity, NUMA Affinity and GPU NUMA ID columns and its full
+  legend. FakeGPU's banner, host, platform and source notes moved after the
+  legend: PyTorch's inductor looks for `NV` before `Legend`, so a host name
+  or configuration error containing `NV` read as an NVLink. GPUs of several
+  hosts share one matrix, labeled `GPU0#1`, `GPU0#2`.
+- `fakegpu metrics` leaves out a sample whose value is unknown instead of
+  exporting 0: an idle machine GPU or a state without a timestamp no longer
+  reports a state age of 0 seconds, which read as fresh.
+- `fakegpu metrics` names follow Prometheus's naming practices: one unit per
+  family, base units and `_total` counters. New families:
+  `fakegpu_device_nvlink_active_links`, `fakegpu_device_nvlink_peers`,
+  `fakegpu_device_nvlink_bandwidth_bytes_per_second`, seven
+  `fakegpu_device_native_*_total` counters, `fakegpu_publisher_writes_total`
+  and `fakegpu_publisher_{last,max}_duration_seconds`.
+- The native interception guide states that native interception targets
+  CUDA 12 builds: FakeGPU provides `libcudart.so.12` and `libcublas.so.12`
+  with the CUDA 12 ABI, while CUDA 13 builds, such as the default Linux
+  `torch` 2.14 wheels on PyPI, link the `.so.13` names.
+
+### Deprecated
+
+- The `fakegpu metrics` families `fakegpu_device_nvlink`,
+  `fakegpu_device_native_activity`, `fakegpu_publisher_writes` and
+  `fakegpu_publisher_duration_microseconds` mix units or quantities. They
+  are still exported, with a deprecation note in their HELP text, and will
+  be removed in the next release.
 
 ### Fixed
 

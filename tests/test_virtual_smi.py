@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -137,13 +138,21 @@ def test_virtual_smi_lists_details_and_queries_gpu_fields(
 
     assert main(["--state", str(path), "-L"]) == 0
     listed = capsys.readouterr().out
-    assert "Profile: test-512m" in listed
-    assert "CC: 8.0" in listed
-    assert "PCI: 00000000:01:00.0" in listed
+    # nvidia-smi -L: "GPU %u: %s (UUID: %s)", nothing else on the line.
+    assert re.fullmatch(
+        r"GPU 0: FakeGPU Test Profile 512MB \(UUID: GPU-[0-9a-f-]{36}\)\n",
+        listed,
+    )
+    # torch.utils.collect_env anonymizes the list by removing the UUID.
+    assert re.sub(r" \(UUID: .+?\)", "", listed) == (
+        "GPU 0: FakeGPU Test Profile 512MB\n"
+    )
 
     assert main(["--state", str(path), "-q"]) == 0
     detail = capsys.readouterr().out
     assert "FakeGPU-SMI detailed report" in detail
+    assert "Profile: test-512m" in detail
+    assert "PCI Bus ID: 00000000:01:00.0" in detail
     assert "Architecture: ampere, compute capability 8.0" in detail
     assert "108 SMs" in detail
     assert "native capabilities 5 groups / 107 APIs / 94" in detail
@@ -278,10 +287,23 @@ def test_virtual_smi_models_topology_nvlink_views_and_queries(
 
     assert main(["topo", "-m", "--state", str(path)]) == 0
     matrix = capsys.readouterr().out
-    assert "FakeGPU modeled topology matrix" in matrix
-    assert "GPU0  X" in matrix
-    assert "NV1" in matrix
-    assert "modeled, not measured" in matrix
+    lines = matrix.splitlines()
+    # nvidia-smi 580.178.04 topo -m: tab-separated cells, a header row
+    # underlined with ANSI escapes, " X " on the diagonal and an empty cell
+    # after NUMA Affinity.
+    assert lines[0] == (
+        "\t\x1b[4mGPU0\tGPU1\tGPU2\tGPU3\tCPU Affinity\tNUMA Affinity"
+        "\tGPU NUMA ID\x1b[0m"
+    )
+    assert lines[1] == "GPU0\t X \tNV1\tPIX\tPIX\tN/A\t0\t\tN/A"
+    assert lines[3] == "GPU2\tPIX\tPIX\t X \tNV1\tN/A\t0\t\tN/A"
+    assert lines[5:8] == ["", "Legend:", ""]
+    # torch._inductor.comm_analysis._has_nvlink reads the part before
+    # "Legend"; FakeGPU's notes follow the legend.
+    before_legend, after_legend = matrix.split("Legend")
+    assert "NV" in before_legend and "FakeGPU" not in before_legend
+    assert "FakeGPU modeled topology matrix" in after_legend
+    assert "modeled, not measured" in after_legend
 
     assert main(["nvlink", "-s", "--state", str(path)]) == 0
     status = capsys.readouterr().out
@@ -436,9 +458,17 @@ def test_virtual_smi_models_mig_instances_views_and_queries(
     assert "memory tracking unobserved" in compute_instances
 
     assert main(["--state", str(path), "-L"]) == 0
-    listed = capsys.readouterr().out
-    assert "MIG 1g.10gb Device 0" in listed
-    assert "GI: 0, CI: 0" in listed
+    listed = capsys.readouterr().out.splitlines()
+    # nvidia-smi -L prints MIG devices as "  %-15s Device %2u: (%s: %s)":
+    # "  MIG 3g.40gb     Device  0: (UUID: MIG-...)" in a real H100 capture.
+    assert re.fullmatch(r"GPU 0: Fake GPU 0 \(UUID: GPU-[0-9a-f-]{36}\)", listed[0])
+    assert listed[1] == (
+        f"  MIG 1g.10gb     Device  0: (UUID: {gpu0_mig['instances'][0]['uuid']})"
+    )
+    assert listed[2].startswith("  MIG 1g.10gb     Device  1: (UUID: MIG-")
+    assert listed[3].startswith("GPU 1: Fake GPU 1 (UUID: GPU-")
+    assert listed[4].startswith("  MIG 2g.20gb     Device  0: (UUID: MIG-")
+    assert len(listed) == 5
 
     assert (
         main(
@@ -1060,14 +1090,14 @@ def test_virtual_smi_rejects_unknown_schema(tmp_path: Path, capsys) -> None:
     path = tmp_path / "state.json"
     path.write_text(json.dumps({"schema_version": "unknown"}), encoding="utf-8")
     assert main(["--state", str(path)]) == 1
-    assert "unsupported schema" in capsys.readouterr().out
+    assert "unsupported schema" in capsys.readouterr().err
 
 
 def test_virtual_smi_rejects_non_object_state(tmp_path: Path, capsys) -> None:
     path = tmp_path / "state.json"
     path.write_text(json.dumps([]), encoding="utf-8")
     assert main(["--state", str(path)]) == 1
-    assert "state root must be an object" in capsys.readouterr().out
+    assert "state root must be an object" in capsys.readouterr().err
 
 
 def test_render_table_distinguishes_hosts_profiles_and_stages() -> None:
@@ -1578,8 +1608,24 @@ def test_virtual_smi_reports_the_reference_power_ceiling_and_unknown_specs(
     # The a100 profile's typical workload power is unknown (0); it is not the
     # ceiling. Specifications the catalog marks unknown print [N/A], not 0.
     assert rows == [
-        ["0", "400.0", "400.0", "1410", "108"],
+        ["0", "400.00", "400.00", "1410", "108"],
         ["1", "[N/A]", "[N/A]", "[N/A]", "[N/A]"],
+    ]
+
+    # nvidia-smi 580.178.04 prints watts with two decimals: "700.00 W" with
+    # units, "700.00" with nounits.
+    assert main([
+        "--state", str(path), "-i", "0",
+        "--query-gpu=power.default_limit,power.min_limit,power.max_limit",
+        "--format=csv,noheader",
+    ]) == 0
+    assert capsys.readouterr().out == "400.00 W, [N/A], 400.00 W\n"
+    assert main([
+        "--state", str(path), "-i", "0", "--query-gpu=power.max_limit",
+        "--format=json",
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)["records"] == [
+        {"power.max_limit": 400.0}
     ]
 
 
@@ -1616,3 +1662,297 @@ def test_virtual_smi_selects_pci_bus_ids_in_every_nvml_form(
         assert _csv_cells(capsys.readouterr().out.strip()) == [
             "1", "00000000:02:00.0",
         ], selector
+
+
+def test_virtual_smi_reports_a_modeled_driver_version_like_nvidia_smi(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    import re
+
+    from packaging.version import Version
+
+    monkeypatch.delenv("FAKEGPU_DRIVER_VERSION", raising=False)
+    path = tmp_path / "state.json"
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+
+    # nvidia-smi's banner reads "Driver Version: 580.178.04     CUDA Version:
+    # 13.0"; torch and vLLM collect_env parse it with these expressions.
+    assert main(["--state", str(path)]) == 0
+    table = capsys.readouterr().out
+    driver = re.search(r"Driver Version: (.*?) ", table)
+    assert driver is not None and driver.group(1) == "570.195.03"
+    assert "Driver Version: 570.195.03 (modeled)" in table
+    assert re.search(r"CUDA Version:\s*(\d+\.\d+)", table)
+
+    # --query-gpu=driver_version is a parseable version, as on a real GPU.
+    assert main([
+        "--state", str(path), "--query-gpu=driver_version",
+        "--format=csv,noheader",
+    ]) == 0
+    assert Version(capsys.readouterr().out.strip()) == Version("570.195.3")
+
+    assert main(["--state", str(path), "-q"]) == 0
+    assert "driver 570.195.03 (modeled)" in capsys.readouterr().out
+
+    # Older states and the native publisher wrote a "simulated" placeholder.
+    legacy = json.loads(path.read_text(encoding="utf-8"))
+    legacy["software"]["driver_version"] = "simulated"
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    assert main([
+        "--state", str(path), "--query-gpu=driver_version",
+        "--format=csv,noheader",
+    ]) == 0
+    assert capsys.readouterr().out.strip() == "570.195.03"
+
+    monkeypatch.setenv("FAKEGPU_DRIVER_VERSION", "550.54.15")
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+    assert main([
+        "--state", str(path), "--query-gpu=driver_version",
+        "--format=csv,noheader",
+    ]) == 0
+    assert capsys.readouterr().out.strip() == "550.54.15"
+
+
+def test_virtual_smi_writes_state_warnings_to_stderr(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    SmiStatePublisher(tmp_path / "good.json", _snapshot).publish_once(running=True)
+    (tmp_path / "bad.json").write_text("{not json", encoding="utf-8")
+
+    # nvidia-smi prints only its report on stdout. Line counters such as
+    # MONAI's nnunetv2 runner and DeepSpeed's test helper count
+    # `nvidia-smi -L` lines to find the number of GPUs.
+    for view in (["-L"], [], ["-q"], ["topo", "-m"], ["--query-gpu=index", "--format=csv,noheader"]):
+        assert main([*view, "--state-dir", str(tmp_path)]) == 0
+        captured = capsys.readouterr()
+        assert "warning" not in captured.out, view
+        assert "bad.json" in captured.err, view
+    assert main(["-L", "--state-dir", str(tmp_path)]) == 0
+    assert len(capsys.readouterr().out.splitlines()) == 1
+
+
+def test_virtual_smi_list_names_hosts_only_when_several_are_shown(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    for host in ("node-a", "node-b"):
+        monkeypatch.setattr(smi_module.socket, "gethostname", lambda host=host: host)
+        SmiStatePublisher(tmp_path / f"{host}.json", _snapshot).publish_once(running=True)
+
+    assert main(["-L", "--state", str(tmp_path / "node-a.json")]) == 0
+    assert capsys.readouterr().out.startswith("GPU 0: Fake NVIDIA Test GPU (UUID: GPU-")
+
+    assert main(["-L", "--state-dir", str(tmp_path)]) == 0
+    listed = capsys.readouterr().out.splitlines()
+    assert [line.split(" (UUID: ")[0] for line in listed] == [
+        "GPU 0 @ node-a: Fake NVIDIA Test GPU",
+        "GPU 0 @ node-b: Fake NVIDIA Test GPU",
+    ]
+
+
+def test_virtual_smi_exits_6_when_a_selector_matches_no_gpu(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+
+    # nvidia-smi 580.178.04: -i 9, -i GPU-nonexistent and an unknown bus ID
+    # print "No devices were found" on stdout and exit 6, in every view.
+    for view in (
+        [], ["-q"], ["--query-gpu=index", "--format=csv"],
+        ["--query-compute-apps=pid", "--format=csv"],
+    ):
+        for selector in ("9", "GPU-nonexistent", "00000000:99:00.0"):
+            assert main([*view, "--state", str(path), "-i", selector]) == 6
+            assert capsys.readouterr().out == "No devices were found\n"
+
+    # A list that matches some GPUs prints those (-i 0,9 printed GPU 0).
+    assert main([
+        "--state", str(path), "-i", "0,9", "--query-gpu=index", "--format=csv",
+    ]) == 0
+    assert capsys.readouterr().out.splitlines() == ["index", "0"]
+
+
+def test_virtual_smi_accepts_format_modifiers_in_any_order(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+
+    # nvidia-smi 580.178.04 printed the same row for each of these, and
+    # CSV with a header when --format was left out.
+    for value in ("csv,noheader", "noheader,csv", "noheader", "csv,noheader,csv"):
+        assert main([
+            "--state", str(path), "--query-gpu=index,memory.total",
+            f"--format={value}",
+        ]) == 0
+        assert capsys.readouterr().out == "0, 8192 MiB\n", value
+    assert main(["--state", str(path), "--query-gpu=index", "--format=nounits,noheader,csv"]) == 0
+    assert capsys.readouterr().out == "0\n"
+    assert main(["--state", str(path), "--query-gpu=index"]) == 0
+    assert capsys.readouterr().out == "index\n0\n"
+
+    # "Format modifier is not recognized." exits 2.
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--state", str(path), "--query-gpu=index", "--format=csv,bogus"])
+    assert exc_info.value.code == 2
+    assert "Format modifier is not recognized" in capsys.readouterr().err
+
+
+def test_virtual_smi_memory_reserved_is_the_driver_reserve(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {
+                    "index": 0,
+                    "name": "Fake NVIDIA Test GPU",
+                    "profile_id": "test",
+                    "total_memory": 8 * 2**30,
+                    "current_memory": 64 * 2**20,
+                    "current_reserved_memory": 80 * 2**20,
+                }
+            ]
+        },
+    ).publish_once(running=True)
+
+    # nvidia-smi --help-query-gpu: memory.reserved is "Total memory reserved
+    # by the NVIDIA driver and firmware"; on a real GPU total = reserved +
+    # used + free (479 + 0 + 81081 MiB in a public H100
+    # capture). FakeGPU does not model it; the allocator's reserved
+    # bytes moved to memory.allocator_reserved.
+    assert main([
+        "--state", str(path),
+        "--query-gpu=memory.reserved,memory.allocator_reserved,memory.used",
+        "--format=csv",
+    ]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "memory.reserved [MiB], memory.allocator_reserved [MiB], memory.used [MiB]",
+        "[N/A], 80 MiB, 80 MiB",
+    ]
+
+    assert main(["--help-query-gpu"]) == 0
+    help_lines = capsys.readouterr().out.splitlines()
+    reserved = next(
+        line for line in help_lines if line.strip().startswith("memory.reserved ")
+    )
+    assert "not modeled" in reserved
+    assert "memory.allocator_reserved" in reserved
+
+
+def test_virtual_smi_topology_notes_cannot_fake_an_nvlink(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("FAKEGPU_NVLINK_GROUPS", raising=False)
+    monkeypatch.delenv("FAKEGPU_PLATFORM", raising=False)
+    for host in ("NVDGX-01", "NVDGX-02"):
+        monkeypatch.setattr(smi_module.socket, "gethostname", lambda host=host: host)
+        SmiStatePublisher(tmp_path / f"{host}.json", _snapshot).publish_once(running=True)
+
+    # torch._inductor.comm_analysis._has_nvlink runs `nvidia-smi topo -m`
+    # and checks `"NV" in out.split("Legend")[0]`. A host name that contains
+    # "NV" must not read as an NVLink.
+    assert main(["topo", "-m", "--state-dir", str(tmp_path)]) == 0
+    matrix = capsys.readouterr().out
+    assert "NV" not in matrix.split("Legend")[0]
+    lines = matrix.splitlines()
+    assert lines[1] == "GPU0#1\t X \tSYS\tN/A\t0\t\tN/A"
+    assert lines[2] == "GPU0#2\tSYS\t X \tN/A\t0\t\tN/A"
+    assert "Host: NVDGX-01 (GPU0#1)" in matrix
+    assert "Host: NVDGX-02 (GPU0#2)" in matrix
+
+
+def test_virtual_smi_queries_retired_pages_and_remapped_rows(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {
+                    "index": index,
+                    "name": "Fake NVIDIA Test GPU",
+                    "profile_id": "test",
+                    "total_memory": 8 * 2**30,
+                }
+                for index in range(2)
+            ]
+        },
+    ).publish_once(running=True)
+    uuids = [
+        record["uuid"]
+        for record in json.loads(path.read_text(encoding="utf-8"))["devices"]
+    ]
+
+    # nvidia-smi 580.178.04 on an Ampere GPU lists one row per
+    # retirement cause and GPU, with an [N/A] address.
+    assert main([
+        "--state", str(path),
+        "--query-retired-pages=gpu_uuid,retired_pages.address,retired_pages.cause",
+        "--format=csv",
+    ]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "gpu_uuid, retired_pages.address, retired_pages.cause",
+        f"{uuids[0]}, [N/A], Single Bit ECC",
+        f"{uuids[0]}, [N/A], Double Bit ECC",
+        f"{uuids[1]}, [N/A], Single Bit ECC",
+        f"{uuids[1]}, [N/A], Double Bit ECC",
+    ]
+
+    # One row per GPU; FakeGPU does not model row remapping, so the counts
+    # are [N/A], as --query-gpu=remapped_rows.* prints them.
+    assert main([
+        "--state", str(path), "-i", "1",
+        "--query-remapped-rows=gpu_bus_id,gpu_uuid,remapped_rows.correctable,"
+        "remapped_rows.uncorrectable,remapped_rows.pending,remapped_rows.failure",
+        "--format=csv",
+    ]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "gpu_bus_id, gpu_uuid, remapped_rows.correctable, "
+        "remapped_rows.uncorrectable, remapped_rows.pending, remapped_rows.failure",
+        f"00000000:02:00.0, {uuids[1]}, [N/A], [N/A], [N/A], [N/A]",
+    ]
+    assert main([
+        "--state", str(path), "--query-remapped-rows=remapped_rows.sbe",
+        "--format=csv",
+    ]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == "remapped_rows.correctable"
+
+    assert main([
+        "--state", str(path), "-i", "9", "--query-remapped-rows=gpu_bus_id",
+        "--format=csv",
+    ]) == 6
+    assert capsys.readouterr().out == "No devices were found\n"
+
+    assert main(["--help-query-retired-pages"]) == 0
+    assert "retired_pages.cause" in capsys.readouterr().out
+
+    # Accounting is not modeled: nvidia-smi 580.178.04 printed only this
+    # header for a GPU with accounting disabled, aliases headed by the
+    # first name.
+    assert main([
+        "--state", str(path),
+        "--query-accounted-apps=timestamp,gpu_name,gpu_bus_id,gpu_serial,"
+        "gpu_uuid,vgpu_instance,pid,gpu_utilization,gpu_util,mem_utilization,"
+        "mem_util,max_memory_usage,time",
+        "--format=csv",
+    ]) == 0
+    assert capsys.readouterr().out == (
+        "timestamp, gpu_name, gpu_bus_id, gpu_serial, gpu_uuid, vgpu_instance, "
+        "pid, gpu_utilization [%], gpu_utilization [%], mem_utilization [%], "
+        "mem_utilization [%], max_memory_usage [MiB], time [ms]\n"
+    )
