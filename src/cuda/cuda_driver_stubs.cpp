@@ -742,20 +742,23 @@ CUresult cuInit(unsigned int Flags) {
 
     // Always initialize the fake state: hybrid/simulate virtualize device info using GlobalState.
     GlobalState::instance().initialize();
-    {
+    const auto mark_initialized = []() {
         model::SharedState& shared = model::shared_state();
         std::lock_guard<std::mutex> lock(shared.mutex);
         shared.driver_initialized = true;
-    }
+    };
 
     if (real_driver_available()) {
+        mark_initialized();
         if (config.mode() == FakeGpuMode::Hybrid) {
             HybridMemoryManager::instance().initialize();
         }
         return CudaDriverPassthrough::instance().cuInit(Flags);
     }
 
+    // A failed cuInit leaves the driver uninitialized.
     const CUresult result = simulated_init_result();
+    if (result == CUDA_SUCCESS) mark_initialized();
     FGPU_LOG("[FakeCUDA-Driver] cuInit (fake) returning %d\n", result);
     return result;
 }

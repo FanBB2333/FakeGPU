@@ -89,6 +89,8 @@ PROBE = textwrap.dedent(
     out["cuInit"] = cuda.cuInit(0)
     count = ctypes.c_int(-7)
     out["cuDeviceGetCount"] = [cuda.cuDeviceGetCount(ctypes.byref(count)), count.value]
+    ctx_flags, ctx_active = ctypes.c_uint(), ctypes.c_int()
+    out["cuDevicePrimaryCtxGetState"] = cuda.cuDevicePrimaryCtxGetState(0, ctypes.byref(ctx_flags), ctypes.byref(ctx_active))
     devices = []
     for ordinal in range(max(count.value, 0)):
         name = ctypes.create_string_buffer(256)
@@ -211,6 +213,7 @@ def test_masks_without_a_usable_device_fail_cuda_initialization(
         return
     assert result["cuInit"] == init
     assert result["cuDeviceGetCount"] == [3, -7]  # CUDA_ERROR_NOT_INITIALIZED, count untouched
+    assert result["cuDevicePrimaryCtxGetState"] == 3  # a failed cuInit leaves the driver uninitialized
     assert result["cudaGetDeviceCount"] == [runtime, -7]
     assert result["cudaGetDevice"][0] == runtime
     assert result["cudaSetDevice0"] == runtime
