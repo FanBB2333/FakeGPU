@@ -127,6 +127,35 @@
   `upstream` backend instead of `unknown`.
 - Under FakeCUDA, `torch.get_float32_matmul_precision()` returns `medium`
   after `torch.set_float32_matmul_precision("medium")` instead of `high`.
+- FakeCUDA supports `torch.Generator("cuda")`, as diffusers pipelines use
+  it. Each simulated GPU has its own CUDA generator with CUDA's 16-byte
+  seed-and-offset state, separate from the CPU generator:
+  `torch.cuda.manual_seed()` no longer changes `torch.rand()` on the CPU, and
+  random operations on simulated GPU tensors (factories, `uniform_`, dropout,
+  `torch.nn.init`) draw from the GPU's generator. The numbers repeat with the
+  seed but differ from a real GPU's. `torch.randperm(device="cuda")` no longer
+  raises.
+- FakeCUDA `torch.cuda.is_initialized()` is false until the first CUDA use
+  (a tensor on the GPU, `current_device()`, `set_device()`, device queries,
+  streams of a device, `synchronize()`), as on a GPU; libraries choose `fork`
+  or `spawn` from it.
+- FakeCUDA reports the CUDA, cuDNN and NCCL versions of the installed
+  torch's CUDA wheel instead of CUDA 12.1, no cuDNN version and NCCL 2.21.5:
+  a CUDA build's own values, else the CUDA package pins of the installed
+  torch, else those of the default PyPI wheel of its minor release.
+  `FAKEGPU_CUDA_VERSION` and the new `FAKEGPU_CUDNN_VERSION` (`9.10.2` or
+  `91002`) override them. `torch.cuda.get_arch_list()` includes each
+  simulated GPU's `sm_XY`, and `get_gencode_flags()` follows from it.
+- FakeCUDA keeps PyTorch's `GradScaler` enabled with its 65536 initial scale,
+  growth and backoff, instead of a scaler disabled by default.
+- FakeCUDA `Tensor.to()` and `.cuda()` return the tensor itself when device,
+  dtype and memory format already match. A move between the host and a
+  simulated GPU, or between two simulated GPUs, copies the tensor; it used to
+  share storage, so writing to one side changed the other.
+- FakeCUDA `Tensor.pin_memory()` returns a pinned copy and `is_pinned()`
+  reports it; pinning a GPU tensor raises as in PyTorch.
+- FakeCUDA `torch.cuda.Stream` clamps its priority to
+  `Stream.priority_range()`, which reports `(0, -3)` like PyTorch on a GPU.
 - `fakegpu nvidia-smi events` treats a non-object `publisher.health` in a
   state file as empty, as `-q` and `--query-runtime` already do, instead of
   crashing.

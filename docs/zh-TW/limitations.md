@@ -6,6 +6,9 @@
 - Linux 原生模擬可在 CPU 上執行受支援的 PTX 與相容的 cubin/SASS 指令；不支援的指令與
   啟動特性會明確失敗。macOS 尚不執行這些核心。詳見[框架相容性](frameworks.md)。
 - FakeCUDA 涵蓋專案維護的 Python 與 PyTorch 行為，不支援二進位 CUDA 擴充。
+- FakeCUDA 的亂數在相同 CUDA seed 下可重現，但與真實 GPU 產生的數值不同。
+  每個隨機操作讓 CUDA generator 的 offset 增加 4（建模值）；真實 GPU 上較大的
+  launch 會增加更多。
 - 靜態分析無法解析所有動態 import、生成式 kernel、執行階段 shape 或依賴資料的
   分支。
 - GPU 記憶體估算可能遺漏 backend 私有配置、自訂 operator、allocator 策略與從未

@@ -7,6 +7,9 @@
   启动特性会明确失败。macOS 尚不执行这些内核。详见[框架兼容性](frameworks.md)。
 - FakeCUDA 覆盖项目维护的 Python 和 PyTorch 行为。二进制 CUDA 扩展不在覆盖
   范围内。
+- FakeCUDA 的随机数在相同 CUDA seed 下可复现，但与真实 GPU 生成的数值不同。
+  每个随机操作让 CUDA generator 的 offset 增加 4（建模值）；真实 GPU 上较大的
+  launch 会增加更多。
 - 静态分析无法解析所有动态 import、生成式 kernel、运行时 shape 或依赖数据的
   分支。
 - 显存估算可能遗漏 backend 私有分配、自定义 operator、allocator 策略和未匹配的

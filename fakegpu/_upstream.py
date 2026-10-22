@@ -23,6 +23,7 @@ import contextlib
 import functools
 import inspect
 import os
+import traceback
 import weakref
 from collections import OrderedDict
 from typing import Any
@@ -64,6 +65,17 @@ _REAL_COLLECTIVES = (
 _DEFAULT_STREAMS = {}
 _CURRENT_STREAMS = {}
 _NEXT_STREAM_ID = 1
+# Lazy CUDA initialization (torch/cuda/__init__.py: _lazy_init, _lazy_call).
+_INITIALIZED = False
+_INITIALIZING = False
+_QUEUED_CALLS: list[tuple[Any, list[str]]] = []
+# _LazySeedTracker: only the latest manual_seed and manual_seed_all run.
+_QUEUED_SEED_CALLS: dict[str, tuple[Any, list[str]] | None] = {"seed": None, "seed_all": None}
+_QUEUED_SEED_ORDER: list[str] = []
+# Run once at initialization, before the queued calls (torch._C._cuda_init()).
+_LAZY_INIT_HOOKS: list[Any] = []
+# The first host-to-device move of tensors that only torch.load can see.
+_MOVING_LOADED_TENSORS = False
 
 
 def _normalize_cuda_device(device: Any, *, allow_none: bool = False) -> torch.device | None:
@@ -1326,22 +1338,36 @@ def _install_legacy_cuda_types() -> None:
 
 
 def _tensor_to(self, *args, **kwargs):
+    # aten::to returns ``self`` when dtype, device and memory format already
+    # match and no copy is requested (to_will_alias in
+    # aten/src/ATen/native/TensorConversions.cpp); any other result is a new
+    # tensor, so a move between devices never shares storage. The host
+    # tensor computes the result: an alias of it means nothing changed.
     target, normalized, consume_first_arg = _normalize_to_args(args, kwargs)
-    base = self.raw_data if isinstance(self, FakeCudaTensor) else self
+    is_fake = isinstance(self, FakeCudaTensor)
+    base = self.raw_data if is_fake else self
     if normalized is not None:
+        index = normalized.index or 0
         kwargs = dict(kwargs)
         kwargs["device"] = torch.device("cpu")
         call_args = args[1:] if consume_first_arg else args
         result = _ORIG_TENSOR_TO(base, *call_args, **kwargs)
-        return wrap_tensor(result, device_index=normalized.index or 0)
+        if result is base:
+            if is_fake and self.device_index == index:
+                return self
+            if is_fake or not _MOVING_LOADED_TENSORS:
+                result = base.clone()
+        return wrap_tensor(result, device_index=index)
     result = _ORIG_TENSOR_TO(base, *args, **kwargs)
-    if isinstance(self, FakeCudaTensor) and isinstance(result, torch.Tensor):
+    if is_fake and isinstance(result, torch.Tensor):
         if target is not None:
             target_device = (
                 torch.device(f"cuda:{target}") if isinstance(target, int) else torch.device(target)
             )
             if target_device.type != "cuda":
-                return result
+                return base.clone() if result is base else result
+        if result is base:
+            return self
         return wrap_tensor(result, device_index=self.device_index)
     return result
 
@@ -1358,8 +1384,11 @@ def _tensor_cpu(self, memory_format=None):
     kwargs = {}
     if memory_format is not None:
         kwargs["memory_format"] = memory_format
-    base = self.raw_data if isinstance(self, FakeCudaTensor) else self
-    return _ORIG_TENSOR_CPU(base, **kwargs)
+    if isinstance(self, FakeCudaTensor):
+        # A device-to-host copy is a new tensor, never a view of the device one.
+        result = _ORIG_TENSOR_CPU(self.raw_data, **kwargs)
+        return self.raw_data.clone() if result is self.raw_data else result
+    return _ORIG_TENSOR_CPU(self, **kwargs)
 
 
 def _normalize_module_device(device) -> torch.device:
@@ -1431,7 +1460,89 @@ def device_count() -> int:
 
 
 def current_device() -> int:
+    _lazy_init()
     return _CURRENT_DEVICE
+
+
+def is_initialized() -> bool:
+    """``torch.cuda.is_initialized``: False until the first CUDA use."""
+    return _INITIALIZED
+
+
+def _lazy_init() -> None:
+    """``torch.cuda._lazy_init``: initialize once, then run the queued calls.
+
+    As in torch/cuda/__init__.py, the queued seed calls run after the other
+    queued calls, a call that re-enters returns at once, and a failing call
+    raises ``DeferredCudaCallError`` and leaves CUDA uninitialized.
+    """
+    global _INITIALIZED, _INITIALIZING
+    if _INITIALIZED or _INITIALIZING:
+        return
+    _INITIALIZING = True
+    try:
+        for hook in list(_LAZY_INIT_HOOKS):
+            hook()
+        queued = list(_QUEUED_CALLS)
+        queued.extend(
+            _QUEUED_SEED_CALLS[kind]
+            for kind in _QUEUED_SEED_ORDER
+            if _QUEUED_SEED_CALLS[kind] is not None
+        )
+        _QUEUED_CALLS.clear()
+        _QUEUED_SEED_CALLS.update(seed=None, seed_all=None)
+        _QUEUED_SEED_ORDER.clear()
+        for queued_call, orig_traceback in queued:
+            try:
+                queued_call()
+            except Exception as e:
+                msg = (
+                    f"CUDA call failed lazily at initialization with error: {str(e)}\n\n"
+                    f"CUDA call was originally invoked at:\n\n{''.join(orig_traceback)}"
+                )
+                error = getattr(torch.cuda, "DeferredCudaCallError", RuntimeError)
+                raise error(msg) from e
+    finally:
+        _INITIALIZING = False
+    _INITIALIZED = True
+    torch.cuda._initialized = True
+
+
+def _rebind_imported(replacements: dict[Any, Any]) -> None:
+    """Rebind names torch modules imported from torch.cuda (e.g.
+    ``from . import _lazy_init`` in torch.cuda.memory) to their replacements."""
+    import sys
+
+    by_identity = {id(original): (original, fake) for original, fake in replacements.items()}
+    for module_name, module in list(sys.modules.items()):
+        if module is None or not module_name.startswith("torch"):
+            continue
+        namespace = getattr(module, "__dict__", None)
+        if not isinstance(namespace, dict):
+            continue
+        for name, value in list(namespace.items()):
+            entry = by_identity.get(id(value))
+            if entry is not None and entry[0] is value:
+                namespace[name] = entry[1]
+
+
+def _lazy_call(callable: Any, **kwargs: Any) -> None:
+    """``torch.cuda._lazy_call``: run now if initialized, else at initialization."""
+    if _INITIALIZED:
+        callable()
+        return
+    entry = (callable, traceback.format_stack())
+    if kwargs.get("seed_all", False):
+        kind = "seed_all"
+    elif kwargs.get("seed", False):
+        kind = "seed"
+    else:
+        _QUEUED_CALLS.append(entry)
+        return
+    _QUEUED_SEED_CALLS[kind] = entry
+    # The latest of manual_seed and manual_seed_all runs last.
+    other = "seed" if kind == "seed_all" else "seed_all"
+    _QUEUED_SEED_ORDER[:] = [other, kind]
 
 
 def set_device(device: Any) -> None:
@@ -1648,8 +1759,15 @@ def _patch_torch_load() -> None:
 
 
 def _move_loaded_to_cuda(obj, device_index: int = 0):
+    # The host tensors torch.load just built are visible to nobody else, so
+    # the simulated device takes their storage instead of a second host copy.
+    global _MOVING_LOADED_TENSORS
     memo = {}
-    return _move_loaded_to_cuda_impl(obj, memo, device_index)
+    previous, _MOVING_LOADED_TENSORS = _MOVING_LOADED_TENSORS, True
+    try:
+        return _move_loaded_to_cuda_impl(obj, memo, device_index)
+    finally:
+        _MOVING_LOADED_TENSORS = previous
 
 
 def _move_loaded_to_cuda_impl(obj, memo, device_index: int):
@@ -1782,10 +1900,18 @@ def enable() -> None:
     torch.cuda.default_stream = _default_stream
     torch.cuda.is_current_stream_capturing = lambda: False
     torch.cuda._is_compiled = lambda: True
-    torch.cuda._lazy_init = lambda: None
-    torch.cuda.is_initialized = lambda: True
-    torch.cuda.init = lambda: None
-    torch.cuda._initialized = True
+    lazy_replacements = {
+        "_lazy_init": _lazy_init,
+        "_lazy_call": _lazy_call,
+        "is_initialized": is_initialized,
+    }
+    _rebind_imported(
+        {getattr(torch.cuda, name): fake for name, fake in lazy_replacements.items()}
+    )
+    for name, fake in lazy_replacements.items():
+        setattr(torch.cuda, name, fake)
+    torch.cuda.init = _lazy_init
+    torch.cuda._initialized = _INITIALIZED
     torch.cuda._cached_device_count = _NUM_DEVICES
     torch.cuda._exchange_device = lambda device: _CURRENT_DEVICE
     torch.cuda._get_device = lambda device: _normalize_device_index(device)

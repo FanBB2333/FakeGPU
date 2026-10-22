@@ -8,6 +8,9 @@
   macOS does not yet execute these kernels. See [framework compatibility](frameworks.md).
 - FakeCUDA covers maintained Python and PyTorch behavior. Binary CUDA
   extensions are not covered.
+- FakeCUDA random numbers repeat with the CUDA seed but differ from a real
+  GPU's. Each random operation advances the CUDA generator's offset by 4
+  (modeled); a GPU advances large launches further.
 - Static analysis cannot resolve every dynamic import, generated kernel,
   runtime shape, or data-dependent branch.
 - Memory estimates can miss backend-private allocations, custom operators,
