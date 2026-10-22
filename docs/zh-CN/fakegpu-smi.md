@@ -83,6 +83,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 - `--query-gpu` 与 `--query-compute-apps` 还接受 nvidia-smi 590 `--help-query-*`
   列出的全部字段与别名，列名与 nvidia-smi 一致。FakeGPU 未建模的字段（如
   `utilization.gpu`、`temperature.gpu`）输出 `[N/A]`。
+- `--query-retired-pages` 与 `--query-remapped-rows` 接受 nvidia-smi 580 的字段，
+  行结构与之相同：每个 GPU 的每种退役原因一行，以及每个 GPU 一行。FakeGPU
+  不建模页面退役和行重映射，地址与计数输出 `[N/A]`。
 - `memory.reserved` 在 nvidia-smi 中表示“NVIDIA 驱动和固件保留的显存”，
   FakeGPU 不建模，因此输出 `[N/A]`。此前 `memory.reserved` 报告的 caching
   allocator 保留显存改为 `memory.allocator_reserved`。

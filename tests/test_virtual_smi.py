@@ -1872,3 +1872,71 @@ def test_virtual_smi_topology_notes_cannot_fake_an_nvlink(
     assert lines[2] == "GPU0#2\tSYS\t X \tN/A\t0\t\tN/A"
     assert "Host: NVDGX-01 (GPU0#1)" in matrix
     assert "Host: NVDGX-02 (GPU0#2)" in matrix
+
+
+def test_virtual_smi_queries_retired_pages_and_remapped_rows(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {
+                    "index": index,
+                    "name": "Fake NVIDIA Test GPU",
+                    "profile_id": "test",
+                    "total_memory": 8 * 2**30,
+                }
+                for index in range(2)
+            ]
+        },
+    ).publish_once(running=True)
+    uuids = [
+        record["uuid"]
+        for record in json.loads(path.read_text(encoding="utf-8"))["devices"]
+    ]
+
+    # nvidia-smi 580.178.04 on an Ampere GPU lists one row per
+    # retirement cause and GPU, with an [N/A] address.
+    assert main([
+        "--state", str(path),
+        "--query-retired-pages=gpu_uuid,retired_pages.address,retired_pages.cause",
+        "--format=csv",
+    ]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "gpu_uuid, retired_pages.address, retired_pages.cause",
+        f"{uuids[0]}, [N/A], Single Bit ECC",
+        f"{uuids[0]}, [N/A], Double Bit ECC",
+        f"{uuids[1]}, [N/A], Single Bit ECC",
+        f"{uuids[1]}, [N/A], Double Bit ECC",
+    ]
+
+    # One row per GPU; FakeGPU does not model row remapping, so the counts
+    # are [N/A], as --query-gpu=remapped_rows.* prints them.
+    assert main([
+        "--state", str(path), "-i", "1",
+        "--query-remapped-rows=gpu_bus_id,gpu_uuid,remapped_rows.correctable,"
+        "remapped_rows.uncorrectable,remapped_rows.pending,remapped_rows.failure",
+        "--format=csv",
+    ]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "gpu_bus_id, gpu_uuid, remapped_rows.correctable, "
+        "remapped_rows.uncorrectable, remapped_rows.pending, remapped_rows.failure",
+        f"00000000:02:00.0, {uuids[1]}, [N/A], [N/A], [N/A], [N/A]",
+    ]
+    assert main([
+        "--state", str(path), "--query-remapped-rows=remapped_rows.sbe",
+        "--format=csv",
+    ]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == "remapped_rows.correctable"
+
+    assert main([
+        "--state", str(path), "-i", "9", "--query-remapped-rows=gpu_bus_id",
+        "--format=csv",
+    ]) == 6
+    assert capsys.readouterr().out == "No devices were found\n"
+
+    assert main(["--help-query-retired-pages"]) == 0
+    assert "retired_pages.cause" in capsys.readouterr().out

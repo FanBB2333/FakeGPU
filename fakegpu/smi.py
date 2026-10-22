@@ -32,6 +32,9 @@ from ._smi_query import (
     GPU_QUERY_FIELDS,
     PROCESS_QUERY_FIELDS,
     QueryField,
+    REMAPPED_ROWS_QUERY_FIELDS,
+    RETIRED_PAGE_CAUSES,
+    RETIRED_PAGES_QUERY_FIELDS,
     RUNTIME_QUERY_FIELDS,
 )
 from ._smi_render import (
@@ -86,7 +89,22 @@ _QUERIES = (
         RUNTIME_QUERY_FIELDS,
         "runtimes",
     ),
+    (
+        "retired-pages",
+        "query_retired_pages",
+        "help_query_retired_pages",
+        RETIRED_PAGES_QUERY_FIELDS,
+        "devices",
+    ),
+    (
+        "remapped-rows",
+        "query_remapped_rows",
+        "help_query_remapped_rows",
+        REMAPPED_ROWS_QUERY_FIELDS,
+        "devices",
+    ),
 )
+_QUERY_ARGUMENTS = tuple(attr for _kind, attr, *_rest in _QUERIES)
 
 
 def configured_state_path() -> Path | None:
@@ -582,6 +600,16 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="FIELDS",
         help="Query comma-separated FakeGPU runtime and publisher fields.",
     )
+    output_group.add_argument(
+        "--query-retired-pages",
+        metavar="FIELDS",
+        help="Query retired-page fields; addresses are not modeled ([N/A]).",
+    )
+    output_group.add_argument(
+        "--query-remapped-rows",
+        metavar="FIELDS",
+        help="Query remapped-row fields; counts are not modeled ([N/A]).",
+    )
     parser.add_argument(
         "-m",
         "--matrix",
@@ -652,6 +680,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="List supported --query-runtime fields and exit.",
     )
+    parser.add_argument(
+        "--help-query-retired-pages",
+        action="store_true",
+        help="List supported --query-retired-pages fields and exit.",
+    )
+    parser.add_argument(
+        "--help-query-remapped-rows",
+        action="store_true",
+        help="List supported --query-remapped-rows fields and exit.",
+    )
     loop_group = parser.add_mutually_exclusive_group()
     loop_group.add_argument(
         "-l",
@@ -695,24 +733,23 @@ def _check_view_arguments(
         or args.list_compute_instances
     ) and args.view != "mig":
         parser.error("-lgi/-lci require the mig view")
+    querying = any(
+        getattr(args, attr) is not None for attr in _QUERY_ARGUMENTS
+    )
     if args.view and (
         args.json
         or args.list_gpus
         or args.detail
-        or args.query_gpu
-        or args.query_compute_apps
-        or args.query_runtime
+        or querying
     ):
         parser.error(
             "topo, nvlink, events, and mig views cannot be combined "
             "with another output mode"
         )
-    if args.format is not None and not (
-        args.query_gpu or args.query_compute_apps or args.query_runtime
-    ):
+    if args.format is not None and not querying:
         parser.error(
             "--format requires --query-gpu, --query-compute-apps, "
-            "or --query-runtime"
+            "--query-runtime, --query-retired-pages, or --query-remapped-rows"
         )
 
 
@@ -838,6 +875,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if selectors and "count" in fields:
                         count = len(build_inventory(states, stale_after_seconds=args.stale_after_seconds)["devices"])
                     records = [{**device, "count": count} for device in records]
+                elif query_kind == "retired-pages":
+                    # One row per cause and GPU, as nvidia-smi 580.178.04
+                    # prints for GPUs without retired-page data.
+                    records = [
+                        {**device, "retired_pages": {"cause": cause}}
+                        for device in records
+                        for cause in RETIRED_PAGE_CAUSES
+                    ]
                 text = render_query(
                     records,
                     fields=fields,

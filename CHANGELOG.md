@@ -30,6 +30,9 @@
 - Execute nested device-side child launches through direct PTX and linked
   SASS modules; accept nvcc linked fatbin wrapper v2. Cubin globals share
   their CUDA address with host backing for CPU library interoperability.
+- `fakegpu nvidia-smi --query-retired-pages` and `--query-remapped-rows`
+  with nvidia-smi 580's fields and rows (sos report runs the first).
+  Retirement addresses and remap counts print `[N/A]`.
 
 ### Changed
 

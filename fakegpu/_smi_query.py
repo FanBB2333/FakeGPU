@@ -630,6 +630,44 @@ def _add_nvidia_fields(
         fields.setdefault(alias, replace(fields[name], header=name))
 
 
+# nvidia-smi 580.178.04 --help-query-retired-pages and
+# --help-query-remapped-rows. FakeGPU models neither page retirement nor row
+# remapping, so their values print [N/A], as the same fields of --query-gpu
+# do.
+_DEVICE_IDENTITY_FIELDS: dict[str, QueryField] = {
+    "timestamp": QueryField("timestamp"),
+    "gpu_name": QueryField("name"),
+    "gpu_bus_id": QueryField("pci_bus_id"),
+    "gpu_serial": QueryField(None),
+    "gpu_uuid": QueryField("uuid"),
+}
+# The driver 580.178.04 lists, for an Ampere GPU, one row per
+# retirement cause with an [N/A] address.
+RETIRED_PAGE_CAUSES = ("Single Bit ECC", "Double Bit ECC")
+RETIRED_PAGES_QUERY_FIELDS: dict[str, QueryField] = {
+    **_DEVICE_IDENTITY_FIELDS,
+    "retired_pages.address": QueryField(None),
+    "retired_pages.timestamp": QueryField(None),
+    "retired_pages.cause": QueryField("retired_pages.cause"),
+}
+REMAPPED_ROWS_QUERY_FIELDS: dict[str, QueryField] = dict(_DEVICE_IDENTITY_FIELDS)
+_add_nvidia_fields(
+    REMAPPED_ROWS_QUERY_FIELDS,
+    {
+        None: (
+            "remapped_rows.correctable", "remapped_rows.correctable_inactive",
+            "remapped_rows.uncorrectable",
+            "remapped_rows.uncorrectable_inactive", "remapped_rows.pending",
+            "remapped_rows.failure", "remapped_rows.histogram.max",
+            "remapped_rows.histogram.high", "remapped_rows.histogram.partial",
+            "remapped_rows.histogram.low", "remapped_rows.histogram.none",
+        )
+    },
+    {
+        "remapped_rows.sbe": "remapped_rows.correctable",
+        "remapped_rows.dbe": "remapped_rows.uncorrectable",
+    },
+)
 _add_nvidia_fields(GPU_QUERY_FIELDS, _NVIDIA_GPU_FIELDS, _NVIDIA_GPU_ALIASES)
 # nvidia-smi 590.48.01 --help-query-compute-apps.
 _add_nvidia_fields(
