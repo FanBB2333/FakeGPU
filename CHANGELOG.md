@@ -33,6 +33,11 @@
 - `fakegpu nvidia-smi --query-retired-pages` and `--query-remapped-rows`
   with nvidia-smi 580's fields and rows (sos report runs the first).
   Retirement addresses and remap counts print `[N/A]`.
+- On macOS the build directory links `libnvidia-ml.so.1` and the wheel ships
+  it, so unmodified `pynvml` (and nvitop's NVML) under the native launcher
+  find FakeGPU's NVML; nvidia-ml-py loads that name on every platform but
+  Windows. The Linux wheel also ships `libcudart.so`, which nvitop loads.
+  Both are copies in the wheel and share FakeGPU's process state.
 
 ### Changed
 
@@ -97,6 +102,10 @@
   `fakegpu_device_nvlink_bandwidth_bytes_per_second`, seven
   `fakegpu_device_native_*_total` counters, `fakegpu_publisher_writes_total`
   and `fakegpu_publisher_{last,max}_duration_seconds`.
+- The native interception guide states that native interception targets
+  CUDA 12 builds: FakeGPU provides `libcudart.so.12` and `libcublas.so.12`
+  with the CUDA 12 ABI, while CUDA 13 builds, such as the default Linux
+  `torch` 2.14 wheels on PyPI, link the `.so.13` names.
 
 ### Deprecated
 

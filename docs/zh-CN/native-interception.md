@@ -48,6 +48,24 @@ GEMM/Lt 不支持的 dtype、布局和指针模式，以及跳过 CPU 计算的�
 python3 -m fakegpu capabilities --source-root . --build-dir build --strict
 ```
 
+## 库名与 CUDA 版本
+
+Linux 上启动器 preload `libcudart.so.12`、`libcublas.so.12`、`libcuda.so.1`、
+`libnvidia-ml.so.1` 和 `libnccl.so.2`。FakeGPU 的 runtime 与 cuBLAS 遵循 CUDA 12
+ABI，报告 CUDA 12.0，因此原生拦截面向为 CUDA 12 构建的程序，包括
+`torch.version.cuda` 以 `12.` 开头的 PyTorch。
+
+CUDA 13 构建链接 `libcudart.so.13` 和 `libcublas.so.13`。FakeGPU 不提供这两个名字，
+也不实现 CUDA 13 ABI。真实的 CUDA 13 库仍会加载，与 preload 的 FakeGPU 函数同名的
+调用由 FakeGPU 接管，其余调用进入真实 runtime，因此这种运行不是受支持的模拟。PyPI
+上 Linux 默认的 `torch` 2.14 wheel 依赖 CUDA 13.0。原生拦截请安装 CUDA 12 版本的
+PyTorch，或使用不依赖 CUDA 库的 Python FakeCUDA。
+
+构建目录还提供 `libcudart.so`（nvitop 在 Linux 上按这个名字加载），以及 macOS 上的
+`libnvidia-ml.so.1`（nvidia-ml-py，即 `pynvml`，在 Windows 以外的平台都按这个名字
+加载）。wheel 中这些名字是复制的文件。副本会作为第二个库加载，但与 FakeGPU 共享
+进程状态，所以启动器下的 `pynvml` 能看到模拟 GPU 及其显存。
+
 ## Hybrid 模式
 
 原生 hybrid 模式下，CUDA runtime 和 cuBLAS 保持原生。设置了

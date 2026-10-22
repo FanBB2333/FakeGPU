@@ -249,3 +249,57 @@ def test_native_init_applies_config_with_optional_preload(
     assert os.environ["FAKEGPU_CLUSTER_CONFIG"] == str(runtime_options["cluster_config"])
     assert (_api._PRELOAD_VAR in os.environ) == update_env
     assert (_api._LIBRARY_PATH_VAR in os.environ) == update_env
+
+
+# pynvml (nvidia-ml-py) loads CDLL("libnvidia-ml.so.1") on every non-Windows
+# platform; nvitop loads CDLL("libcudart.so") on Linux. The build directory
+# links those names and the wheel ships copies (a wheel cannot hold
+# symlinks). A copy loads as a second image and must share FakeGPU's state.
+_ALIAS_PROBE = """
+import ctypes, sys
+import pynvml
+pynvml.nvmlInit()
+count = pynvml.nvmlDeviceGetCount()
+handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+runtime = ctypes.CDLL(sys.argv[1])
+pointer = ctypes.c_void_p()
+assert runtime.cudaMalloc(ctypes.byref(pointer), ctypes.c_size_t(256 << 20)) == 0
+print(count, pynvml.nvmlDeviceGetMemoryInfo(handle).used >> 20)
+"""
+
+
+@pytest.mark.parametrize("layout", ["build", "wheel"])
+def test_unmodified_pynvml_and_nvitop_names_load_fakegpu_libraries(
+    tmp_path: Path, layout: str,
+) -> None:
+    import shutil
+    import sys
+
+    pytest.importorskip("pynvml")
+    try:
+        build = _api.library_dir()
+    except FileNotFoundError:
+        pytest.skip("native libraries are not built")
+    macos = sys.platform == "darwin"
+    alias = "libnvidia-ml.so.1" if macos else "libcudart.so"
+    runtime = "libcudart.dylib" if macos else alias
+    assert (build / alias).exists(), "rebuild: the build lacks " + alias
+    lib_dir = build
+    if layout == "wheel":
+        lib_dir = tmp_path / "_native"
+        lib_dir.mkdir()
+        for name in (*_api._PRELOAD_LIBS, alias):
+            shutil.copyfile((build / name).resolve(), lib_dir / name)
+    env = {key: value for key, value in os.environ.items() if not key.startswith("FAKEGPU_")}
+    env.update(
+        FAKEGPU_DEVICE_COUNT="2",
+        FAKEGPU_TERMINAL_REPORT="0",
+        FAKEGPU_REPORT_PATH=str(tmp_path / "report.json"),
+    )
+    completed = subprocess.run(
+        [sys.executable, "-m", "fakegpu", "--lib-dir", str(lib_dir),
+         sys.executable, "-c", _ALIAS_PROBE, runtime],
+        env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.split() == ["2", "256"]

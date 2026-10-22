@@ -215,6 +215,14 @@ if(APPLE)
             ${CMAKE_BINARY_DIR}/libfake_gpu.dylib
         COMMENT "Creating libfake_gpu.dylib symlink for backward compatibility"
     )
+    # nvidia-ml-py (pynvml) loads CDLL("libnvidia-ml.so.1") on every
+    # non-Windows platform; dyld finds that leaf name on DYLD_LIBRARY_PATH.
+    add_custom_command(TARGET fake_gpu POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+            $<TARGET_SONAME_FILE_NAME:fake_gpu>
+            ${CMAKE_BINARY_DIR}/libnvidia-ml.so.1
+        COMMENT "Creating libnvidia-ml.so.1 symlink for pynvml"
+    )
 else()
     # Create symlink for backward compatibility with libfake_gpu.so name
     add_custom_command(TARGET fake_gpu POST_BUILD
