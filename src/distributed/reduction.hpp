@@ -36,6 +36,15 @@ T apply_reduce_op(T lhs, T rhs, CollectiveReduceOp op) {
     return lhs;
 }
 
+// How ncclAvg is computed for an element type (NCCL enqueue.cc,
+// hostToDevRedOp). Integers sum and then divide (SumPostDiv). Floating types
+// use PreMulSum: the factor 1/n is rounded to the element type, each rank's
+// input is multiplied by it in the element type, and the products are summed.
+enum class AverageMode {
+    SumThenDivide,
+    PremultiplyInStorage,
+};
+
 // Folds buffers of Storage elements in Acc precision. Native dtypes use
 // Storage == Acc; 16-bit floats are decoded to float and encoded back.
 template <typename Storage, typename Acc, typename Decode, typename Encode>
@@ -45,11 +54,24 @@ void reduce_encoded_buffers(
     std::size_t element_count,
     Decode decode,
     Encode encode,
-    std::vector<char>& reduced_bytes) {
+    std::vector<char>& reduced_bytes,
+    AverageMode average_mode = AverageMode::SumThenDivide) {
+    const bool premultiply =
+        request.reduce_op == CollectiveReduceOp::Avg &&
+        average_mode == AverageMode::PremultiplyInStorage &&
+        !buffers.empty();
+    const Acc factor = premultiply
+        ? static_cast<Acc>(decode(encode(static_cast<Acc>(
+              1.0 / static_cast<double>(buffers.size())))))
+        : static_cast<Acc>(1);
     const auto load = [&](const std::vector<char>& buffer, std::size_t index) {
         Storage stored {};
         std::memcpy(&stored, buffer.data() + index * sizeof(Storage), sizeof(Storage));
-        return static_cast<Acc>(decode(stored));
+        const Acc value = static_cast<Acc>(decode(stored));
+        if (!premultiply) {
+            return value;
+        }
+        return static_cast<Acc>(decode(encode(static_cast<Acc>(value * factor))));
     };
     std::vector<Acc> reduced(element_count, static_cast<Acc>(0));
     if (!buffers.empty()) {
@@ -67,7 +89,8 @@ void reduce_encoded_buffers(
                 request.reduce_op);
         }
     }
-    if (request.reduce_op == CollectiveReduceOp::Avg && !buffers.empty()) {
+    if (request.reduce_op == CollectiveReduceOp::Avg && !premultiply &&
+        !buffers.empty()) {
         const Acc divisor = static_cast<Acc>(buffers.size());
         for (Acc& value : reduced) {
             value = static_cast<Acc>(value / divisor);
@@ -89,10 +112,11 @@ void reduce_typed_buffers(
     const CollectiveExecutionRequest& request,
     const std::vector<std::vector<char>>& buffers,
     std::size_t element_count,
-    std::vector<char>& reduced_bytes) {
+    std::vector<char>& reduced_bytes,
+    AverageMode average_mode = AverageMode::SumThenDivide) {
     const auto identity = [](T value) { return value; };
     reduce_encoded_buffers<T, T>(
-        request, buffers, element_count, identity, identity, reduced_bytes);
+        request, buffers, element_count, identity, identity, reduced_bytes, average_mode);
 }
 
 inline void reduce_buffers(
@@ -132,7 +156,8 @@ inline void reduce_buffers(
                 element_count,
                 float16_bits_to_float,
                 float_to_float16_bits,
-                reduced_bytes);
+                reduced_bytes,
+                AverageMode::PremultiplyInStorage);
             break;
         case CollectiveDataType::BFloat16:
             reduce_encoded_buffers<std::uint16_t, float>(
@@ -141,15 +166,18 @@ inline void reduce_buffers(
                 element_count,
                 bfloat16_bits_to_float,
                 float_to_bfloat16_bits,
-                reduced_bytes);
+                reduced_bytes,
+                AverageMode::PremultiplyInStorage);
             break;
         case CollectiveDataType::Float32:
             reduce_typed_buffers<float>(
-                request, buffers, element_count, reduced_bytes);
+                request, buffers, element_count, reduced_bytes,
+                AverageMode::PremultiplyInStorage);
             break;
         case CollectiveDataType::Float64:
             reduce_typed_buffers<double>(
-                request, buffers, element_count, reduced_bytes);
+                request, buffers, element_count, reduced_bytes,
+                AverageMode::PremultiplyInStorage);
             break;
     }
 }

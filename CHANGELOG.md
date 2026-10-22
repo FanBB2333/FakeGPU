@@ -396,6 +396,10 @@
   Accelerate's `Accelerator().device` and transformers'
   `TrainingArguments.device` chose MPS before CUDA, so single-process
   training ran on MPS and bypassed the simulated GPUs.
+- Native NCCL `ncclAvg` on floating-point data multiplies each rank's input
+  by 1/n in the element type and then sums, as NCCL's PreMulSum does,
+  instead of dividing the sum. Results can change in the last bit, and a
+  halved float16 or bfloat16 subnormal can round to zero.
 
 ## v1.6.0 - 2026-10-17
 
