@@ -4,6 +4,7 @@
 #include "global_state.hpp"
 #include "gpu_profile.hpp"
 #include "logging.hpp"
+#include "../cuda/modeled_driver_version.hpp"
 #include "version.hpp"
 
 #include <algorithm>
@@ -1076,12 +1077,16 @@ private:
                 "FAKEGPU_CUDA_VERSION",
                 "12.1"));
         out << ",\"cuda_version_source\":\"native_fakegpu_default\"";
+        // The driver the native CUDA and NVML libraries model.
+        const char* configured_driver = std::getenv("FAKEGPU_DRIVER_VERSION");
+        const bool driver_configured = configured_driver && *configured_driver;
         out << ",\"driver_version\":";
         append_json_string(
             out,
-            environment_text(
-                "FAKEGPU_DRIVER_VERSION",
-                "simulated"));
+            driver_configured ? std::string(configured_driver)
+                              : std::string(fake_gpu::kModeledDriverVersion));
+        out << ",\"driver_version_source\":"
+            << (driver_configured ? "\"FAKEGPU_DRIVER_VERSION\"" : "\"modeled_default\"");
         out << '}';
         out << ",\"publisher\":{\"interval_seconds\":"
             << interval_seconds;

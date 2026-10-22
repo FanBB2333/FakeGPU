@@ -207,7 +207,8 @@
   FakeCUDA does.
 - Native CUDA and NVML report one modeled driver: version 570.195.03, NVML
   version 12.570.195.03, and CUDA 12.8 from both `cuDriverGetVersion` and
-  `nvmlSystemGetCudaDriverVersion`.
+  `nvmlSystemGetCudaDriverVersion`. The native publisher's SMI state
+  records the same driver version instead of `simulated`.
 - Freeing a pointer FakeGPU never allocated with `cudaFree`, `cuMemFree`,
   `cudaFreeHost` or `cuMemFreeHost` still succeeds by default, but now
   follows `FAKEGPU_UNSUPPORTED_API`: `warn` prints a warning and `error`

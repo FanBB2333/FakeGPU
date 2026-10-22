@@ -812,6 +812,21 @@ def test_native_smi_environment_errors_match_python(
     assert native["error"] == python["error"]
 
 
+def test_native_smi_state_reports_the_modeled_driver(tmp_path: Path) -> None:
+    # The native NVML and CUDA libraries model driver 570.195.03
+    # (src/cuda/modeled_driver_version.hpp); their state says the same.
+    (tmp_path / "default").mkdir()
+    (tmp_path / "configured").mkdir()
+    software = _native_smi_state(tmp_path / "default", {})["software"]
+    assert software["driver_version"] == "570.195.03"
+    assert software["driver_version_source"] == "modeled_default"
+    software = _native_smi_state(
+        tmp_path / "configured", {"FAKEGPU_DRIVER_VERSION": "580.1.2"}
+    )["software"]
+    assert software["driver_version"] == "580.1.2"
+    assert software["driver_version_source"] == "FAKEGPU_DRIVER_VERSION"
+
+
 def test_native_smi_publisher_waits_out_a_huge_interval(tmp_path: Path) -> None:
     state = _native_smi_state(
         tmp_path,
