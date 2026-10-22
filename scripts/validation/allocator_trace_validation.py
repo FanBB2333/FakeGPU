@@ -252,7 +252,11 @@ def main() -> int:
     capture_parser.add_argument("--mode", choices=["real", "fakecuda"], required=True)
     capture_parser.add_argument(
         "--profile",
-        default="rtx-pro-5000-blackwell-72gb",
+        default=os.environ.get("TARGET_GPU_PROFILE") or None,
+        help=(
+            "FakeCUDA profile ID for --mode fakecuda; pick the catalog ID of "
+            "the GPU you compare against (default: $TARGET_GPU_PROFILE)"
+        ),
     )
     capture_parser.add_argument("--output", type=Path, required=True)
 
@@ -269,6 +273,11 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.action == "capture":
+        if args.mode == "fakecuda" and not args.profile:
+            parser.error(
+                "--mode fakecuda needs --profile or TARGET_GPU_PROFILE set to "
+                "the catalog ID of the GPU you compare against"
+            )
         report = capture(mode=args.mode, profile=args.profile)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(

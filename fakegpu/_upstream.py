@@ -64,6 +64,29 @@ _REAL_COLLECTIVES = (
 _DEFAULT_STREAMS = {}
 _CURRENT_STREAMS = {}
 _NEXT_STREAM_ID = 1
+# torch.cuda.memory functions as torch defines them, saved by enable() before
+# the stubs below replace them.  fakegpu.torch_patch puts them back over its
+# modeled allocator bindings.
+_REAL_CUDA_MEMORY_API: dict[str, Any] = {}
+_CUDA_MEMORY_API_NAMES = (
+    "empty_cache",
+    "memory_allocated",
+    "memory_reserved",
+    "mem_get_info",
+    "max_memory_allocated",
+    "max_memory_reserved",
+    "memory_cached",
+    "max_memory_cached",
+    "memory_stats",
+    "memory_summary",
+    "memory_snapshot",
+    "reset_peak_memory_stats",
+    "reset_max_memory_allocated",
+    "reset_max_memory_cached",
+    "reset_accumulated_memory_stats",
+    "caching_allocator_alloc",
+    "caching_allocator_delete",
+)
 
 
 def _normalize_cuda_device(device: Any, *, allow_none: bool = False) -> torch.device | None:
@@ -1699,6 +1722,11 @@ def enable() -> None:
     import torch.nn.parallel.distributed
     import torch.nn.parallel
 
+    for name in _CUDA_MEMORY_API_NAMES:
+        function = getattr(torch.cuda.memory, name, None)
+        if function is not None and name not in _REAL_CUDA_MEMORY_API:
+            _REAL_CUDA_MEMORY_API[name] = function
+
     # Save original dist functions before patching — needed for fake backend
     # delegation so FSDP gets a real ProcessGroup.
     global _ORIG_DIST_INIT, _ORIG_DIST_DESTROY, _ORIG_DDP
@@ -1803,7 +1831,12 @@ def enable() -> None:
         "_cuda_init": lambda: None,
         "_cuda_emptyCache": lambda: None,
         "_cuda_memoryStats": lambda device=0: {},
-        "_cuda_memorySnapshot": lambda: [],
+        "_cuda_memorySnapshot": lambda arg=None: {
+            "segments": [],
+            "device_traces": [[] for _ in range(_NUM_DEVICES)],
+            "allocator_settings": {},
+            "external_annotations": [],
+        },
         "_cuda_resetPeakMemoryStats": lambda device=0: None,
         "_cuda_resetAccumulatedMemoryStats": lambda device=0: None,
         "_cuda_ipc_collect": lambda: None,

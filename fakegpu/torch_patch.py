@@ -270,6 +270,9 @@ def _register_tensor_for_memory_tracking(
     if dp == 0 or nbytes == 0:
         return False
 
+    # A malformed PYTORCH_CUDA_ALLOC_CONF fails every CUDA allocation; torch
+    # 2.10+ raises it as ValueError, which the guard below would swallow.
+    _memory_tracker.check_initialized()
     try:
         _set_tracked_data_ptr(tensor, int(dp))
         if _memory_tracker.has_allocation(int(dp)):
@@ -1942,93 +1945,205 @@ def _install_profiled_device_queries(upstream: Any, torch_mod: Any) -> None:
     upstream.can_device_access_peer = _topology_can_device_access_peer
 
 
+_idle_memory_tracker: _DeviceMemoryTracker | None = None
+
+
+def _memory_api_tracker() -> _DeviceMemoryTracker:
+    """Return the tracker behind the ``torch.cuda`` memory API.
+
+    With ``FAKEGPU_MEMORY_TRACKING=0`` no allocation is tracked; the API then
+    reports an allocator that holds nothing on the profiled devices.
+    """
+    global _idle_memory_tracker
+    tracker = _memory_tracker
+    if tracker is not None:
+        return tracker
+    totals = [int(profile["total_memory"]) for profile in _DEVICE_PROFILES]
+    idle = _idle_memory_tracker
+    if idle is None or idle._total != totals:
+        idle = _DeviceMemoryTracker(totals)
+        _idle_memory_tracker = idle
+    return idle
+
+
+def _tensor_storage_pointer(tensor: Any) -> int | None:
+    dp = getattr(tensor, "_fakegpu_memory_data_ptr", None)
+    if dp is not None:
+        return int(dp)
+    for candidate in (tensor, getattr(tensor, "raw_data", None)):
+        if candidate is None:
+            continue
+        try:
+            return int(candidate.untyped_storage().data_ptr())
+        except Exception:
+            continue
+    return None
+
+
 def _install_tracked_memory_api(torch_mod: Any) -> None:
-    """Serve the ``torch.cuda`` memory API from ``_memory_tracker``."""
+    """Serve the ``torch.cuda`` memory API from the modeled caching allocator.
 
-    def _stats_device(device):
-        # CUDACachingAllocator::assertValidDevice() rejects devices the
-        # allocator has no stats for instead of reporting zeros.
-        index = _normalize_device_index(device)
-        if index < 0 or index >= _NUM_DEVICES:
+    torch's own ``torch.cuda.memory`` functions run unchanged over the
+    ``torch._C`` allocator bindings defined here, so ``memory_summary()``,
+    the deprecation warnings of the ``*_cached`` names and device validation
+    behave as in the installed torch.
+    """
+    from . import _allocator
+
+    upstream = _upstream_mod
+    _allocator.set_stream_resolver(
+        lambda device: int(upstream._current_stream(device).cuda_stream)
+    )
+
+    def _binding_device(device, name):
+        # THPUtils_checkLong() and CUDACachingAllocator::assertValidDevice().
+        if not isinstance(device, int) or isinstance(device, bool):
+            raise RuntimeError(f"invalid argument to {name}")
+        if device < 0 or device >= _NUM_DEVICES:
             raise RuntimeError(
-                f"Invalid device argument {index}: did you call init?"
+                f"Invalid device argument {device}: did you call init?"
             )
-        return index
+        return device
 
-    def _tracked_memory_allocated(device=None):
-        return _memory_tracker.memory_allocated(_stats_device(device))
+    C = torch_mod._C
 
-    def _tracked_max_memory_allocated(device=None):
-        return _memory_tracker.max_memory_allocated(_stats_device(device))
-
-    def _tracked_memory_reserved(device=None):
-        return _memory_tracker.memory_reserved(_stats_device(device))
-
-    def _tracked_max_memory_reserved(device=None):
-        return _memory_tracker.max_memory_reserved(_stats_device(device))
-
-    def _tracked_mem_get_info(device=None):
-        # cudaMemGetInfo runs under a CUDAGuard for the requested device.
-        return _memory_tracker.mem_get_info(
-            _checked_ordinal(_normalize_device_index(device))
+    def _cuda_memory_stats(device):
+        tracker = _memory_api_tracker()
+        return tracker.memory_stats_as_nested_dict(
+            _binding_device(device, "memory_allocated")
         )
 
-    def _tracked_empty_cache():
-        _memory_tracker.empty_cache()
+    def _cuda_reset_peak_memory_stats(device):
+        _memory_api_tracker().reset_peak(
+            _binding_device(device, "reset_peak_memory_stats")
+        )
 
-    def _tracked_reset_peak_memory_stats(device=None):
-        _memory_tracker.reset_peak(_stats_device(device))
+    def _cuda_reset_accumulated_memory_stats(device):
+        _memory_api_tracker().reset_accumulated(
+            _binding_device(device, "reset_accumulated_memory_stats")
+        )
 
-    def _tracked_reset_accumulated_memory_stats(device=None):
-        _memory_tracker.reset_accumulated(_stats_device(device))
+    def _cuda_empty_cache():
+        _memory_api_tracker().empty_cache()
 
-    def _tracked_memory_stats(device=None):
-        return _memory_tracker.memory_stats(_stats_device(device))
+    def _cuda_memory_snapshot(arg=None):
+        return _memory_api_tracker().snapshot_dict(arg)
 
-    def _tracked_memory_snapshot(mempool_id=None, include_traces=True):
-        # Only the default pool exists, so a private pool id has no segments.
-        if mempool_id is not None and tuple(mempool_id[:2]) != (0, 0):
-            return []
-        return _memory_tracker.allocator_snapshot()
+    def _cuda_record_memory_history(*args, **kwargs):
+        _memory_api_tracker().record_memory_history(*args, **kwargs)
 
-    # Both public namespaces must expose the same tracker and aliases.
-    memory_api = {
-        "empty_cache": _tracked_empty_cache,
-        "memory_allocated": _tracked_memory_allocated,
-        "max_memory_allocated": _tracked_max_memory_allocated,
-        "memory_reserved": _tracked_memory_reserved,
-        "max_memory_reserved": _tracked_max_memory_reserved,
-        "memory_cached": _tracked_memory_reserved,
-        "max_memory_cached": _tracked_max_memory_reserved,
-        "mem_get_info": _tracked_mem_get_info,
-        "reset_peak_memory_stats": _tracked_reset_peak_memory_stats,
-        "reset_max_memory_allocated": _tracked_reset_peak_memory_stats,
-        "reset_max_memory_cached": _tracked_reset_peak_memory_stats,
-        "reset_accumulated_memory_stats": _tracked_reset_accumulated_memory_stats,
-        "memory_stats": _tracked_memory_stats,
-        "memory_snapshot": _tracked_memory_snapshot,
+    def _cuda_record_memory_history_legacy(*args, **kwargs):
+        _memory_api_tracker().record_memory_history_legacy(*args, **kwargs)
+
+    def _cuda_raw_alloc(size, stream):
+        tracker = _memory_api_tracker()
+        size = int(size)
+        if size < 0 and tracker.torch_version >= (2, 12):
+            raise ValueError(
+                f"Invalid memory size: {size}. caching_allocator_alloc requires "
+                "a non-negative size."
+            )
+        return tracker.raw_alloc(
+            size, int(stream), int(_upstream_mod._CURRENT_DEVICE)
+        )
+
+    def _cuda_raw_delete(pointer):
+        _memory_api_tracker().raw_delete(int(pointer))
+
+    def _set_memory_fraction(fraction, device):
+        _memory_api_tracker().set_memory_fraction(float(fraction), int(device))
+
+    def _get_memory_fraction(device):
+        return _memory_api_tracker().get_memory_fraction(int(device))
+
+    def _set_allocator_settings(env):
+        _memory_api_tracker().set_allocator_settings(str(env))
+
+    bindings = {
+        "_cuda_memoryStats": _cuda_memory_stats,
+        "_cuda_resetPeakMemoryStats": _cuda_reset_peak_memory_stats,
+        "_cuda_resetAccumulatedMemoryStats": _cuda_reset_accumulated_memory_stats,
+        "_cuda_emptyCache": _cuda_empty_cache,
+        "_cuda_memorySnapshot": _cuda_memory_snapshot,
+        "_cuda_record_memory_history": _cuda_record_memory_history,
+        "_cuda_record_memory_history_legacy": _cuda_record_memory_history_legacy,
+        "_cuda_isHistoryEnabled": lambda: _memory_api_tracker().is_history_enabled(),
+        "_cuda_cudaCachingAllocator_raw_alloc": _cuda_raw_alloc,
+        "_cuda_cudaCachingAllocator_raw_delete": _cuda_raw_delete,
+        "_cuda_setMemoryFraction": _set_memory_fraction,
+        "_cuda_getMemoryFraction": _get_memory_fraction,
+        "_cuda_getAllocatorBackend": lambda: _memory_api_tracker().allocator_backend(),
+        "_cuda_cudaCachingAllocator_set_allocator_settings": _set_allocator_settings,
+        "_accelerator_setAllocatorSettings": _set_allocator_settings,
+        "_accelerator_getAllocatorSettings": (
+            lambda: _memory_api_tracker().allocator_settings()
+        ),
+        # FakeCUDA has no pinned host allocator; its stats stay zero.
+        "_cuda_hostMemoryStats": lambda: _memory_api_tracker().host_memory_stats(),
+        "_cuda_resetAccumulatedHostMemoryStats": lambda: None,
+        "_cuda_resetPeakHostMemoryStats": lambda: None,
     }
+    for name, function in bindings.items():
+        setattr(C, name, function)
+
+    def _mem_get_info(device=None):
+        # torch.cuda.mem_get_info(): _get_device_index(device, optional=True),
+        # then cudaMemGetInfo under a guard for that device.
+        if device is None:
+            device = torch_mod.cuda.current_device()
+        index = _checked_ordinal(_cuda_device_index(device, optional=True))
+        return _memory_api_tracker().mem_get_info(index)
+
+    real_api = dict(getattr(upstream, "_REAL_CUDA_MEMORY_API", {}) or {})
+    real_alloc = real_api.get("caching_allocator_alloc")
+
+    def _caching_allocator_alloc(size, device=None, stream=None):
+        # torch accepts torch.cuda.Stream or an int; FakeCUDA streams are
+        # neither, so pass their id the way torch passes cuda_stream.
+        if stream is None:
+            index = (
+                torch_mod.cuda.current_device()
+                if device is None
+                else _cuda_device_index(device)
+            )
+            stream = torch_mod.cuda.current_stream(index)
+        if isinstance(stream, upstream._FakeStream):
+            stream = int(stream.cuda_stream)
+        return real_alloc(size, device=device, stream=stream)
+
+    memory_api = {
+        name: function
+        for name, function in real_api.items()
+        if name not in ("mem_get_info", "caching_allocator_alloc")
+    }
+    memory_api["mem_get_info"] = _mem_get_info
+    if real_alloc is not None:
+        memory_api["caching_allocator_alloc"] = _caching_allocator_alloc
+    # Both public namespaces expose the same functions.
     for namespace in (torch_mod.cuda, torch_mod.cuda.memory):
         for name, function in memory_api.items():
             setattr(namespace, name, function)
 
-    # torch.cuda.memory_stats_as_nested_dict() reads this binding directly.
-    def _tracked_cuda_memory_stats(device):
-        return _memory_tracker.memory_stats_as_nested_dict(_stats_device(device))
+    def _record_stream(self, stream):
+        # Tensor.record_stream(): the block is not reused until work queued
+        # on ``stream`` at free time has completed.
+        pointer = _tensor_storage_pointer(self)
+        tracker = _memory_tracker
+        stream_id = getattr(stream, "cuda_stream", None)
+        if pointer is None or tracker is None or stream_id is None:
+            return
+        tracker.record_stream(pointer, int(stream_id))
 
-    torch_mod._C._cuda_memoryStats = _tracked_cuda_memory_stats
+    upstream.FakeCudaTensor.record_stream = _record_stream
 
-    # torch.cuda.set/get_per_process_memory_fraction() and
-    # get_allocator_backend() validate in Python and then call these.
-    def _tracked_set_memory_fraction(fraction, device):
-        _memory_tracker.set_memory_fraction(float(fraction), int(device))
+    # A malformed allocator config fails CUDA initialization.
+    original_init = torch_mod.cuda.init
 
-    def _tracked_get_memory_fraction(device):
-        return _memory_tracker.get_memory_fraction(int(device))
+    def _init():
+        _memory_api_tracker().check_initialized()
+        return original_init()
 
-    torch_mod._C._cuda_setMemoryFraction = _tracked_set_memory_fraction
-    torch_mod._C._cuda_getMemoryFraction = _tracked_get_memory_fraction
-    torch_mod._C._cuda_getAllocatorBackend = lambda: "native"
+    torch_mod.cuda.init = _init
 
 
 def _install_fake_grad_scaler(torch_mod: Any) -> None:
@@ -2147,8 +2262,9 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     torch_mod.cuda.is_bf16_supported = _stub_is_bf16_supported
     _patch_hf_cuda_surface(torch_mod)
 
-    if _memory_tracker is not None:
-        _install_tracked_memory_api(torch_mod)
+    # Installed without memory tracking too: torch.cuda then reports an idle
+    # allocator for the profiled devices.
+    _install_tracked_memory_api(torch_mod)
 
     _install_fakegpu_autocast(torch_mod)
     _install_fake_grad_scaler(torch_mod)

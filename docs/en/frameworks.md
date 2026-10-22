@@ -15,6 +15,42 @@ that every GPU backend or arbitrary CUDA kernel is implemented.
 | CUDA C/C++ + native libraries | Host-backed allocation, copies, streams/events and selected CPU cuBLAS operations | Compiled C++ GEMM pipeline, allocation cleanup, module registration and host-thread launch configuration |
 | CUDA kernels with PTX or compatible cubin/SASS (Linux) | CPU interpretation through native Driver/Runtime APIs | CUDA C++ with/without PTX, standalone cubins, FP64, warp intrinsics, structured parameters, shared memory, barriers, atomics, globals and device functions |
 
+## PyTorch CUDA memory API
+
+FakeCUDA models PyTorch's CUDA caching allocator
+(`c10/cuda/CUDACachingAllocator.cpp`, followed for torch 2.9 to 2.14) and runs
+torch's own `torch.cuda.memory` functions on top of it. `memory_allocated()`,
+`memory_reserved()`, `memory_stats()`, `memory_summary()`, `memory_snapshot()`
+and `torch.cuda.memory._snapshot()` report what the allocator would hold.
+Allocation traces compared with a real Ampere GPU (sm_80) under torch 2.9.1
+and 2.10.0 match in allocated and reserved bytes, segment layout and
+allocator counters.
+
+- `PYTORCH_CUDA_ALLOC_CONF`, and from torch 2.10 `PYTORCH_ALLOC_CONF`, are
+  parsed as the installed torch parses them. `max_split_size_mb`,
+  `max_non_split_rounding_mb`, `roundup_power2_divisions`,
+  `garbage_collection_threshold`, `expandable_segments`,
+  `large_segment_size_mb` (torch 2.11+) and `per_process_memory_fraction`
+  (torch 2.10+) change the modeled memory. A malformed setting raises torch's
+  error at `torch.cuda.init()` and on allocation.
+- Each stream has its own cached blocks. After `Tensor.record_stream()` a
+  freed block stays in use until the next allocation; FakeCUDA work finishes
+  immediately.
+- `torch.cuda.memory._record_memory_history()` records allocation, free and
+  segment events with Python frames. There are no C++ frames.
+- `torch.cuda.mem_get_info()` leaves out a modeled CUDA context of 601.5 MiB.
+  This is total minus free minus reserved memory after the first cuBLAS call,
+  measured once on one Ampere GPU (sm_80) with driver 580 and torch 2.9.1.
+  Other GPUs, drivers and libraries hold different amounts. Set
+  `FAKEGPU_CUDA_CONTEXT_BYTES` to your own measurement or to `0`.
+  Allocations can still use the whole profile memory.
+- Not modeled: the `cudaMallocAsync` backend (the setting is accepted and
+  reported, but the native allocator stays in use), private memory pools and
+  CUDA graphs, the pinned host allocator (its statistics stay zero), and the
+  sentence about process memory that out-of-memory errors add when NVML is
+  available. With `FAKEGPU_MEMORY_TRACKING=0` allocations are not tracked,
+  and the API reports an empty allocator on the profiled devices.
+
 ## scikit-learn with simulated CUDA tensors
 
 Enable SciPy's Array API support before starting Python:
