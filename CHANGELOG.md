@@ -116,6 +116,9 @@
   the other deprecated names warn, a CPU device raises `ValueError`, and
   `caching_allocator_alloc()`, `caching_allocator_delete()` and
   `host_memory_stats()` work.
+- `scripts/validation/allocator_trace_validation.py capture --mode fakecuda`
+  takes the profile from `--profile` or `TARGET_GPU_PROFILE` instead of a
+  built-in device.
 - The console no longer fails with `NoMatches` when its periodic refresh
   fires while the app is shutting down.
 - FakeCUDA autocast now defaults to float16 like CUDA instead of the CPU
