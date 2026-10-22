@@ -47,6 +47,9 @@
   unpatched with a warning when the mask hides every GPU. Breaking for code
   that set `CUDA_VISIBLE_DEVICES=""` to keep real GPUs out of a FakeCUDA run.
   `fakegpu run` accepts GPU UUIDs in the mask, and a repeated GPU hides all.
+- Native NCCL binds a communicator to the caller's current CUDA device
+  (`cudaGetDevice()`, as NCCL does) instead of inferring it from
+  `LOCAL_RANK`. Call `cudaSetDevice` before `ncclCommInitRank`.
 - One synthetic identity per simulated GPU in native and Python code: the
   native UUID is the same `uuid5` value fakegpu-smi and the machine daemon
   use, so a native process and a FakeCUDA process on the same GPU no longer
