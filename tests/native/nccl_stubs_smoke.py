@@ -283,6 +283,10 @@ def child_fp8_rank(rank: int) -> int:
     communicator usable; send and receive work on any device.
     """
 
+    # NCCL binds the communicator to the current CUDA device, so each rank
+    # selects its own GPU first, as a one-process-per-GPU job does.
+    runtime = ctypes.CDLL(str(LIBCUDART), mode=ctypes.RTLD_GLOBAL)
+    expect_rc(runtime.cudaSetDevice(rank), 0, "cudaSetDevice")
     lib = load_nccl()
     lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, UniqueId, ctypes.c_int]
     comm = ctypes.c_void_p()
