@@ -31,6 +31,13 @@ DeepSpeed ZeRO 的 bucket 大小以元素個數計，預設值與 DeepSpeed 相�
 以上依據 DeepSpeed 0.15.3 與 0.19.8。FSDP 沒有 bucket 設定，FSDP 規劃仍沿用
 FakeGPU 的啟發式：每次 collective 取 `min(參數位元組數, 500 MB)`。
 
+FSDP `SHARD_GRAD_OP` 與 FSDP2 `reshard_after_forward=False`（`shard_grad_op`）
+平時只保留每個 rank 的參數分片。規劃從 forward 到 backward 結束額外計入完整的
+未分片參數，並在 optimizer step 前重新分片，與 FSDP 在梯度同步步 backward 之後
+的行為一致。`_HYBRID_SHARD_ZERO2`（`hybrid_shard_zero2`）在 shard group 內做同樣
+的事，在 group 之間複製。與 `HYBRID_SHARD` 一樣，group 預設取 Accelerate 每台
+機器的程序數。
+
 [版本化原生驗收矩陣](../../tests/data/research_native_evidence.json)記錄六組
 FP32/FP16/BF16 LoRA 與 attention CPU_SIM 案例、CPU 與 GPU 上 tiny Qwen3 MoE 的
 路由與梯度，以及兩個 CPU rank 執行原生 DDP 與 FSDP2。實體 TP/PP/CP/EP、多 GPU

@@ -412,6 +412,12 @@
   `stage3_max_live_parameters` (nothing on one rank). `plan-training
   --hidden-size` resolves `auto` bucket sizes as the HF Trainer and Accelerate
   do. FSDP plans keep their bucket heuristic.
+- FSDP `_HYBRID_SHARD_ZERO2` (and enum value 5) normalizes to the new
+  `hybrid_shard_zero2` strategy instead of `shard_grad_op`: it shards over the
+  intra-node group, not the whole world. `shard_grad_op` plans now keep the
+  parameter shard at rest (`parameters_sharded` is true, with the new
+  `parameters_resharded_after_forward` false), add the unsharded parameters
+  from forward through backward and drop them for the optimizer step.
 
 ## v1.6.0 - 2026-10-17
 

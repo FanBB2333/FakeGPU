@@ -35,6 +35,14 @@ This follows DeepSpeed 0.15.3 and 0.19.8. FSDP has no bucket setting, so FSDP
 plans keep FakeGPU's heuristic of `min(parameter bytes, 500 MB)` per
 collective.
 
+FSDP `SHARD_GRAD_OP` and FSDP2 `reshard_after_forward=False` (`shard_grad_op`)
+keep each rank's parameter shard at rest. The plan adds the full unsharded
+parameters from forward through backward and reshards them for the optimizer
+step, as FSDP does after backward on a gradient-sync step.
+`_HYBRID_SHARD_ZERO2` (`hybrid_shard_zero2`) does the same within the shard
+group and replicates across groups. Like `HYBRID_SHARD`, the group defaults
+to Accelerate's processes per machine.
+
 The [versioned native validation matrix](../../tests/data/research_native_evidence.json)
 records six FP32/FP16/BF16 LoRA and attention CPU_SIM cases, tiny Qwen3 MoE
 routing and gradients on CPU and GPU, and two CPU ranks running native DDP and

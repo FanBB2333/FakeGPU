@@ -115,8 +115,12 @@ def estimate_training_plan(
 
     strategy = str(normalized.get("sharding_strategy") or "replicated")
     zero_stage = int(normalized.get("zero_stage", 0) or 0)
+    # full_shard reshards parameters after forward; SHARD_GRAD_OP keeps them
+    # unsharded until the end of backward. Both shard them outside compute.
     full_shard = strategy in {"full_shard", "hybrid_shard"} or zero_stage >= 3
-    if strategy == "hybrid_shard":
+    shard_grad_op = strategy in {"shard_grad_op", "hybrid_shard_zero2"}
+    shard_parameters = full_shard or shard_grad_op
+    if strategy in _HYBRID_STRATEGIES:
         shard_group_size = _positive_int(
             normalized.get("shard_group_size", 1),
             "shard_group_size",
@@ -127,12 +131,8 @@ def estimate_training_plan(
             )
     else:
         shard_group_size = ranks
-    shard_gradients = (
-        full_shard or strategy == "shard_grad_op" or zero_stage >= 2
-    )
-    shard_optimizer = (
-        full_shard or strategy == "shard_grad_op" or zero_stage >= 1
-    )
+    shard_gradients = shard_parameters or zero_stage >= 2
+    shard_optimizer = shard_parameters or zero_stage >= 1
 
     parameter_layout = None
     if parameter_shapes is not None:
@@ -168,7 +168,7 @@ def estimate_training_plan(
 
     rank_parameter_storage_bytes = (
         partition_bytes(parameter_bytes)
-        if full_shard
+        if shard_parameters
         else parameter_bytes
     )
     gradient_bytes = parameter_bytes
@@ -277,6 +277,7 @@ def estimate_training_plan(
             element_bytes=parameter_element_bytes,
             rank_parameter_storage_bytes=rank_parameter_storage_bytes,
             full_shard=full_shard,
+            shard_grad_op=shard_grad_op,
             shard_gradients=shard_gradients,
             offload_parameters=offload_parameters,
         )
@@ -347,7 +348,8 @@ def estimate_training_plan(
             "strategy": strategy,
             "zero_stage": zero_stage,
             "shard_group_size": shard_group_size,
-            "parameters_sharded": full_shard,
+            "parameters_sharded": shard_parameters,
+            "parameters_resharded_after_forward": full_shard,
             "gradients_sharded": shard_gradients,
             "optimizer_state_sharded": shard_optimizer,
         },
@@ -689,9 +691,10 @@ def _normalize_fsdp(
         "NO_SHARD": "no_shard",
         "4": "hybrid_shard",
         "HYBRID_SHARD": "hybrid_shard",
-        "5": "shard_grad_op",
-        "_HYBRID_SHARD_ZERO2": "shard_grad_op",
-        "HYBRID_SHARD_ZERO2": "shard_grad_op",
+        # SHARD_GRAD_OP within the shard group, replicated across groups.
+        "5": "hybrid_shard_zero2",
+        "_HYBRID_SHARD_ZERO2": "hybrid_shard_zero2",
+        "HYBRID_SHARD_ZERO2": "hybrid_shard_zero2",
     }.get(raw_strategy)
     if strategy is None:
         raise TrainingPlanError(
@@ -992,6 +995,7 @@ def _fsdp_heuristic_buckets(
     element_bytes: int,
     rank_parameter_storage_bytes: int,
     full_shard: bool,
+    shard_grad_op: bool,
     shard_gradients: bool,
     offload_parameters: bool,
 ) -> dict[str, Any]:
@@ -1016,13 +1020,31 @@ def _fsdp_heuristic_buckets(
     if full_shard and allgather_bucket == 0:
         allgather_bucket = default_bucket
     workspace_bytes = max(reduce_bucket, allgather_bucket, prefetch_bucket)
-    window = (
-        min(parameter_bytes, max(allgather_bucket, rank_parameter_storage_bytes))
-        if full_shard
-        else rank_parameter_storage_bytes
-        if offload_parameters
-        else 0
-    )
+    if full_shard:
+        window = min(
+            parameter_bytes, max(allgather_bucket, rank_parameter_storage_bytes)
+        )
+    elif shard_grad_op:
+        # Every unit stays unsharded from its forward to the end of backward;
+        # the post-backward hook reshards it before the optimizer step.
+        window = parameter_bytes
+    elif offload_parameters:
+        window = rank_parameter_storage_bytes
+    else:
+        window = 0
+    notes = []
+    if full_shard or shard_gradients:
+        notes.append(
+            "FSDP has no bucket setting. FakeGPU budgets min(parameter bytes, "
+            "500 MB) per reduce-scatter and all-gather and a gathered window of "
+            "max(all-gather bucket, local shard); these are heuristics."
+        )
+    if shard_grad_op:
+        notes.append(
+            "SHARD_GRAD_OP and HYBRID_SHARD_ZERO2 keep the unsharded parameters "
+            "from forward through backward and reshard them before the "
+            "optimizer step, except inside no_sync()."
+        )
     return {
         "workspace_by_phase": {
             "forward": workspace_bytes,
@@ -1039,13 +1061,7 @@ def _fsdp_heuristic_buckets(
                 normalized.get("overlap_communication", False)
             ),
         },
-        "notes": [
-            "FSDP has no bucket setting. FakeGPU budgets min(parameter bytes, "
-            "500 MB) per reduce-scatter and all-gather and a gathered window of "
-            "max(all-gather bucket, local shard); these are heuristics."
-        ]
-        if full_shard or shard_gradients
-        else [],
+        "notes": notes,
         "unmodeled_components": [],
     }
 

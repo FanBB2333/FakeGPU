@@ -1122,7 +1122,10 @@ def test_training_plan_handles_accelerate_fsdp_and_auto_deepspeed_values() -> No
         parameter_bytes=2_000,
         activation_bytes=500,
     )
-    assert fsdp_report["sharding"]["parameters_sharded"] is False
+    # SHARD_GRAD_OP shards parameters outside compute but does not reshard
+    # them after forward.
+    assert fsdp_report["sharding"]["parameters_sharded"] is True
+    assert fsdp_report["sharding"]["parameters_resharded_after_forward"] is False
     assert fsdp_report["sharding"]["gradients_sharded"] is True
     assert fsdp_report["rank_local_storage"]["gradient_bytes"] == 1_000
     assert fsdp["activation_checkpointing"] is False
@@ -1396,11 +1399,16 @@ def test_training_plan_scopes_hybrid_shard_to_local_group() -> None:
     assert report["rank_local_storage"]["optimizer_state_bytes"] == 4_000
 
 
-def test_training_plan_maps_hybrid_shard_zero2_to_shard_grad_op() -> None:
+def test_training_plan_scopes_hybrid_shard_zero2_to_the_node() -> None:
+    # torch fsdp/api.py: _HYBRID_SHARD_ZERO2 applies SHARD_GRAD_OP within a
+    # node and replicates across nodes; without a process group FSDP shards
+    # over the intra-node group (_init_utils.py), num_processes // num_machines
+    # under accelerate.
     normalized = normalize_training_config(
         {
             "distributed_type": "FSDP",
-            "num_processes": 8,
+            "num_machines": 2,
+            "num_processes": 16,
             "fsdp_config": {
                 "fsdp_sharding_strategy": "_HYBRID_SHARD_ZERO2",
             },
@@ -1408,14 +1416,45 @@ def test_training_plan_maps_hybrid_shard_zero2_to_shard_grad_op() -> None:
     )
     report = estimate_training_plan(
         normalized,
-        parameter_bytes=8_000,
+        parameter_bytes=16_000,
         activation_bytes=0,
     )
 
-    assert normalized["sharding_strategy"] == "shard_grad_op"
-    assert report["sharding"]["parameters_sharded"] is False
-    assert report["rank_local_storage"]["parameter_bytes"] == 8_000
-    assert report["rank_local_storage"]["gradient_bytes"] == 1_000
+    assert normalized["sharding_strategy"] == "hybrid_shard_zero2"
+    assert normalized["shard_group_size"] == 8
+    assert report["sharding"]["parameters_sharded"] is True
+    assert report["sharding"]["parameters_resharded_after_forward"] is False
+    storage = report["rank_local_storage"]
+    assert storage["parameter_bytes"] == 2_000
+    assert storage["gradient_bytes"] == 2_000
+    assert storage["optimizer_state_bytes"] == 4_000
+
+
+@pytest.mark.parametrize("strategy", ["SHARD_GRAD_OP", "_HYBRID_SHARD_ZERO2"])
+def test_training_plan_reshards_shard_grad_op_parameters_for_the_optimizer_step(
+    strategy: str,
+) -> None:
+    # torch fsdp/_runtime_utils.py _should_free_in_backward frees the
+    # unsharded parameters in post-backward on a gradient-sync step; FSDP2
+    # reshards after backward by default. Forward and backward still hold
+    # every unit unsharded next to the local shard.
+    normalized = normalize_training_config(
+        {
+            "distributed_type": "FSDP",
+            "num_processes": 4,
+            "fsdp_config": {"fsdp_sharding_strategy": strategy},
+        }
+    )
+    report = estimate_training_plan(
+        normalized, parameter_bytes=8_000, activation_bytes=0
+    )
+
+    phases = {phase["phase"]: phase["components"] for phase in report["memory_timeline"]["phases"]}
+    assert phases["forward"]["parameters"] == 2_000
+    assert phases["forward"]["allgathered_parameters"] == 8_000
+    assert phases["backward"]["allgathered_parameters"] == 8_000
+    assert phases["optimizer_step"]["parameters"] == 2_000
+    assert "allgathered_parameters" not in phases["optimizer_step"]
 
 
 @pytest.mark.parametrize(
@@ -1425,10 +1464,10 @@ def test_training_plan_maps_hybrid_shard_zero2_to_shard_grad_op() -> None:
         # fsdp_reshard_after_forward, using accelerate's FSDP_SHARDING_STRATEGY.
         ({"fsdp_version": 1, "fsdp_reshard_after_forward": "NO_SHARD"}, "fsdp", "no_shard"),
         ({"fsdp_version": 1, "fsdp_reshard_after_forward": "SHARD_GRAD_OP"}, "fsdp", "shard_grad_op"),
-        ({"fsdp_sharding_strategy": "HYBRID_SHARD_ZERO2"}, "fsdp", "shard_grad_op"),
+        ({"fsdp_sharding_strategy": "HYBRID_SHARD_ZERO2"}, "fsdp", "hybrid_shard_zero2"),
         # torch ShardingStrategy enum values: 2 SHARD_GRAD_OP, 5 _HYBRID_SHARD_ZERO2.
         ({"fsdp_sharding_strategy": 2}, "fsdp", "shard_grad_op"),
-        ({"fsdp_sharding_strategy": 5}, "fsdp", "shard_grad_op"),
+        ({"fsdp_sharding_strategy": 5}, "fsdp", "hybrid_shard_zero2"),
         # FSDP2 takes a bool; False keeps unsharded parameters after forward.
         ({"fsdp_version": 2, "fsdp_reshard_after_forward": False}, "fsdp2", "shard_grad_op"),
         ({"fsdp_version": 2, "fsdp_reshard_after_forward": True}, "fsdp2", "full_shard"),
