@@ -45,23 +45,50 @@ vLLM 會預先配置 paged KV 池，不會隨活躍請求逐步增長。部署�
 python3 -m fakegpu plan-serving \
   --model-dir /models/Qwen/Qwen3-0.6B \
   --active-sequences 16 \
-  --max-batch-size 64 \
   --prompt-tokens 4096 \
   --generated-tokens 256 \
   --runtime vllm \
-  --kv-cache-strategy paged \
-  --kv-cache-block-tokens 16 \
+  --max-batch-size 256 \
+  --vllm-max-num-batched-tokens 8192 \
   --target-profile "$TARGET_GPU_PROFILE" \
   --memory-utilization 0.92 \
   --json build/vllm-serving-plan.json
 ```
 
-- 自動模式採用 vLLM V1 的計算方式。executor 申請的 GPU 記憶體減去 profile 得到的
-  非 KV 記憶體，再向下取整為完整 block。報告會列出 `num_gpu_blocks`、cache token
-  容量、初始化是否可行與 `max_model_len` 下的並行量，並與請求實際需要的邏輯 KV
-  分開呈現。
+模型對應 vLLM 0.19.1（V1 引擎，單 GPU）。
+
+- 自動模式以 executor 申請的 GPU 記憶體（裝置記憶體乘以 `--memory-utilization`）
+  減去 vLLM 啟動 profile run 的非 KV 記憶體，再向下取整為完整 block。報告會列出
+  `num_gpu_blocks`、vLLM 日誌中 "GPU KV cache size" 的 token 數、初始化是否可行
+  與 `max_model_len` 下的並行量，並與請求實際需要的邏輯 KV 分開呈現。
+- profile run 是一次 `max_num_batched_tokens` 個 token 的 forward，加上每個請求
+  一列、共 `min(max_num_batched_tokens, max_num_seqs)` 列的 sampler：模型 dtype
+  的 logits、float32 logits、機率與取樣雜訊，以及 top-k/top-p workspace。再加上
+  權重與建模的 112 MiB 非 PyTorch 記憶體（函式庫 handle 與已載入的 kernel）。
+  此值是在一張 Ampere GPU（sm_80）上以 vLLM 0.19.1 量得，會隨軟體堆疊變化。
+- `--max-batch-size` 即 vLLM 的 `max_num_seqs`，`--vllm-max-num-batched-tokens`
+  即 `max_num_batched_tokens`。未指定時採用 vLLM 預設值：`vllm serve` 為 256 個
+  序列、2048 個 token；離線 `LLM` 類別（`--vllm-usage-context llm_class`）為
+  8192 個 token。記憶體不少於 70 GiB 且不是 A100 的裝置為 1024 個序列、8192 或
+  16384 個 token。token 預設值不超過 `max_num_seqs` 乘以 `max_model_len`
+  （最長請求）。
+- 未指定 `--prefill-chunk-tokens` 時，prefill 依 `max_num_batched_tokens` 分塊。
+- `--vllm-kv-cache-dtype` 可選 `auto`（沿用模型 dtype）、`bfloat16`、`float16`、
+  `fp8`、`fp8_e4m3` 與 `fp8_e5m2`。fp8 類型每個元素占 1 位元組。
+- sliding-window 模型使用 vLLM 的 hybrid KV cache group：每種 attention 類型的層
+  分成大小相同的 group，最後一個 group 補齊；每個 block ID 在一個 group 的每層各
+  占一頁。sliding-window group 保留視窗加上本步排程的 token；`max_model_len` 下的
+  並行量依一個請求在所有 group 中需要的 block 計算。
+- MLA 模型快取 latent 加 RoPE key。block 大小預設 16；compute capability 10.x 上
+  vLLM 選擇 FlashInfer MLA（32 個 token，需 `qk_nope_head_dim` 為 64、128 或
+  192），否則選擇 CUTLASS MLA（128 個 token）。可用 `--kv-cache-block-tokens`
+  覆寫。
 - 與 vLLM 一致，有一個 block 作為 null block 保留不用。剩餘 block 放不下一個
   `max_model_len` 請求時，初始化失敗。
+- paged prefix cache 命中只計完整 block，且最多 `prompt_tokens - 1` 個 token。
+- 未建模 CUDA graph 記憶體：vLLM 0.19.1 在決定 KV cache 大小之後才 capture
+  graph，只有設定 `VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1` 時才會扣除。
+  `torch.compile` 對 forward 峰值的影響與 attention backend workspace 也未建模。
 - `--vllm-non-kv-cache-memory-bytes` 以 vLLM 啟動 profile（權重、activation 峰值、
   非 PyTorch 記憶體與 CUDA graph）取代建模的非 KV 值。
 - `--vllm-kv-cache-memory-bytes` 指定每張 GPU 的精確 cache 大小。與 vLLM 一致，
@@ -73,8 +100,8 @@ python3 -m fakegpu plan-serving \
   一致。固定軟體版本的報告建議明確填入。
 - 預算對應 vLLM 的
   [GPU worker profile 流程](https://docs.vllm.ai/en/latest/api/vllm/v1/worker/gpu_worker/)。
-  初始可用記憶體、其他程序、tensor/pipeline parallelism、hybrid cache group、
-  記憶體碎片與版本相關的 kernel，仍需在相同軟體堆疊上觀測。
+  初始可用記憶體、其他程序、tensor/pipeline parallelism、記憶體碎片與版本相關的
+  kernel，仍需在相同軟體堆疊上觀測。
 - Speculative decoding 目前只適用於 generic 執行期模型。
 
 ## Speculative decoding

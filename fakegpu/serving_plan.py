@@ -22,6 +22,7 @@ from ._serving_kv import (
     estimate_serving_kv_pool,
     estimate_serving_request_kv_pool,
     load_serving_requests,
+    serving_kv_model,
 )
 from ._serving_memory import _serving_batch_memory, _serving_request_set_memory
 from ._serving_speculative import (
@@ -37,12 +38,20 @@ from ._serving_types import (
 )
 from ._serving_vllm import (
     VLLM_DEFAULT_GPU_MEMORY_UTILIZATION,
+    VLLM_KV_CACHE_DTYPE_BYTES,
+    VLLM_USAGE_CONTEXTS,
     _apply_vllm_kv_reservation,
     _build_vllm_runtime_report,
     _logical_kv_peak_bytes,
+    resolve_vllm_batch_limits,
+    vllm_default_block_tokens,
+    vllm_kv_cache_groups,
+    vllm_profile_memory,
 )
 from .llm_estimator import (
+    DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
     KV_CACHE_STRATEGIES,
+    MLA_KV_CACHE_LAYOUTS,
     VISION_ESTIMATE_WARNING,
     VISION_UNMODELED_COMPONENTS,
     estimate_decoder_inference,
@@ -68,11 +77,15 @@ REQUEST_SET_SCHEMA_VERSION = "fakegpu.llm_serving_request_set_plan.v1"
 WORKLOAD_SIGNATURE_SCHEMA_VERSION = "fakegpu.serving_workload.v1"
 SERVING_RUNTIMES = frozenset({"generic", "vllm"})
 DEFAULT_MEMORY_UTILIZATION = 0.9
+DEFAULT_MAX_BATCH_SIZE = 256
+DEFAULT_KV_CACHE_BLOCK_TOKENS = 16
+
+
 def estimate_serving_plan(
     model_dir: str | Path,
     *,
     active_sequences: int,
-    max_batch_size: int,
+    max_batch_size: int | None = None,
     prompt_tokens: int,
     generated_tokens: int = 1,
     dtype: str = "auto",
@@ -82,9 +95,11 @@ def estimate_serving_plan(
     kv_cache_strategy: str = "paged",
     kv_cache_bits: int = 4,
     kv_cache_residual_tokens: int = 128,
-    kv_cache_block_tokens: int = 16,
+    kv_cache_block_tokens: int | None = None,
     kv_cache_max_tokens: int | None = None,
     kv_cache_window_tokens: int | None = None,
+    kv_cache_group_size: int = DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
+    mla_kv_cache_layout: str = "auto",
     runtime_overhead_bytes: int = 0,
     scheduler_overhead_bytes_per_sequence: int = 0,
     adapter_dirs: Sequence[str | Path] | None = None,
@@ -98,11 +113,21 @@ def estimate_serving_plan(
     runtime: str = "generic",
     vllm_kv_cache_memory_bytes: int | None = None,
     vllm_non_kv_cache_memory_bytes: int | None = None,
+    vllm_max_num_batched_tokens: int | None = None,
+    vllm_kv_cache_dtype: str | None = None,
+    vllm_usage_context: str | None = None,
 ) -> dict[str, Any]:
-    """Plan memory admission for a homogeneous continuous-batching pool."""
+    """Plan memory admission for a homogeneous continuous-batching pool.
+
+    With ``runtime="vllm"``, an unset ``max_batch_size`` (vLLM's
+    max_num_seqs) and ``vllm_max_num_batched_tokens`` take vLLM's defaults
+    for the target device and ``vllm_usage_context`` ("api_server", the
+    ``vllm serve`` defaults, unless set to "llm_class").
+    """
 
     _positive_integer(active_sequences, "active_sequences")
-    _positive_integer(max_batch_size, "max_batch_size")
+    if max_batch_size is not None:
+        _positive_integer(max_batch_size, "max_batch_size")
     _positive_integer(prompt_tokens, "prompt_tokens")
     _positive_integer(generated_tokens, "generated_tokens")
     _nonnegative_integer(shared_prefix_tokens, "shared_prefix_tokens")
@@ -128,6 +153,12 @@ def estimate_serving_plan(
         draft_model_dir=draft_model_dir,
         vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
         vllm_non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
+        vllm_max_num_batched_tokens=vllm_max_num_batched_tokens,
+        vllm_kv_cache_dtype=vllm_kv_cache_dtype,
+        vllm_usage_context=vllm_usage_context,
+        kv_cache_block_tokens=kv_cache_block_tokens,
+        kv_cache_group_size=kv_cache_group_size,
+        mla_kv_cache_layout=mla_kv_cache_layout,
         device_capacity_bytes=device_capacity_bytes,
         speculative_tokens=speculative_tokens,
         speculative_acceptance_rate=speculative_acceptance_rate,
@@ -148,6 +179,26 @@ def estimate_serving_plan(
     dimensions = dict(base["model"])
     element_bytes = int(base["inputs"]["element_bytes"])
     parameter_bytes = int(base["memory"]["parameter_bytes"])
+    layout = _resolve_serving_layout(
+        capacity=capacity,
+        dimensions=dimensions,
+        element_bytes=element_bytes,
+        kv_cache_strategy=kv_cache_strategy,
+        kv_cache_block_tokens=kv_cache_block_tokens,
+        kv_cache_window_tokens=kv_cache_window_tokens,
+        mla_kv_cache_layout=mla_kv_cache_layout,
+        max_batch_size=max_batch_size,
+        max_model_len_tokens=prompt_tokens + generated_tokens,
+        vllm_max_num_batched_tokens=vllm_max_num_batched_tokens,
+        vllm_kv_cache_dtype=vllm_kv_cache_dtype,
+        vllm_usage_context=vllm_usage_context,
+    )
+    max_batch_size = layout.max_batch_size
+    kv_cache_block_tokens = layout.block_tokens
+    prefill_chunk_tokens = _runtime_prefill_chunk_tokens(
+        prefill_chunk_tokens,
+        layout,
+    )
     speculative = _load_speculative_draft(
         draft_model_dir=draft_model_dir,
         draft_dtype=draft_dtype,
@@ -182,6 +233,9 @@ def estimate_serving_plan(
                 scheduler_overhead_bytes_per_sequence
             ),
             speculative=speculative,
+            kv_model=layout.kv_model,
+            mla_kv_cache_layout=mla_kv_cache_layout,
+            kv_cache_group_size=kv_cache_group_size,
         )
 
     requested = batch_memory(active_sequences)
@@ -195,7 +249,15 @@ def estimate_serving_plan(
         vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
         vllm_non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
         max_model_len_tokens=prompt_tokens + generated_tokens,
-        profile_scope="configured_max_batch_size",
+        layout=layout,
+        dimensions=dimensions,
+        parameter_bytes=parameter_bytes,
+        element_bytes=element_bytes,
+        sm_count=capacity.sm_count,
+        runtime_overhead_bytes=runtime_overhead_bytes,
+        scheduler_overhead_bytes_per_sequence=(
+            scheduler_overhead_bytes_per_sequence
+        ),
     )
     runtime_report = admission.runtime_report
     requested_for_report = admission.requested_for_report
@@ -240,6 +302,8 @@ def estimate_serving_plan(
         kv_cache_block_tokens=kv_cache_block_tokens,
         kv_cache_max_tokens=kv_cache_max_tokens,
         kv_cache_window_tokens=kv_cache_window_tokens,
+        kv_cache_group_size=kv_cache_group_size,
+        layout=layout,
         runtime=runtime,
         memory_utilization=memory_utilization,
         vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
@@ -312,11 +376,7 @@ def estimate_serving_plan(
                 "and does not predict latency, throughput, or queue time."
             ),
         ],
-        vllm_note=(
-            "vLLM mode profiles non-KV memory at the configured maximum "
-            "batch size, reserves the remaining executor budget as whole "
-            "paged-cache blocks, and admits by logical KV demand."
-        ),
+        vllm_note=_VLLM_NOTE,
         speculative_note=(
             "Speculative decoding keeps target and draft weights and KV "
             "caches resident; a supplied acceptance assumption affects "
@@ -325,11 +385,20 @@ def estimate_serving_plan(
     )
 
 
+_VLLM_NOTE = (
+    "vLLM mode models the startup profile run (one forward of "
+    "max_num_batched_tokens tokens and a sampler pass over one row per "
+    "profiled request), reserves the remaining executor budget as whole "
+    "paged-cache blocks, chunks prefill at max_num_batched_tokens unless "
+    "prefill_chunk_tokens is set, and admits by logical KV demand."
+)
+
+
 def estimate_serving_request_set(
     model_dir: str | Path,
     requests: Sequence[Mapping[str, Any]],
     *,
-    max_batch_size: int,
+    max_batch_size: int | None = None,
     dtype: str = "auto",
     attention_implementation: str = "sdpa",
     prefill_chunk_tokens: int | None = None,
@@ -337,9 +406,11 @@ def estimate_serving_request_set(
     kv_cache_strategy: str = "paged",
     kv_cache_bits: int = 4,
     kv_cache_residual_tokens: int = 128,
-    kv_cache_block_tokens: int = 16,
+    kv_cache_block_tokens: int | None = None,
     kv_cache_max_tokens: int | None = None,
     kv_cache_window_tokens: int | None = None,
+    kv_cache_group_size: int = DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
+    mla_kv_cache_layout: str = "auto",
     runtime_overhead_bytes: int = 0,
     scheduler_overhead_bytes_per_sequence: int = 0,
     adapter_dirs: Sequence[str | Path] | None = None,
@@ -353,11 +424,15 @@ def estimate_serving_request_set(
     runtime: str = "generic",
     vllm_kv_cache_memory_bytes: int | None = None,
     vllm_non_kv_cache_memory_bytes: int | None = None,
+    vllm_max_num_batched_tokens: int | None = None,
+    vllm_kv_cache_dtype: str | None = None,
+    vllm_usage_context: str | None = None,
 ) -> dict[str, Any]:
     """Plan ordered admission for a heterogeneous serving request set."""
 
     normalized = _normalize_serving_requests(requests)
-    _positive_integer(max_batch_size, "max_batch_size")
+    if max_batch_size is not None:
+        _positive_integer(max_batch_size, "max_batch_size")
     _positive_integer(prefill_concurrency, "prefill_concurrency")
     _nonnegative_integer(runtime_overhead_bytes, "runtime_overhead_bytes")
     _nonnegative_integer(
@@ -377,6 +452,12 @@ def estimate_serving_request_set(
         draft_model_dir=draft_model_dir,
         vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
         vllm_non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
+        vllm_max_num_batched_tokens=vllm_max_num_batched_tokens,
+        vllm_kv_cache_dtype=vllm_kv_cache_dtype,
+        vllm_usage_context=vllm_usage_context,
+        kv_cache_block_tokens=kv_cache_block_tokens,
+        kv_cache_group_size=kv_cache_group_size,
+        mla_kv_cache_layout=mla_kv_cache_layout,
         device_capacity_bytes=device_capacity_bytes,
         speculative_tokens=speculative_tokens,
         speculative_acceptance_rate=speculative_acceptance_rate,
@@ -384,6 +465,12 @@ def estimate_serving_request_set(
     )
     runtime = capacity.runtime
     memory_utilization = capacity.memory_utilization
+
+    def max_model_len(count: int) -> int:
+        return max(
+            int(request["prompt_tokens"]) + int(request["generated_tokens"])
+            for request in normalized[:count]
+        )
 
     max_prompt_tokens = max(
         request["prompt_tokens"] for request in normalized
@@ -400,6 +487,39 @@ def estimate_serving_request_set(
     dimensions = dict(base["model"])
     element_bytes = int(base["inputs"]["element_bytes"])
     parameter_bytes = int(base["memory"]["parameter_bytes"])
+    layout_inputs = dict(
+        capacity=capacity,
+        dimensions=dimensions,
+        element_bytes=element_bytes,
+        kv_cache_strategy=kv_cache_strategy,
+        kv_cache_block_tokens=kv_cache_block_tokens,
+        kv_cache_window_tokens=kv_cache_window_tokens,
+        mla_kv_cache_layout=mla_kv_cache_layout,
+        max_batch_size=max_batch_size,
+        vllm_max_num_batched_tokens=vllm_max_num_batched_tokens,
+        vllm_kv_cache_dtype=vllm_kv_cache_dtype,
+        vllm_usage_context=vllm_usage_context,
+    )
+    # vLLM's max_num_seqs default does not depend on max_model_len, so a
+    # first pass fixes the candidate prefix whose longest request then sets
+    # max_model_len (and the max_num_batched_tokens default).
+    candidate_count = min(
+        _resolve_serving_layout(
+            **layout_inputs,
+            max_model_len_tokens=max_model_len(len(normalized)),
+        ).max_batch_size,
+        len(normalized),
+    )
+    layout = _resolve_serving_layout(
+        **layout_inputs,
+        max_model_len_tokens=max_model_len(candidate_count),
+    )
+    max_batch_size = layout.max_batch_size
+    kv_cache_block_tokens = layout.block_tokens
+    prefill_chunk_tokens = _runtime_prefill_chunk_tokens(
+        prefill_chunk_tokens,
+        layout,
+    )
     speculative = _load_speculative_draft(
         draft_model_dir=draft_model_dir,
         draft_dtype=draft_dtype,
@@ -432,11 +552,13 @@ def estimate_serving_request_set(
                 scheduler_overhead_bytes_per_sequence
             ),
             speculative=speculative,
+            kv_model=layout.kv_model,
+            mla_kv_cache_layout=mla_kv_cache_layout,
+            kv_cache_group_size=kv_cache_group_size,
         )
 
     requested_count = len(normalized)
     requested = request_memory(requested_count)
-    candidate_count = min(max_batch_size, requested_count)
     admission = _serving_admission(
         runtime=runtime,
         requested=requested,
@@ -446,11 +568,16 @@ def estimate_serving_request_set(
         memory_utilization=memory_utilization,
         vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
         vllm_non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
-        max_model_len_tokens=max(
-            int(request["prompt_tokens"]) + int(request["generated_tokens"])
-            for request in normalized[:candidate_count]
+        max_model_len_tokens=max_model_len(candidate_count),
+        layout=layout,
+        dimensions=dimensions,
+        parameter_bytes=parameter_bytes,
+        element_bytes=element_bytes,
+        sm_count=capacity.sm_count,
+        runtime_overhead_bytes=runtime_overhead_bytes,
+        scheduler_overhead_bytes_per_sequence=(
+            scheduler_overhead_bytes_per_sequence
         ),
-        profile_scope="configured_request_manifest_prefix",
     )
     runtime_report = admission.runtime_report
     requested_for_report = admission.requested_for_report
@@ -503,6 +630,8 @@ def estimate_serving_request_set(
         kv_cache_block_tokens=kv_cache_block_tokens,
         kv_cache_max_tokens=kv_cache_max_tokens,
         kv_cache_window_tokens=kv_cache_window_tokens,
+        kv_cache_group_size=kv_cache_group_size,
+        layout=layout,
         runtime=runtime,
         memory_utilization=memory_utilization,
         vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
@@ -596,9 +725,9 @@ def estimate_serving_request_set(
             ),
         ],
         vllm_note=(
-            "vLLM mode profiles the configured manifest prefix, reserves "
-            "the resulting paged KV pool, and admits the longest request "
-            "prefix whose logical cache demand fits that pool."
+            _VLLM_NOTE[:-1]
+            + "; it admits the longest request prefix whose logical cache "
+            "demand fits that pool."
         ),
         speculative_note=(
             "Speculative decoding applies one draft configuration to every "
@@ -694,6 +823,13 @@ def _build_serving_report(
         )
         report_notes.append(f"Draft model: {VISION_ESTIMATE_WARNING}")
     if runtime == "vllm":
+        unmodeled_components.extend(
+            [
+                "vllm_cuda_graph_capture_memory",
+                "vllm_torch_compile_profile_activation_changes",
+                "vllm_attention_backend_profile_workspaces",
+            ]
+        )
         report_notes.append(vllm_note)
     if speculative is not None:
         report_notes.append(speculative_note)
@@ -793,6 +929,125 @@ class _ServingCapacity:
     target: dict[str, Any] | None
     selected_capacity_bytes: int | None
     capacity_source: str
+    sm_count: int | None = None
+    device_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ServingLayout:
+    """Cache layout and scheduler limits resolved for one plan.
+
+    ``kv_model`` describes the cache the runtime keeps; in vLLM mode the
+    layer counts include the padding of hybrid KV cache groups and the
+    element size follows the cache dtype.
+    """
+
+    block_tokens: int
+    kv_model: dict[str, Any]
+    kv_groups: dict[str, Any] | None
+    kv_cache_dtype: str | None
+    batch_limits: dict[str, Any] | None
+    max_batch_size: int
+
+
+def _resolve_serving_layout(
+    *,
+    capacity: _ServingCapacity,
+    dimensions: Mapping[str, Any],
+    element_bytes: int,
+    kv_cache_strategy: str,
+    kv_cache_block_tokens: int | None,
+    kv_cache_window_tokens: int | None,
+    mla_kv_cache_layout: str,
+    max_batch_size: int | None,
+    max_model_len_tokens: int,
+    vllm_max_num_batched_tokens: int | None,
+    vllm_kv_cache_dtype: str | None,
+    vllm_usage_context: str | None,
+) -> _ServingLayout:
+    """Resolve block size, cache layout and batch limits for a plan."""
+
+    if capacity.runtime != "vllm":
+        return _ServingLayout(
+            block_tokens=(
+                DEFAULT_KV_CACHE_BLOCK_TOKENS
+                if kv_cache_block_tokens is None
+                else kv_cache_block_tokens
+            ),
+            kv_model=serving_kv_model(
+                dimensions,
+                element_bytes=element_bytes,
+                kv_cache_strategy=kv_cache_strategy,
+                mla_kv_cache_layout=mla_kv_cache_layout,
+            ),
+            kv_groups=None,
+            kv_cache_dtype=None,
+            batch_limits=None,
+            max_batch_size=(
+                DEFAULT_MAX_BATCH_SIZE
+                if max_batch_size is None
+                else max_batch_size
+            ),
+        )
+
+    kv_cache_dtype = vllm_kv_cache_dtype or "auto"
+    kv_element_bytes = VLLM_KV_CACHE_DTYPE_BYTES[kv_cache_dtype]
+    kv_model = serving_kv_model(
+        dimensions,
+        element_bytes=(
+            element_bytes if kv_element_bytes is None else kv_element_bytes
+        ),
+        kv_cache_strategy=kv_cache_strategy,
+        mla_kv_cache_layout=mla_kv_cache_layout,
+    )
+    if kv_cache_window_tokens is not None:
+        # The explicit window applies to every layer, so one group holds
+        # them all.
+        kv_model["sliding_window_layers"] = 0
+        kv_model["sliding_window_tokens"] = None
+    kv_groups = vllm_kv_cache_groups(kv_model)
+    # Every block id of a hybrid model spends one page in group_size layers
+    # of each group, so the padded layer counts set the cache demand.
+    kv_model["num_hidden_layers"] = int(kv_groups["padded_layers"])
+    kv_model["sliding_window_layers"] = int(
+        kv_groups["padded_sliding_layers"]
+    )
+    batch_limits = resolve_vllm_batch_limits(
+        max_num_batched_tokens=vllm_max_num_batched_tokens,
+        max_num_seqs=max_batch_size,
+        max_model_len_tokens=max_model_len_tokens,
+        device_memory_bytes=capacity.selected_capacity_bytes,
+        device_name=capacity.device_name,
+        usage_context=vllm_usage_context or "api_server",
+    )
+    return _ServingLayout(
+        block_tokens=(
+            vllm_default_block_tokens(
+                dimensions,
+                compute_capability=(capacity.target or {}).get(
+                    "compute_capability"
+                ),
+            )
+            if kv_cache_block_tokens is None
+            else kv_cache_block_tokens
+        ),
+        kv_model=kv_model,
+        kv_groups=kv_groups,
+        kv_cache_dtype=kv_cache_dtype,
+        batch_limits=batch_limits,
+        max_batch_size=int(batch_limits["max_num_seqs"]),
+    )
+
+
+def _runtime_prefill_chunk_tokens(
+    prefill_chunk_tokens: int | None,
+    layout: _ServingLayout,
+) -> int | None:
+    """vLLM V1 always chunks prefill at the max_num_batched_tokens budget."""
+
+    if prefill_chunk_tokens is not None or layout.batch_limits is None:
+        return prefill_chunk_tokens
+    return int(layout.batch_limits["max_num_batched_tokens"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -815,6 +1070,12 @@ def _resolve_serving_capacity(
     draft_model_dir: str | Path | None,
     vllm_kv_cache_memory_bytes: int | None,
     vllm_non_kv_cache_memory_bytes: int | None,
+    vllm_max_num_batched_tokens: int | None,
+    vllm_kv_cache_dtype: str | None,
+    vllm_usage_context: str | None,
+    kv_cache_block_tokens: int | None,
+    kv_cache_group_size: int,
+    mla_kv_cache_layout: str,
     device_capacity_bytes: int | None,
     speculative_tokens: int,
     speculative_acceptance_rate: float | None,
@@ -833,7 +1094,18 @@ def _resolve_serving_capacity(
         draft_model_dir=draft_model_dir,
         vllm_kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
         vllm_non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
+        vllm_max_num_batched_tokens=vllm_max_num_batched_tokens,
+        vllm_kv_cache_dtype=vllm_kv_cache_dtype,
+        vllm_usage_context=vllm_usage_context,
     )
+    if kv_cache_block_tokens is not None:
+        _positive_integer(kv_cache_block_tokens, "kv_cache_block_tokens")
+    _positive_integer(kv_cache_group_size, "kv_cache_group_size")
+    if mla_kv_cache_layout not in MLA_KV_CACHE_LAYOUTS:
+        choices = ", ".join(sorted(MLA_KV_CACHE_LAYOUTS))
+        raise ServingPlanError(
+            f"mla_kv_cache_layout must be one of: {choices}"
+        )
     if device_capacity_bytes is not None:
         _positive_integer(
             device_capacity_bytes,
@@ -846,9 +1118,13 @@ def _resolve_serving_capacity(
 
     target = None
     profile_capacity_bytes = None
+    sm_count = None
+    device_name = None
     if target_profile:
         profile = get_profile(target_profile)
         profile_capacity_bytes = profile.memory_bytes
+        sm_count = int(profile.sm_count) or None
+        device_name = profile.torch_name
         target = {
             "id": profile.id,
             "name": profile.name,
@@ -874,6 +1150,8 @@ def _resolve_serving_capacity(
             if profile_capacity_bytes is not None
             else "unavailable"
         ),
+        sm_count=sm_count,
+        device_name=device_name,
     )
 
 
@@ -888,7 +1166,13 @@ def _serving_admission(
     vllm_kv_cache_memory_bytes: int | None,
     vllm_non_kv_cache_memory_bytes: int | None,
     max_model_len_tokens: int,
-    profile_scope: str,
+    layout: _ServingLayout,
+    dimensions: Mapping[str, Any],
+    parameter_bytes: int,
+    element_bytes: int,
+    sm_count: int | None,
+    runtime_overhead_bytes: int,
+    scheduler_overhead_bytes_per_sequence: int,
 ) -> _ServingAdmission:
     """Admit as many of the first ``candidate_count`` sequences as fit.
 
@@ -898,16 +1182,34 @@ def _serving_admission(
     """
 
     if runtime == "vllm":
+        batch_limits = layout.batch_limits or {}
+        max_num_seqs = int(batch_limits["max_num_seqs"])
+        profile = vllm_profile_memory(
+            dimensions,
+            parameter_bytes=parameter_bytes,
+            element_bytes=element_bytes,
+            max_num_batched_tokens=int(
+                batch_limits["max_num_batched_tokens"]
+            ),
+            max_num_seqs=max_num_seqs,
+            sm_count=sm_count,
+            runtime_overhead_bytes=runtime_overhead_bytes,
+            scheduler_overhead_bytes=(
+                scheduler_overhead_bytes_per_sequence * max_num_seqs
+            ),
+        )
         runtime_report = _build_vllm_runtime_report(
             requested_memory=requested,
-            profiled_memory=memory_for_count(candidate_count),
+            profile=profile,
             selected_capacity_bytes=selected_capacity_bytes,
             gpu_memory_utilization=memory_utilization,
             kv_cache_memory_bytes=vllm_kv_cache_memory_bytes,
             non_kv_cache_memory_bytes=vllm_non_kv_cache_memory_bytes,
             max_model_len_tokens=max_model_len_tokens,
-            profiled_sequence_count=candidate_count,
-            profile_scope=profile_scope,
+            batch_limits=batch_limits,
+            kv_model=layout.kv_model,
+            kv_groups=layout.kv_groups or {},
+            kv_cache_dtype=str(layout.kv_cache_dtype),
         )
         kv_cache_capacity_bytes = runtime_report["kv_cache"][
             "usable_bytes"
@@ -1018,6 +1320,8 @@ def _serving_input_report(
     kv_cache_block_tokens: int,
     kv_cache_max_tokens: int | None,
     kv_cache_window_tokens: int | None,
+    kv_cache_group_size: int,
+    layout: _ServingLayout,
     runtime: str,
     memory_utilization: float,
     vllm_kv_cache_memory_bytes: int | None,
@@ -1052,6 +1356,10 @@ def _serving_input_report(
         ),
         "kv_cache_max_tokens": kv_cache_max_tokens,
         "kv_cache_window_tokens": kv_cache_window_tokens,
+        "kv_cache_group_size": (
+            kv_cache_group_size if kv_cache_strategy == "quantized" else None
+        ),
+        "mla_kv_cache_layout": layout.kv_model["mla_layout"],
         "runtime": runtime,
         "vllm": (
             {
@@ -1060,6 +1368,15 @@ def _serving_input_report(
                 "non_kv_cache_memory_bytes": (
                     vllm_non_kv_cache_memory_bytes
                 ),
+                "kv_cache_dtype": layout.kv_cache_dtype,
+                **{
+                    key: (layout.batch_limits or {})[key]
+                    for key in (
+                        "usage_context",
+                        "max_num_batched_tokens",
+                        "max_num_seqs",
+                    )
+                },
             }
             if runtime == "vllm"
             else None
@@ -1159,6 +1476,9 @@ def _serving_runtime_configuration(
     draft_model_dir: str | Path | None,
     vllm_kv_cache_memory_bytes: int | None,
     vllm_non_kv_cache_memory_bytes: int | None,
+    vllm_max_num_batched_tokens: int | None = None,
+    vllm_kv_cache_dtype: str | None = None,
+    vllm_usage_context: str | None = None,
 ) -> tuple[str, float]:
     normalized_runtime = str(runtime).strip().lower()
     if normalized_runtime not in SERVING_RUNTIMES:
@@ -1188,6 +1508,9 @@ def _serving_runtime_configuration(
         "vllm_non_kv_cache_memory_bytes": (
             vllm_non_kv_cache_memory_bytes
         ),
+        "vllm_max_num_batched_tokens": vllm_max_num_batched_tokens,
+        "vllm_kv_cache_dtype": vllm_kv_cache_dtype,
+        "vllm_usage_context": vllm_usage_context,
     }
     if normalized_runtime != "vllm":
         configured = [
@@ -1217,6 +1540,27 @@ def _serving_runtime_configuration(
             vllm_non_kv_cache_memory_bytes,
             "vllm_non_kv_cache_memory_bytes",
         )
+    if vllm_max_num_batched_tokens is not None:
+        _positive_integer(
+            vllm_max_num_batched_tokens,
+            "vllm_max_num_batched_tokens",
+        )
+    if (
+        vllm_kv_cache_dtype is not None
+        and vllm_kv_cache_dtype not in VLLM_KV_CACHE_DTYPE_BYTES
+    ):
+        choices = ", ".join(VLLM_KV_CACHE_DTYPE_BYTES)
+        raise ServingPlanError(
+            f"vllm_kv_cache_dtype must be one of: {choices}"
+        )
+    if (
+        vllm_usage_context is not None
+        and vllm_usage_context not in VLLM_USAGE_CONTEXTS
+    ):
+        choices = ", ".join(VLLM_USAGE_CONTEXTS)
+        raise ServingPlanError(
+            f"vllm_usage_context must be one of: {choices}"
+        )
     return normalized_runtime, float(resolved_utilization)
 
 
@@ -1237,7 +1581,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--active-sequences", type=int)
-    parser.add_argument("--max-batch-size", type=int, default=256)
+    parser.add_argument(
+        "--max-batch-size",
+        type=int,
+        help=(
+            "Concurrent sequence limit (vLLM max_num_seqs). Default: "
+            f"{DEFAULT_MAX_BATCH_SIZE}, or vLLM's default for the target "
+            "with --runtime vllm."
+        ),
+    )
     parser.add_argument("--prompt-tokens", type=int)
     parser.add_argument("--generated-tokens", type=int)
     parser.add_argument("--dtype", default="auto")
@@ -1264,14 +1616,51 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--kv-cache-residual-tokens",
         type=int,
         default=128,
+        help=(
+            "Quantized-cache residual length: generated tokens are kept "
+            "in full precision until this many accumulate, then the "
+            "cache is re-quantized (default: 128)."
+        ),
+    )
+    parser.add_argument(
+        "--kv-cache-group-size",
+        type=int,
+        default=DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
+        help=(
+            "Quantized-cache q_group_size; each group stores a scale and "
+            "a zero point in the compute dtype "
+            f"(default: {DEFAULT_KV_QUANTIZATION_GROUP_SIZE})."
+        ),
     )
     parser.add_argument(
         "--kv-cache-block-tokens",
         type=int,
-        default=16,
+        help=(
+            "Paged-cache block size in tokens. Default: "
+            f"{DEFAULT_KV_CACHE_BLOCK_TOKENS}; with --runtime vllm, the "
+            "attention backend's default for the model and target."
+        ),
     )
     parser.add_argument("--kv-cache-max-tokens", type=int)
-    parser.add_argument("--kv-cache-window-tokens", type=int)
+    parser.add_argument(
+        "--kv-cache-window-tokens",
+        type=int,
+        help=(
+            "Override: apply one attention window to every layer instead "
+            "of the model's configured sliding-window layers."
+        ),
+    )
+    parser.add_argument(
+        "--mla-kv-cache-layout",
+        choices=sorted(MLA_KV_CACHE_LAYOUTS),
+        default="auto",
+        help=(
+            "Cache layout for multi-head latent attention models: latent "
+            "(vLLM: compressed latent plus rope key) or decompressed "
+            "(Hugging Face transformers: per-head keys and values). auto "
+            "picks latent for the paged strategy, decompressed otherwise."
+        ),
+    )
     parser.add_argument("--runtime-overhead-bytes", type=int, default=0)
     parser.add_argument(
         "--scheduler-overhead-bytes-per-sequence",
@@ -1307,6 +1696,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         help=(
             "Measured vLLM profile result for weights, peak activations, "
             "non-torch allocations, and CUDA graphs."
+        ),
+    )
+    parser.add_argument(
+        "--vllm-max-num-batched-tokens",
+        type=int,
+        help=(
+            "vLLM max_num_batched_tokens; sets the profile-run forward "
+            "size. Default: vLLM's default for the target and usage "
+            "context."
+        ),
+    )
+    parser.add_argument(
+        "--vllm-kv-cache-dtype",
+        choices=list(VLLM_KV_CACHE_DTYPE_BYTES),
+        help="vLLM --kv-cache-dtype (default: auto, the model dtype).",
+    )
+    parser.add_argument(
+        "--vllm-usage-context",
+        choices=list(VLLM_USAGE_CONTEXTS),
+        help=(
+            "Which vLLM entry point sets the batch defaults: api_server "
+            "(vllm serve, default) or llm_class (the offline LLM class)."
         ),
     )
     parser.add_argument(
@@ -1431,6 +1842,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         kv_cache_block_tokens=args.kv_cache_block_tokens,
         kv_cache_max_tokens=args.kv_cache_max_tokens,
         kv_cache_window_tokens=args.kv_cache_window_tokens,
+        kv_cache_group_size=args.kv_cache_group_size,
+        mla_kv_cache_layout=args.mla_kv_cache_layout,
         runtime_overhead_bytes=args.runtime_overhead_bytes,
         scheduler_overhead_bytes_per_sequence=(
             args.scheduler_overhead_bytes_per_sequence
@@ -1448,6 +1861,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         vllm_non_kv_cache_memory_bytes=(
             args.vllm_non_kv_cache_memory_bytes
         ),
+        vllm_max_num_batched_tokens=args.vllm_max_num_batched_tokens,
+        vllm_kv_cache_dtype=args.vllm_kv_cache_dtype,
+        vllm_usage_context=args.vllm_usage_context,
     )
 
     try:

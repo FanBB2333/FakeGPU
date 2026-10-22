@@ -65,11 +65,24 @@ LLM 估算器的運作方式：
 - `--kv-cache-strategy` 可選 `dynamic`、`static`、`quantized` 或 `paged`。報告
   分別列出邏輯儲存量、量化節省量、static 預留、paged 額外占用與 sliding-window
   上限。
-- 量化 cache 預設將最近 128 個 token 保留為計算 dtype，可用
-  `--kv-cache-residual-tokens` 調整。
+- sliding-window 層依 Transformers 解析設定的方式決定：`layer_types`、Qwen 風格的
+  `use_sliding_window` 加 `max_window_layers`，或 `sliding_window_pattern`
+  （Gemma 3 預設每 6 層中的第 6 層為 full attention）。dynamic cache 在 prefill
+  後這些層仍保存整個 prompt，decode 一步後只保留最近 `sliding_window` 個 token；
+  paged cache 保留視窗加上本步排程的 token。full attention 層保留完整上下文。
+  `--kv-cache-window-tokens` 則對所有層套用同一個視窗。
+- 量化 cache（Transformers `QuantizedCache`）在 prefill 時量化整個 prompt。生成的
+  token 先以計算 dtype 保存，累積到 `--kv-cache-residual-tokens`（預設 128）個時
+  整個 cache 重新量化，因此最多有該值減 1 個 token 未量化。每
+  `--kv-cache-group-size`（預設 64）個量化元素另存一個計算 dtype 的 scale 與
+  zero point。每一層都保留完整歷史。
 - MHA、GQA 與 MQA 使用分離的 key/value 儲存。設定同時包含 `kv_lora_rank`、
-  `qk_nope_head_dim`、`qk_rope_head_dim` 與 `v_head_dim` 時辨識為 MLA（壓縮
-  latent + 獨立 RoPE）。MLA backend workspace 仍需校準。
+  `qk_nope_head_dim`、`qk_rope_head_dim` 與 `v_head_dim` 時辨識為 MLA。
+  `--mla-kv-cache-layout` 選擇 runtime 快取的內容：`decompressed` 為逐 head 的
+  key（`qk_nope_head_dim + qk_rope_head_dim`）與 value（`v_head_dim`），與
+  Transformers 一致；`latent` 為壓縮 latent 加 RoPE key，與 vLLM 一致。預設
+  `auto` 在 paged 策略下使用 `latent`，其餘使用 `decompressed`。MLA backend
+  workspace 仍需校準。
 - 對帶有 vision encoder 的模型，會計入 checkpoint 權重，但不含 vision/projector
   activation 與 FLOP，報告會標示這一點。decoder token 數需已包含視覺 token。
 

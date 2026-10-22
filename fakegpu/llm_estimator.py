@@ -22,6 +22,21 @@ VISION_ESTIMATE_WARNING = (
 KV_CACHE_STRATEGIES = frozenset(
     {"dynamic", "static", "quantized", "paged"}
 )
+# Transformers QuantizedCache default q_group_size (cache_utils.py, 4.57).
+DEFAULT_KV_QUANTIZATION_GROUP_SIZE = 64
+MLA_KV_CACHE_LAYOUTS = frozenset({"auto", "latent", "decompressed"})
+# Transformers config classes that derive layer_types from a fixed pattern
+# when a checkpoint config omits it: a layer is full attention when
+# (index + 1) is a multiple of the pattern (gemma3, cohere2, olmo3 every
+# 6th/4th/4th layer; gemma2 and gpt_oss alternate).
+_SLIDING_WINDOW_PATTERN_DEFAULTS = {
+    "gemma3_text": 6,
+    "gemma3": 6,
+    "cohere2": 4,
+    "olmo3": 4,
+    "gemma2": 2,
+    "gpt_oss": 2,
+}
 
 # Bits per element for every dtype a safetensors 0.8 header accepts. F4 and
 # the F6 types are packed: the header shape counts logical elements, and the
@@ -94,8 +109,18 @@ def estimate_kv_cache_memory(
     use_cache: bool = True,
     elements_per_token_per_layer: int | None = None,
     cache_layout: str = "separate_key_value",
+    sliding_window_layers: int = 0,
+    sliding_window_tokens: int | None = None,
+    prefill_chunk_tokens: int | None = None,
+    quantized_group_size: int = DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
 ) -> dict[str, Any]:
-    """Estimate allocated KV-cache storage for common serving strategies."""
+    """Estimate allocated KV-cache storage for common serving strategies.
+
+    ``sliding_window_layers`` of the ``num_hidden_layers`` layers attend over
+    ``sliding_window_tokens`` (from the model config); the rest keep their
+    whole context. ``window_tokens`` is an explicit override that caps every
+    layer instead, as before per-layer accounting existed.
+    """
 
     positive_integers = {
         "num_hidden_layers": num_hidden_layers,
@@ -106,6 +131,7 @@ def estimate_kv_cache_memory(
         "generated_tokens": generated_tokens,
         "element_bytes": element_bytes,
         "block_tokens": block_tokens,
+        "quantized_group_size": quantized_group_size,
     }
     for name, value in positive_integers.items():
         if (
@@ -149,6 +175,8 @@ def estimate_kv_cache_memory(
     for name, value in (
         ("max_cache_tokens", max_cache_tokens),
         ("window_tokens", window_tokens),
+        ("sliding_window_tokens", sliding_window_tokens),
+        ("prefill_chunk_tokens", prefill_chunk_tokens),
     ):
         if value is not None and (
             not isinstance(value, int)
@@ -156,10 +184,41 @@ def estimate_kv_cache_memory(
             or value <= 0
         ):
             raise ValueError(f"{name} must be a positive integer")
+    if (
+        not isinstance(sliding_window_layers, int)
+        or isinstance(sliding_window_layers, bool)
+        or not 0 <= sliding_window_layers <= num_hidden_layers
+    ):
+        raise ValueError(
+            "sliding_window_layers must be between zero and "
+            "num_hidden_layers"
+        )
+    if sliding_window_layers and sliding_window_tokens is None:
+        raise ValueError(
+            "sliding_window_layers require sliding_window_tokens"
+        )
     if strategy != "static" and max_cache_tokens is not None:
         raise ValueError(
             "max_cache_tokens is only valid for the static KV-cache strategy"
         )
+
+    # The explicit window caps every layer (the pre-existing override); a
+    # quantized Transformers cache builds one QuantizedLayer per layer and
+    # keeps the whole history even on sliding-window layers.
+    if not sliding_window_layers:
+        sliding_reason = "no_sliding_window_layers"
+    elif window_tokens is not None:
+        sliding_reason = "window_tokens_override_applies_to_every_layer"
+    elif strategy == "quantized":
+        sliding_reason = "quantized_cache_keeps_full_history_per_layer"
+    else:
+        sliding_reason = "config_layer_types"
+    sliding_layers = (
+        sliding_window_layers
+        if sliding_reason == "config_layer_types"
+        else 0
+    )
+    full_layers = num_hidden_layers - sliding_layers
 
     final_logical_tokens = prompt_tokens + generated_tokens - 1
     storage_bits = (
@@ -177,7 +236,7 @@ def estimate_kv_cache_memory(
             final_logical_tokens,
             window_tokens=window_tokens,
         )
-        if static_capacity_tokens < final_effective_tokens:
+        if full_layers and static_capacity_tokens < final_effective_tokens:
             raise ValueError(
                 "max_cache_tokens must cover the requested generation "
                 "after applying window_tokens"
@@ -192,67 +251,140 @@ def estimate_kv_cache_memory(
         num_hidden_layers * resolved_elements_per_token_per_layer
     )
 
-    def phase_allocation(logical_tokens: int) -> dict[str, Any]:
-        effective_tokens = (
-            _effective_context_tokens(
-                logical_tokens,
-                window_tokens=window_tokens,
-            )
-            if use_cache
-            else 0
+    def full_tokens(logical_tokens: int) -> tuple[int, int]:
+        effective = _effective_context_tokens(
+            logical_tokens,
+            window_tokens=window_tokens,
         )
-        if not use_cache:
-            allocated_tokens = 0
-        elif strategy == "static":
-            allocated_tokens = static_capacity_tokens
+        if strategy == "static":
+            allocated = static_capacity_tokens
         elif strategy == "paged":
-            allocated_tokens = (
-                math.ceil(effective_tokens / block_tokens) * block_tokens
-            )
+            allocated = math.ceil(effective / block_tokens) * block_tokens
         else:
-            allocated_tokens = effective_tokens
+            allocated = effective
+        return effective, allocated
 
-        base_dtype_bytes = _kv_storage_bytes(
-            elements_per_token_per_sequence,
-            batch_size=batch_size,
-            tokens=effective_tokens,
-            storage_bits=element_bytes * 8,
+    def sliding_tokens(logical_tokens: int, *, prefill: bool) -> tuple[int, int]:
+        window = int(sliding_window_tokens)
+        if strategy == "dynamic":
+            # Transformers 4.57 DynamicSlidingWindowLayer keeps a view of the
+            # last window-1 tokens of the concatenated states, so the
+            # prefill keeps the whole prompt's storage; each decode step
+            # re-concatenates and leaves min(tokens, window) behind.
+            if prefill or generated_tokens == 1:
+                effective = logical_tokens
+            else:
+                effective = min(logical_tokens, window)
+            return effective, effective
+        if strategy == "static":
+            # StaticSlidingWindowLayer preallocates min(window, capacity).
+            capacity = min(window, int(static_capacity_tokens))
+            return min(logical_tokens, capacity), capacity
+        # Paged: vLLM frees blocks that fall wholly outside the window, so a
+        # sequence holds the last window-1 computed tokens plus the
+        # scheduled ones, and one extra block when the window does not
+        # start on a block boundary.
+        scheduled = (
+            min(prefill_chunk_tokens or logical_tokens, logical_tokens)
+            if prefill
+            else 1
         )
-        if strategy == "quantized":
-            full_precision_tokens = min(
-                effective_tokens,
-                quantized_residual_tokens,
+        effective = min(logical_tokens, window - 1 + scheduled)
+        all_blocks = math.ceil(logical_tokens / block_tokens)
+        if effective >= logical_tokens:
+            blocks = all_blocks
+        else:
+            blocks = min(
+                all_blocks,
+                math.ceil(effective / block_tokens) + 1,
             )
-            quantized_tokens = effective_tokens - full_precision_tokens
-            storage_bytes = _kv_storage_bytes(
-                elements_per_token_per_sequence,
-                batch_size=batch_size,
-                tokens=full_precision_tokens,
-                storage_bits=element_bytes * 8,
-            ) + _kv_storage_bytes(
-                elements_per_token_per_sequence,
-                batch_size=batch_size,
-                tokens=quantized_tokens,
-                storage_bits=quantized_bits,
+        return effective, blocks * block_tokens
+
+    def layer_bytes(layers: int, tokens: int, bits: int) -> int:
+        return _kv_storage_bytes(
+            layers * resolved_elements_per_token_per_layer,
+            batch_size=batch_size,
+            tokens=tokens,
+            storage_bits=bits,
+        )
+
+    def phase_allocation(logical_tokens: int, *, prefill: bool) -> dict[str, Any]:
+        compute_bits = element_bytes * 8
+        if not use_cache:
+            full_effective = full_allocated = 0
+            sliding_effective = sliding_allocated = 0
+        else:
+            full_effective, full_allocated = full_tokens(logical_tokens)
+            sliding_effective, sliding_allocated = (
+                sliding_tokens(logical_tokens, prefill=prefill)
+                if sliding_layers
+                else (0, 0)
+            )
+        base_dtype_bytes = layer_bytes(
+            full_layers, full_effective, compute_bits
+        ) + layer_bytes(sliding_layers, sliding_effective, compute_bits)
+        metadata_bytes = 0
+        if strategy == "quantized":
+            # Transformers 4.57 QuantizedLayer quantizes the whole prefill
+            # at the first update and then appends generated tokens to a
+            # full-precision residual, requantizing everything once it
+            # reaches residual_length-1 tokens (at least one token sits in
+            # the residual right after each requantization).
+            decode_steps = 0 if prefill else generated_tokens - 1
+            full_precision_tokens = min(
+                full_effective,
+                decode_steps,
+                max(1, quantized_residual_tokens - 1),
+            )
+            quantized_tokens = full_effective - full_precision_tokens
+            quantized_elements = (
+                full_layers
+                * resolved_elements_per_token_per_layer
+                * batch_size
+                * quantized_tokens
+            )
+            # optimum-quanto and HQQ keep one scale and one zero-point per
+            # q_group_size elements in the compute dtype.
+            metadata_bytes = (
+                2
+                * element_bytes
+                * math.ceil(quantized_elements / quantized_group_size)
+            )
+            storage_bytes = (
+                layer_bytes(full_layers, full_precision_tokens, compute_bits)
+                + layer_bytes(full_layers, quantized_tokens, quantized_bits)
+                + metadata_bytes
             )
             allocated_bytes = storage_bytes
+            full_allocated_bytes = allocated_bytes
+            sliding_allocated_bytes = 0
+            sliding_storage_bytes = 0
         else:
             full_precision_tokens = quantized_tokens = None
-            storage_bytes = base_dtype_bytes
-            allocated_bytes = _kv_storage_bytes(
-                elements_per_token_per_sequence,
-                batch_size=batch_size,
-                tokens=allocated_tokens,
-                storage_bits=storage_bits,
+            sliding_storage_bytes = layer_bytes(
+                sliding_layers, sliding_effective, storage_bits
             )
+            storage_bytes = base_dtype_bytes
+            full_allocated_bytes = layer_bytes(
+                full_layers, full_allocated, storage_bits
+            )
+            sliding_allocated_bytes = layer_bytes(
+                sliding_layers, sliding_allocated, storage_bits
+            )
+            allocated_bytes = full_allocated_bytes + sliding_allocated_bytes
+        primary_effective = full_effective if full_layers else sliding_effective
+        primary_allocated = full_allocated if full_layers else sliding_allocated
         return {
             "logical_tokens_per_sequence": logical_tokens,
-            "effective_tokens_per_sequence": effective_tokens,
-            "allocated_tokens_per_sequence": allocated_tokens,
+            "effective_tokens_per_sequence": primary_effective,
+            "allocated_tokens_per_sequence": primary_allocated,
             "full_precision_residual_tokens_per_sequence": (
                 full_precision_tokens
             ),
             "quantized_tokens_per_sequence": quantized_tokens,
+            "quantization_metadata_bytes": (
+                metadata_bytes if strategy == "quantized" else None
+            ),
             "base_dtype_logical_bytes": base_dtype_bytes,
             "storage_logical_bytes": storage_bytes,
             "allocated_bytes": allocated_bytes,
@@ -267,6 +399,24 @@ def estimate_kv_cache_memory(
                 if allocated_bytes
                 else None
             ),
+            "full_attention": {
+                "layers": full_layers,
+                "effective_tokens_per_sequence": full_effective,
+                "allocated_tokens_per_sequence": full_allocated,
+                "allocated_bytes": full_allocated_bytes,
+            },
+            "sliding_attention": (
+                {
+                    "layers": sliding_layers,
+                    "window_tokens": sliding_window_tokens,
+                    "effective_tokens_per_sequence": sliding_effective,
+                    "allocated_tokens_per_sequence": sliding_allocated,
+                    "storage_logical_bytes": sliding_storage_bytes,
+                    "allocated_bytes": sliding_allocated_bytes,
+                }
+                if sliding_layers
+                else None
+            ),
         }
 
     return {
@@ -277,6 +427,9 @@ def estimate_kv_cache_memory(
             quantized_residual_tokens
             if strategy == "quantized"
             else None
+        ),
+        "quantized_group_size": (
+            quantized_group_size if strategy == "quantized" else None
         ),
         "compute_element_bytes": element_bytes,
         "batch_size": batch_size,
@@ -290,19 +443,36 @@ def estimate_kv_cache_memory(
         "bytes_per_token_per_sequence_at_compute_dtype": (
             elements_per_token_per_sequence * element_bytes
         ),
+        "full_attention_bytes_per_token_per_sequence": (
+            full_layers * resolved_elements_per_token_per_layer * element_bytes
+        ),
+        "attention_layers": {
+            "full": full_layers,
+            "sliding": sliding_layers,
+            "configured_sliding": sliding_window_layers,
+            "sliding_window_tokens": sliding_window_tokens,
+            "sliding_window_accounting": sliding_reason,
+        },
         "block_tokens": block_tokens if strategy == "paged" else None,
         "max_cache_tokens": (
             static_capacity_tokens if strategy == "static" else None
         ),
         "window_tokens": window_tokens,
-        "prefill": phase_allocation(prompt_tokens),
-        "generation": phase_allocation(final_logical_tokens),
+        "prefill": phase_allocation(prompt_tokens, prefill=True),
+        "generation": phase_allocation(final_logical_tokens, prefill=False),
         "formula": (
-            "full_precision_residual_bytes + quantized_history_bytes"
+            "full_precision_residual_bytes + quantized_history_bytes + "
+            "group_scale_and_zero_point_bytes"
             if strategy == "quantized"
             else (
                 "ceil(layers * batch * tokens * cache_elements_per_layer "
-                "* storage_bits / 8)"
+                "* storage_bits / 8), with sliding-window layers holding "
+                "their window"
+                if sliding_layers
+                else (
+                    "ceil(layers * batch * tokens * cache_elements_per_layer "
+                    "* storage_bits / 8)"
+                )
             )
         ),
         "modeled_overheads": [
@@ -443,6 +613,8 @@ def estimate_decoder_inference(
     kv_cache_window_tokens: int | None = None,
     include_decode_steps: bool = True,
     logits_to_keep: int = 0,
+    mla_kv_cache_layout: str = "auto",
+    kv_cache_group_size: int = DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
 ) -> dict[str, Any]:
     """Estimate decoder-only inference memory, communication, and FLOPs.
 
@@ -450,6 +622,11 @@ def estimate_decoder_inference(
     tensors are materialized and no CUDA context is created.
     logits_to_keep=0 projects every query token; a positive value projects
     only that many trailing tokens, as in last-token-only generation.
+    Sliding-window layers from the model config keep only their window;
+    kv_cache_window_tokens overrides that and caps every layer.
+    mla_kv_cache_layout picks the MLA cache: decompressed per-head keys and
+    values as Transformers caches them, or the latent plus RoPE key of paged
+    backends; auto chooses latent only for the paged strategy.
     """
 
     if batch_size <= 0:
@@ -493,6 +670,23 @@ def estimate_decoder_inference(
     _require_attention_only_decoder(decoder_config)
     checkpoint = inspect_safetensors_checkpoint(root)
     dimensions = _decoder_dimensions(decoder_config)
+    sliding_layout = _sliding_window_layout(
+        decoder_config
+        if "model_type" in decoder_config
+        else {**decoder_config, "model_type": config.get("model_type")}
+    )
+    if sliding_layout["sliding_attention_layers"]:
+        dimensions["sliding_attention_layers"] = int(
+            sliding_layout["sliding_attention_layers"]
+        )
+        dimensions["sliding_window_tokens"] = int(
+            sliding_layout["sliding_window_tokens"]
+        )
+    cache_layout = _kv_cache_layout(
+        dimensions,
+        mla_layout=mla_kv_cache_layout,
+        kv_cache_strategy=kv_cache_strategy,
+    )
     has_vision_encoder = any(
         config.get(key) is not None
         for key in ("vision_config", "vision_tower", "mm_vision_tower")
@@ -562,9 +756,14 @@ def estimate_decoder_inference(
         window_tokens=kv_cache_window_tokens,
         use_cache=use_cache,
         elements_per_token_per_layer=int(
-            dimensions["kv_cache_elements_per_token_per_layer"]
+            cache_layout["elements_per_token_per_layer"]
         ),
-        cache_layout=str(dimensions["kv_cache_layout"]),
+        cache_layout=str(cache_layout["layout"]),
+        sliding_window_layers=int(
+            dimensions.get("sliding_attention_layers", 0)
+        ),
+        sliding_window_tokens=dimensions.get("sliding_window_tokens"),
+        quantized_group_size=kv_cache_group_size,
     )
     prefill_key_tokens = _effective_context_tokens(
         prompt_tokens,
@@ -841,6 +1040,12 @@ def estimate_decoder_inference(
             ),
             "kv_cache_max_tokens": kv_cache["max_cache_tokens"],
             "kv_cache_window_tokens": kv_cache_window_tokens,
+            "kv_cache_group_size": (
+                kv_cache_group_size
+                if kv_cache_strategy == "quantized"
+                else None
+            ),
+            "mla_kv_cache_layout": cache_layout["mla_layout"],
         },
         "checkpoint": checkpoint,
         "weight_storage": {
@@ -931,11 +1136,16 @@ def estimate_decoder_inference(
             "Checkpoint storage and parameter count come from safetensors headers without loading payloads.",
             "KV-cache bytes use the architecture-specific per-layer cache layout, sequence, batch, storage bit width, and allocation-strategy dimensions.",
             (
-                "MLA cache storage keeps one compressed KV latent plus the decoupled RoPE key component per layer and token; backend-specific absorbed projections remain unmodeled."
+                (
+                    "MLA cache storage keeps one compressed KV latent plus the decoupled RoPE key component per layer and token, as paged MLA backends do; backend-specific absorbed projections remain unmodeled."
+                    if cache_layout["mla_layout"] == "latent"
+                    else "MLA cache storage keeps decompressed per-head keys (qk_nope + qk_rope) and values (v_head_dim) per layer and token, as Transformers' DeepseekV3 attention caches them."
+                )
                 if attention_kind == "multi_head_latent"
                 else "Standard attention cache storage keeps separate key and value tensors per KV head."
             ),
-            "Quantized KV cache keeps a configurable recent full-precision residual before accounting for older low-bit storage.",
+            "Quantized KV cache follows Transformers QuantizedCache: the prefill is quantized at once, at most residual_length-1 generated tokens stay at the compute dtype, and each q_group_size group keeps a compute-dtype scale and zero-point.",
+            "Sliding-window layers from the model config hold only their window in the cache; a Transformers dynamic cache still keeps the whole prompt on those layers until the first decode step.",
             "Static reservation and paged block rounding are included; backend block-table and scheduler metadata remain implementation-specific.",
             "Quantized base-weight memory uses exact safetensors payload bytes, including scale and metadata tensors.",
             "Adapter runtime bytes use adapter parameter count and the selected compute dtype.",
@@ -1052,6 +1262,122 @@ def _require_attention_only_decoder(config: Mapping[str, Any]) -> None:
             "inference estimates do not support recurrent or linear attention; "
             "KV/state memory and FLOPs require an architecture-specific model"
         )
+
+
+def _sliding_window_layout(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Count the sliding-window layers the way Transformers configs resolve them.
+
+    Follows the 4.57 config classes: explicit ``layer_types`` win; Qwen-style
+    configs keep full attention unless ``use_sliding_window`` is set and then
+    slide from ``max_window_layers`` on; ``sliding_window_pattern`` (or the
+    model-type default) marks every pattern-th layer as full attention; any
+    other config with a ``sliding_window`` slides on every layer, as
+    ``DynamicCache``/``StaticCache`` do when ``layer_types`` is absent.
+    """
+
+    layer_count = int(config["num_hidden_layers"])
+    raw_window = config.get("sliding_window")
+    window = (
+        int(raw_window)
+        if isinstance(raw_window, int)
+        and not isinstance(raw_window, bool)
+        and raw_window > 0
+        else None
+    )
+    layer_types = config.get("layer_types")
+    if isinstance(layer_types, list):
+        sliding = sum(kind == "sliding_attention" for kind in layer_types)
+        source = "layer_types"
+    elif (
+        window is None
+        or config.get("use_sliding_window") is False
+        # Qwen-style configs (with max_window_layers) default
+        # use_sliding_window to False and then drop sliding_window.
+        or (
+            config.get("use_sliding_window") is None
+            and "max_window_layers" in config
+        )
+    ):
+        sliding = 0
+        source = "none"
+    elif config.get("use_sliding_window") is True and isinstance(
+        config.get("max_window_layers"), int
+    ):
+        start = max(0, int(config["max_window_layers"]))
+        sliding = max(0, layer_count - start)
+        source = "max_window_layers"
+    else:
+        pattern = config.get("sliding_window_pattern")
+        source = "sliding_window_pattern"
+        if not isinstance(pattern, int) or isinstance(pattern, bool):
+            pattern = _SLIDING_WINDOW_PATTERN_DEFAULTS.get(
+                str(config.get("model_type"))
+            )
+            source = "model_type_pattern_default"
+        if isinstance(pattern, int) and pattern > 0:
+            sliding = sum(
+                1 for index in range(layer_count) if (index + 1) % pattern
+            )
+        else:
+            sliding = layer_count
+            source = "sliding_window_on_every_layer"
+    if sliding and window is None:
+        raise ValueError(
+            "sliding_attention layers require a positive sliding_window"
+        )
+    return {
+        "sliding_attention_layers": sliding,
+        "sliding_window_tokens": window if sliding else None,
+        "source": source,
+    }
+
+
+def _kv_cache_layout(
+    dimensions: Mapping[str, Any],
+    *,
+    mla_layout: str,
+    kv_cache_strategy: str,
+) -> dict[str, Any]:
+    """Pick the cache layout a runtime stores for these attention dimensions.
+
+    Transformers' DeepseekV3 attention caches decompressed per-head keys
+    (qk_nope + qk_rope) and values (v_head_dim); paged MLA backends such as
+    vLLM's cache one latent plus the RoPE key. ``auto`` follows the
+    strategy: paged means latent, the Transformers caches mean decompressed.
+    """
+
+    if mla_layout not in MLA_KV_CACHE_LAYOUTS:
+        choices = ", ".join(sorted(MLA_KV_CACHE_LAYOUTS))
+        raise ValueError(f"mla_kv_cache_layout must be one of: {choices}")
+    if dimensions.get("attention_kind") != "multi_head_latent":
+        return {
+            "layout": str(dimensions["kv_cache_layout"]),
+            "elements_per_token_per_layer": int(
+                dimensions["kv_cache_elements_per_token_per_layer"]
+            ),
+            "mla_layout": None,
+        }
+    resolved = mla_layout
+    if resolved == "auto":
+        resolved = "latent" if kv_cache_strategy == "paged" else "decompressed"
+    if resolved == "latent":
+        return {
+            "layout": str(dimensions["kv_cache_layout"]),
+            "elements_per_token_per_layer": int(
+                dimensions["kv_cache_elements_per_token_per_layer"]
+            ),
+            "mla_layout": "latent",
+        }
+    return {
+        "layout": "decompressed_per_head_key_value",
+        "elements_per_token_per_layer": int(dimensions["num_attention_heads"])
+        * (
+            int(dimensions["qk_nope_head_dim"])
+            + int(dimensions["qk_rope_head_dim"])
+            + int(dimensions["v_head_dim"])
+        ),
+        "mla_layout": "decompressed",
+    }
 
 
 def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:

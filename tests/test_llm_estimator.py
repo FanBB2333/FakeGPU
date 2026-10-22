@@ -590,7 +590,7 @@ def test_decode_step_aggregation_preserves_flops_without_per_token_records(
     assert aggregated["inputs"]["include_decode_steps"] is False
 
 
-def test_mla_uses_compressed_latent_cache_and_architecture_flops(
+def test_mla_cache_layout_follows_runtime_and_architecture_flops(
     tmp_path: Path,
 ) -> None:
     mla_dir = tmp_path / "mla"
@@ -643,8 +643,26 @@ def test_mla_uses_compressed_latent_cache_and_architecture_flops(
     )
     assert mla["model"]["head_dim"] == 6
     assert mla["model"]["kv_cache_elements_per_token_per_layer"] == 8
-    assert mla["kv_cache"]["elements_per_token_per_layer"] == 8
-    assert mla["kv_cache"]["prefill"]["allocated_bytes"] == 256
+    # Transformers' DeepseekV3 attention caches decompressed per-head keys
+    # (qk_nope + qk_rope) and values (v_head_dim): 4 * (4 + 2 + 4).
+    assert mla["inputs"]["mla_kv_cache_layout"] == "decompressed"
+    assert mla["kv_cache"]["cache_layout"] == (
+        "decompressed_per_head_key_value"
+    )
+    assert mla["kv_cache"]["elements_per_token_per_layer"] == 40
+    assert mla["kv_cache"]["prefill"]["allocated_bytes"] == 2 * 40 * 8 * 2
+    latent = estimate_decoder_inference(
+        mla_dir,
+        batch_size=2,
+        prompt_tokens=4,
+        generated_tokens=2,
+        attention_implementation="sdpa",
+        mla_kv_cache_layout="latent",
+    )
+    assert latent["inputs"]["mla_kv_cache_layout"] == "latent"
+    assert latent["kv_cache"]["elements_per_token_per_layer"] == 8
+    assert latent["kv_cache"]["prefill"]["allocated_bytes"] == 256
+    assert standard["inputs"]["mla_kv_cache_layout"] is None
     assert standard["kv_cache"]["prefill"]["allocated_bytes"] == 1536
     assert mla["compute"]["prefill_flops"] > 0
     assert mla["compute"]["prefill_flops"] != standard["compute"][
@@ -802,13 +820,22 @@ def test_kv_cache_strategies_account_for_storage_and_reservation() -> None:
     assert static["generation"]["allocated_bytes"] == 512
     assert static["prefill"]["reservation_overhead_bytes"] == 384
     assert quantized["storage_bits_per_element"] == 4
-    assert quantized["prefill"]["allocated_bytes"] == 80
-    assert quantized["generation"]["allocated_bytes"] == 88
+    assert quantized["quantized_group_size"] == 64
+    # Transformers' QuantizedLayer quantizes the whole prefill: 2 layers *
+    # 8 elements * 4 tokens at 4 bits, plus one bfloat16 scale and zero
+    # point for the single 64-element group.
+    assert quantized["prefill"]["quantization_metadata_bytes"] == 4
+    assert quantized["prefill"]["allocated_bytes"] == 32 + 4
+    assert quantized["prefill"][
+        "full_precision_residual_tokens_per_sequence"
+    ] == 0
+    # The one decode step appends its token to the full-precision residual.
+    assert quantized["generation"]["allocated_bytes"] == 32 + 4 + 32
     assert quantized["generation"][
         "full_precision_residual_tokens_per_sequence"
-    ] == 2
-    assert quantized["generation"]["quantized_tokens_per_sequence"] == 3
-    assert quantized["generation"]["quantization_savings_bytes"] == 72
+    ] == 1
+    assert quantized["generation"]["quantized_tokens_per_sequence"] == 4
+    assert quantized["generation"]["quantization_savings_bytes"] == 92
     assert paged["prefill"]["allocated_bytes"] == 128
     assert paged["generation"]["allocated_bytes"] == 256
     assert paged["generation"]["reservation_overhead_bytes"] == 96
@@ -1421,7 +1448,8 @@ def test_vllm_runtime_models_executor_budget_and_reserved_kv_blocks(
 ) -> None:
     model_dir = tmp_path / "model"
     _write_model(model_dir)
-    capacity_bytes = 2**20
+    # Synthetic budget large enough for the modeled non-torch allowance.
+    capacity_bytes = 2**30
 
     report = estimate_serving_plan(
         model_dir,
@@ -1452,8 +1480,13 @@ def test_vllm_runtime_models_executor_budget_and_reserved_kv_blocks(
         "requested_model_executor_memory_bytes"
     ] == requested_memory
     assert runtime_memory["non_kv_cache_memory_source"] == (
-        "fakegpu_profile_shape_model"
+        "fakegpu_vllm_profile_run_model"
     )
+    # The default token budget is capped at max_num_seqs * max_model_len,
+    # and the profile run spreads it over min(tokens, max_num_seqs) requests.
+    assert runtime["configuration"]["max_num_seqs"] == 8
+    assert runtime["configuration"]["max_num_batched_tokens"] == 8 * 81
+    assert runtime["configuration"]["profiled_sequence_count"] == 8
     assert runtime_cache["num_gpu_blocks"] == expected_blocks
     assert runtime_cache["allocatable_bytes"] == expected_cache_bytes
     assert runtime_cache["size_tokens"] == expected_blocks * 16
@@ -1574,8 +1607,13 @@ def test_vllm_runtime_supports_ordered_request_prefix_admission(
     )
 
     assert report["runtime"]["configuration"]["profile_scope"] == (
-        "configured_request_manifest_prefix"
+        "vllm_profile_run_max_num_batched_tokens"
     )
+    # max_model_len comes from the longest of the three candidates.
+    assert report["runtime"]["configuration"]["max_model_len_tokens"] == 104
+    assert report["runtime"]["configuration"][
+        "max_num_batched_tokens"
+    ] == 3 * 104
     assert report["scheduler"]["admitted_request_ids"] == ["a", "b"]
     assert report["scheduler"]["rejected_request_ids"] == ["c"]
     assert report["scheduler"]["limiting_factor"] == (
