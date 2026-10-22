@@ -951,6 +951,8 @@ def _render_query_help(
             suffix += f" (alias of {spec.header})"
         if spec.path is None:
             suffix += " (not modeled; always [N/A])"
+        if spec.note:
+            suffix += f" ({spec.note})"
         lines.append(f"  {name}{suffix}")
     return "\n".join(lines)
 

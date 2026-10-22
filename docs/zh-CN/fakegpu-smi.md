@@ -80,6 +80,9 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 - `--query-gpu` 与 `--query-compute-apps` 还接受 nvidia-smi 590 `--help-query-*`
   列出的全部字段与别名，列名与 nvidia-smi 一致。FakeGPU 未建模的字段（如
   `utilization.gpu`、`temperature.gpu`）输出 `[N/A]`。
+- `memory.reserved` 在 nvidia-smi 中表示“NVIDIA 驱动和固件保留的显存”，
+  FakeGPU 不建模，因此输出 `[N/A]`。此前 `memory.reserved` 报告的 caching
+  allocator 保留显存改为 `memory.allocator_reserved`。
 - 表格开头和 nvidia-smi 的标题行一样带有 `Driver Version:` 与 `CUDA Version:`。
   驱动版本是建模值 `570.195.03`，与 FakeGPU 原生 NVML 报告的版本一致；
   `--query-gpu=driver_version` 输出同一个值。在 workload 启动前设置

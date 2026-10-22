@@ -88,6 +88,10 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   of nvidia-smi 590's `--help-query-*` lists, headed by nvidia-smi's column
   names. Fields FakeGPU does not model, such as `utilization.gpu` or
   `temperature.gpu`, print `[N/A]`.
+- `memory.reserved` is nvidia-smi's "memory reserved by the NVIDIA driver
+  and firmware", which FakeGPU does not model, so it prints `[N/A]`. The
+  caching allocator's reserved memory, which `memory.reserved` reported
+  before, is `memory.allocator_reserved`.
 - The table's first lines carry `Driver Version:` and `CUDA Version:` like
   nvidia-smi's banner. The driver version is a modeled `570.195.03`, the
   version FakeGPU's native NVML reports, and `--query-gpu=driver_version`

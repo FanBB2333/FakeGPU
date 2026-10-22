@@ -1790,3 +1790,48 @@ def test_virtual_smi_accepts_format_modifiers_in_any_order(
         main(["--state", str(path), "--query-gpu=index", "--format=csv,bogus"])
     assert exc_info.value.code == 2
     assert "Format modifier is not recognized" in capsys.readouterr().err
+
+
+def test_virtual_smi_memory_reserved_is_the_driver_reserve(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(
+        path,
+        lambda: {
+            "devices": [
+                {
+                    "index": 0,
+                    "name": "Fake NVIDIA Test GPU",
+                    "profile_id": "test",
+                    "total_memory": 8 * 2**30,
+                    "current_memory": 64 * 2**20,
+                    "current_reserved_memory": 80 * 2**20,
+                }
+            ]
+        },
+    ).publish_once(running=True)
+
+    # nvidia-smi --help-query-gpu: memory.reserved is "Total memory reserved
+    # by the NVIDIA driver and firmware"; on a real GPU total = reserved +
+    # used + free (479 + 0 + 81081 MiB in a public H100
+    # capture). FakeGPU does not model it; the allocator's reserved
+    # bytes moved to memory.allocator_reserved.
+    assert main([
+        "--state", str(path),
+        "--query-gpu=memory.reserved,memory.allocator_reserved,memory.used",
+        "--format=csv",
+    ]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "memory.reserved [MiB], memory.allocator_reserved [MiB], memory.used [MiB]",
+        "[N/A], 80 MiB, 80 MiB",
+    ]
+
+    assert main(["--help-query-gpu"]) == 0
+    help_lines = capsys.readouterr().out.splitlines()
+    reserved = next(
+        line for line in help_lines if line.strip().startswith("memory.reserved ")
+    )
+    assert "not modeled" in reserved
+    assert "memory.allocator_reserved" in reserved

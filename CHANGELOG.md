@@ -74,6 +74,11 @@
   in any order (`--format=noheader,csv`), as nvidia-smi 580 does.
 - `fakegpu nvidia-smi` prints power limits with two decimals, `400.00 W`,
   like nvidia-smi.
+- **Breaking:** `fakegpu nvidia-smi --query-gpu=memory.reserved` prints
+  `[N/A]`. In nvidia-smi the field is the memory the driver and firmware
+  reserve (total = reserved + used + free), which FakeGPU does not model.
+  The caching allocator's reserved memory that it reported before is now
+  `memory.allocator_reserved`; `--help-query-gpu` notes the move.
 
 ### Fixed
 

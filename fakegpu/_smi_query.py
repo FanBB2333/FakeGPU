@@ -32,6 +32,8 @@ class QueryField:
     # CSV prints exactly `precision` decimals, as nvidia-smi prints watts
     # ("700.00 W" on an H100 SXM).
     fixed: bool = False
+    # Extra text for --help-query-*, such as where a renamed value moved.
+    note: str | None = None
 
 
 GPU_QUERY_FIELDS: dict[str, QueryField] = {
@@ -168,7 +170,19 @@ GPU_QUERY_FIELDS: dict[str, QueryField] = {
         unit="MiB",
         divisor=2**20,
     ),
+    # nvidia-smi's memory.reserved is "Total memory reserved by the NVIDIA
+    # driver and firmware" (total = reserved + used + free), which FakeGPU
+    # does not model. The caching allocator's reserved bytes, which this
+    # field returned before, are memory.allocator_reserved.
     "memory.reserved": QueryField(
+        None,
+        unit="MiB",
+        note=(
+            "driver and firmware reserve; FakeGPU's allocator value moved "
+            "to memory.allocator_reserved"
+        ),
+    ),
+    "memory.allocator_reserved": QueryField(
         "memory.reserved_bytes",
         unit="MiB",
         divisor=2**20,
