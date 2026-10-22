@@ -55,6 +55,29 @@
 - Mixed-precision training plans size Adam and momentum state in FP32 next
   to the master copy, as DeepSpeed and PyTorch AMP keep it: 4 more bytes per
   parameter than before.
+- Axolotl fine-tuning configs without `max_grad_norm` normalize to 1.0, the
+  Trainer default Axolotl leaves in place, instead of `None`, so
+  `probe-finetune` clips gradients as Axolotl does. This changes the
+  calibration workload signature: probe observations saved for such configs
+  no longer match and need a new probe. Native `run-finetune` reports are
+  unaffected: they record the value the real Trainer used, which was
+  already 1.0.
+- For Axolotl runs, `plan-finetune-pipeline --epochs`,
+  `plan-finetune-transfer --epochs` and `run-finetune --planning-epochs`
+  count `ceil(rows * epochs / (micro_batch_size * gradient_accumulation_steps))`
+  updates, the `max_steps` Axolotl passes to Trainer, instead of Trainer's
+  per-epoch windows (25 rows, micro batch 2, accumulation 4, 30 epochs: 94
+  updates, not 120). Other frameworks keep Trainer's count. Packed Axolotl
+  horizons now require a step count.
+- Fine-tuning configs without `parameter_dtype` or `torch_dtype` store
+  weights as their framework loads them instead of always in FP32:
+  LLaMA-Factory LoRA and QLoRA keep frozen weights in the local checkpoint
+  config's dtype (`torch_dtype="auto"`), and Axolotl uses the dtype of its
+  `bf16`/`fp16`/`load_in_8bit` flags. LLaMA-Factory full tuning (FP32) and
+  HF Trainer configs are unchanged. A BF16 LoRA base is now budgeted at half
+  the previous bytes. `assumptions` names the rule. This changes the
+  calibration workload signature of these configs; their saved probe
+  observations need a new probe.
 
 ### Fixed
 
@@ -426,6 +449,15 @@
   gradients first. Single-rank DeepSpeed 0.15.3 BF16 runs of a 0.6B model now
   match the measured step peak within 0.2%; before, plans were 15–27% low.
   The validation example becomes 149.01 → 37.72 GiB per rank.
+- SD3 diffusion estimates put the 77-token CLIP prefix in front of the T5
+  tokens in the joint attention sequence and the conditioning tensors
+  (`inputs.denoiser_text_tokens`), as `encode_prompt` concatenates them. Text
+  encoder activations use the prompt batch instead of the CFG-doubled batch.
+  Local pipelines whose class has no recorded call defaults list the
+  borrowed Stable Diffusion steps, guidance and text tokens in
+  `generation_defaults.assumed_inputs` and `assumptions`.
+- Axolotl fine-tuning configs without `lora_r` list the assumed rank 8 in
+  `assumptions`; Axolotl has no default and PEFT rejects the unset rank.
 
 ## v1.6.0 - 2026-10-17
 

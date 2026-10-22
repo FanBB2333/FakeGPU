@@ -798,3 +798,167 @@ def test_sdxl_first_level_has_no_transformer_blocks() -> None:
     assert (level["attention_heads"], level["transformer_layers"]) == (0, 0)
     assert level["attention_workspace_bytes"] == 0
     assert level["feed_forward_working_bytes"] == 0
+
+
+def _write_sd3_pipeline(root: Path, *, with_t5: bool = True) -> None:
+    root.mkdir()
+    model_index: dict[str, object] = {
+        "_class_name": "StableDiffusion3Pipeline",
+        "text_encoder": ["transformers", "CLIPTextModelWithProjection"],
+        "text_encoder_2": ["transformers", "CLIPTextModelWithProjection"],
+        "text_encoder_3": (
+            ["transformers", "T5EncoderModel"] if with_t5 else [None, None]
+        ),
+        "tokenizer": ["transformers", "CLIPTokenizer"],
+        "transformer": ["diffusers", "SD3Transformer2DModel"],
+        "vae": ["diffusers", "AutoencoderKL"],
+    }
+    (root / "model_index.json").write_text(json.dumps(model_index), encoding="utf-8")
+    (root / "tokenizer").mkdir()
+    (root / "tokenizer" / "tokenizer_config.json").write_text(
+        json.dumps({"model_max_length": 77}), encoding="utf-8"
+    )
+    for name, hidden in (("text_encoder", 4), ("text_encoder_2", 6)):
+        _write_component(
+            root,
+            name,
+            config={
+                "_class_name": "CLIPTextModelWithProjection",
+                "hidden_size": hidden,
+                "num_hidden_layers": 2,
+                "max_position_embeddings": 77,
+            },
+            tensor_shape=[4, 4],
+            filename="model.safetensors",
+        )
+    if with_t5:
+        _write_component(
+            root,
+            "text_encoder_3",
+            config={
+                "_class_name": "T5EncoderModel",
+                "d_model": 8,
+                "num_layers": 2,
+                "n_positions": 512,
+            },
+            tensor_shape=[4, 4],
+            filename="model.safetensors",
+        )
+    _write_component(
+        root,
+        "transformer",
+        config={
+            "_class_name": "SD3Transformer2DModel",
+            "sample_size": 16,
+            "in_channels": 16,
+            "num_layers": 2,
+            "num_attention_heads": 2,
+            "attention_head_dim": 4,
+            "patch_size": 2,
+            "joint_attention_dim": 8,
+        },
+        tensor_shape=[8, 8],
+        filename="diffusion_pytorch_model.safetensors",
+    )
+    _write_component(
+        root,
+        "vae",
+        config={
+            "_class_name": "AutoencoderKL",
+            "latent_channels": 16,
+            "block_out_channels": [4, 8, 16, 16],
+            "layers_per_block": 1,
+        },
+        tensor_shape=[4, 4],
+        filename="diffusion_pytorch_model.safetensors",
+    )
+
+
+def test_sd3_joint_sequence_puts_the_clip_prefix_before_t5_tokens(
+    tmp_path: Path,
+) -> None:
+    # Diffusers 0.35.2 StableDiffusion3Pipeline.encode_prompt pads the CLIP
+    # embeddings (tokenizer_max_length = 77) and concatenates them before the
+    # T5 embeddings (max_sequence_length, default 256) along dim=-2.
+    model_dir = tmp_path / "local-sd3"
+    _write_sd3_pipeline(model_dir)
+    report = estimate_diffusion_generation(model_dir=model_dir, attention_backend="eager")
+
+    assert report["inputs"]["text_tokens"] == 256
+    assert report["inputs"]["denoiser_text_tokens"] == 77 + 256
+    denoiser = report["activation_models"]["denoiser"]
+    assert denoiser["text_tokens"] == 333
+    batch = report["inputs"]["denoiser_batch_size"]
+    assert batch == 2
+    sequence = denoiser["image_tokens"] + 333
+    assert denoiser["attention_workspace_bytes"] == batch * 2 * sequence**2 * 2
+    assert _phase(report, "denoise")["components"]["conditioning"] == batch * 333 * 8 * 2
+    # The T5 encoder itself still runs on the requested text tokens.
+    assert report["activation_models"]["text_encoder"]["hidden_state_bytes"] == (
+        1 * 256 * 8 * 2
+    )
+
+    shorter = estimate_diffusion_generation(model_dir=model_dir, text_tokens=128)
+    assert shorter["inputs"]["denoiser_text_tokens"] == 77 + 128
+
+
+def test_sd3_without_t5_uses_a_fixed_clip_length_placeholder(tmp_path: Path) -> None:
+    # Without text_encoder_3, _get_t5_prompt_embeds returns zeros of
+    # tokenizer_max_length tokens and ignores max_sequence_length.
+    model_dir = tmp_path / "local-sd3-no-t5"
+    _write_sd3_pipeline(model_dir, with_t5=False)
+    report = estimate_diffusion_generation(model_dir=model_dir)
+    assert report["inputs"]["text_tokens"] == 77
+    assert report["inputs"]["denoiser_text_tokens"] == 77 + 77
+    with pytest.raises(DiffusionEstimateError, match="must not exceed 77"):
+        estimate_diffusion_generation(model_dir=model_dir, text_tokens=256)
+
+
+def test_text_encoders_run_on_the_prompt_batch_not_the_cfg_batch() -> None:
+    # StableDiffusionPipeline.encode_prompt calls the text encoder separately
+    # for the prompts and the negative prompts; only the concatenated
+    # prompt_embeds that the UNet receives carry the doubled CFG batch.
+    report = estimate_diffusion_generation(SD15, batch_size=3)
+    assert report["inputs"]["denoiser_batch_size"] == 6
+    text = report["activation_models"]["text_encoder"]
+    assert text["hidden_state_bytes"] == 3 * 77 * 768 * 2
+    assert _phase(report, "text_encode")["components"]["conditioning_output"] == (
+        6 * 77 * 768 * 2
+    )
+
+
+def test_unlisted_pipeline_classes_report_assumed_call_defaults(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "local-unlisted"
+    _write_pipeline(model_dir, transformer=True)
+    index_path = model_dir / "model_index.json"
+    model_index = json.loads(index_path.read_text(encoding="utf-8"))
+    model_index["_class_name"] = "SanaPipeline"
+    index_path.write_text(json.dumps(model_index), encoding="utf-8")
+
+    report = estimate_diffusion_generation(model_dir=model_dir)
+    assert report["generation_defaults"] == {
+        "source": "assumed_stable_diffusion_pipeline_defaults",
+        "assumed_inputs": ["steps", "guidance_scale", "text_tokens"],
+    }
+    assert (report["inputs"]["steps"], report["inputs"]["text_tokens"]) == (50, 77)
+    assert len(report["assumptions"]) == 1
+    assert "SanaPipeline" in report["assumptions"][0]
+
+    explicit = estimate_diffusion_generation(
+        model_dir=model_dir, steps=20, guidance_scale=4.5, text_tokens=300
+    )
+    assert explicit["generation_defaults"]["assumed_inputs"] == []
+    assert explicit["assumptions"] == []
+
+    model_index["_class_name"] = "PixArtSigmaPipeline"
+    index_path.write_text(json.dumps(model_index), encoding="utf-8")
+    known = estimate_diffusion_generation(model_dir=model_dir)
+    assert known["generation_defaults"] == {
+        "source": "diffusers_pipeline_call_defaults",
+        "assumed_inputs": [],
+    }
+    assert estimate_diffusion_generation(SD15)["generation_defaults"]["source"] == (
+        "reference_profile"
+    )

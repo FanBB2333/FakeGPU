@@ -187,7 +187,9 @@ def test_scheduler_defaults_and_explicit_optimizer_options() -> None:
     assert axolotl["lr_scheduler_type"] == "cosine"
     assert axolotl["warmup_steps"] is None
     assert axolotl["warmup_ratio"] is None
-    assert axolotl["max_grad_norm"] is None
+    # Axolotl 0.18.0 passes max_grad_norm to TrainingArguments only when set,
+    # so Trainer's default 1.0 clips gradients.
+    assert axolotl["max_grad_norm"] == 1.0
     explicit = normalize_finetune_config(
         hf_config(
             lr_scheduler_type="cosine",
@@ -734,6 +736,122 @@ def test_axolotl_automatic_precision_requires_explicit_choice() -> None:
     for changes in ({}, {"bf16": "auto"}):
         with pytest.raises(FinetuneConfigError, match="[Aa]uto"):
             normalize_finetune_config({"base_model": "Qwen/Qwen3.5-0.8B", **changes})
+
+
+def _checkpoint(directory, **fields):
+    directory.mkdir()
+    (directory / "config.json").write_text(json.dumps({"model_type": "qwen3", **fields}))
+    return directory
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({"torch_dtype": "bfloat16"}, "bf16"),
+        ({"dtype": "float16", "torch_dtype": "bfloat16"}, "fp16"),
+        ({}, "fp32"),
+    ],
+)
+def test_llamafactory_adapters_keep_frozen_weights_in_the_checkpoint_dtype(
+    tmp_path, fields, expected
+) -> None:
+    # LLaMA-Factory 0.9.5 model/loader.py loads with torch_dtype="auto"
+    # (Transformers: the config's dtype) and model/adapter.py casts only
+    # trainable parameters to FP32.
+    model = _checkpoint(tmp_path / "model", **fields)
+    config = hf_config(model_name_or_path=str(model), finetuning_type="lora", bf16=True)
+    lora = normalize_finetune_config(config)
+    assert lora["source_framework"] == "llamafactory"
+    assert lora["parameter_dtype"] == expected
+    note = "checkpoint config's dtype" if fields else "no local model config"
+    assert any(note in item for item in lora["assumptions"])
+    qlora = normalize_finetune_config({**config, "quantization_bit": 4})
+    assert qlora["parameter_dtype"] == expected
+    full = normalize_finetune_config({**config, "finetuning_type": "full"})
+    assert full["parameter_dtype"] == "fp32"
+    assert any("casts trainable parameters to FP32" in item for item in full["assumptions"])
+    pure = normalize_finetune_config(
+        {**config, "finetuning_type": "full", "pure_bf16": True, "bf16": None}
+    )
+    assert pure["parameter_dtype"] == expected
+
+
+def test_checkpoint_dtype_follows_an_overriding_model_path(tmp_path) -> None:
+    configured = _checkpoint(tmp_path / "configured", torch_dtype="float32")
+    override = _checkpoint(tmp_path / "override", torch_dtype="bfloat16")
+    path = tmp_path / "train.json"
+    path.write_text(
+        json.dumps(
+            hf_config(model_name_or_path=str(configured), finetuning_type="lora", bf16=True)
+        )
+    )
+    assert load_finetune_config(path)["parameter_dtype"] == "fp32"
+    assert load_finetune_config(path, model_path=override)["parameter_dtype"] == "bf16"
+    assert (
+        load_finetune_config(path, model_path=override / "config.json")["parameter_dtype"]
+        == "bf16"
+    )
+    hub = normalize_finetune_config(hf_config(finetuning_type="lora", bf16=True))
+    assert hub["parameter_dtype"] == "fp32"
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ({"bf16": True}, "bf16"),
+        ({"fp16": True}, "fp16"),
+        ({"float32": True, "load_in_8bit": True}, "fp16"),
+        ({"float32": True}, "fp32"),
+    ],
+)
+def test_axolotl_loads_weights_in_its_precision_flag_dtype(flags, expected) -> None:
+    # Axolotl 0.18.0 resolve_dtype: bf16, then fp16 or load_in_8bit, else fp32;
+    # loaders/model.py loads the checkpoint with dtype=cfg.torch_dtype.
+    config = {
+        "base_model": "Qwen/Qwen3.5-0.8B",
+        "adapter": "lora",
+        "lora_r": 8,
+        "lora_alpha": 16,
+        "lora_target_modules": ["q_proj"],
+        **flags,
+    }
+    result = normalize_finetune_config(config)
+    assert result["parameter_dtype"] == expected
+    assert any("precision flag's dtype" in item for item in result["assumptions"])
+
+
+def test_axolotl_full_tuning_declares_its_fp32_embedding_upcast() -> None:
+    result = normalize_finetune_config(
+        {"base_model": "Qwen/Qwen3.5-0.8B", "bf16": True}
+    )
+    assert (result["method"], result["parameter_dtype"]) == ("full", "bf16")
+    assert any("lm_head" in item for item in result["assumptions"])
+    explicit = normalize_finetune_config(
+        {"base_model": "Qwen/Qwen3.5-0.8B", "bf16": True, "parameter_dtype": "fp32"}
+    )
+    assert explicit["parameter_dtype"] == "fp32"
+    assert not any("precision flag" in item for item in explicit["assumptions"])
+    assert normalize_finetune_config(hf_config(bf16=True))["parameter_dtype"] == "fp32"
+
+
+def test_axolotl_unset_lora_rank_is_a_declared_assumption() -> None:
+    # Axolotl 0.18.0 schemas/peft.py has lora_r: int | None = None and
+    # loaders/adapter.py builds LoraConfig(r=cfg.lora_r); PEFT rejects r=None.
+    config = {
+        "base_model": "Qwen/Qwen3.5-0.8B",
+        "adapter": "lora",
+        "bf16": True,
+        "lora_alpha": 16,
+        "lora_target_modules": ["q_proj"],
+    }
+    unset = normalize_finetune_config(config)
+    assert unset["lora_rank"] == 8
+    assert any("lora_r is unspecified" in item for item in unset["assumptions"])
+    explicit = normalize_finetune_config({**config, "lora_r": 8})
+    assert not any("lora_r" in item for item in explicit["assumptions"])
+    factory = normalize_finetune_config(hf_config(finetuning_type="lora", bf16=True))
+    assert factory["lora_rank"] == 8
+    assert not any("lora_r" in item for item in factory["assumptions"])
 
 
 def test_qlora_quantization_config_and_all_linear() -> None:

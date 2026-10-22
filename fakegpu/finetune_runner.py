@@ -307,6 +307,14 @@ def run_finetuning(
     planning = _validate_horizon(
         planning_epochs, planning_max_steps, length_grouping_seed, packing_seed
     )
+    if (
+        framework == "axolotl"
+        and packing_seed is not None
+        and planning_epochs is not None
+    ):
+        from .finetune_pipeline_plan import AXOLOTL_PACKED_EPOCHS_ERROR
+
+        raise ValueError(AXOLOTL_PACKED_EPOCHS_ERROR)
     started = time.perf_counter()
     cache_evidence = capture_cache_regime(cache_regime)
     run_identity = {
@@ -319,7 +327,10 @@ def run_finetuning(
         path, framework, warmup_steps, packed_reference=packing_seed is not None
     )
     if planning:
-        from .finetune_pipeline_plan import _validate_native_schedule_options
+        from .finetune_pipeline_plan import (
+            _target_steps,
+            _validate_native_schedule_options,
+        )
 
         _validate_native_schedule_options({"native_config": raw})
     _reject_simulated_cuda_environment()
@@ -458,10 +469,15 @@ def run_finetuning(
                     if args.max_steps > 0
                     else math.ceil(args.num_train_epochs * per_epoch)
                 )
-                target_steps = (
-                    planning_max_steps
-                    if planning_max_steps is not None
-                    else math.ceil(planning_epochs * per_epoch)
+                target_steps = _target_steps(
+                    planning_epochs,
+                    planning_max_steps,
+                    per_epoch,
+                    framework=framework,
+                    rows=len(dataset),
+                    batch_size=args.per_device_train_batch_size
+                    * args.gradient_accumulation_steps,
+                    packed=packing_seed is not None,
                 )
                 if packing_seed is not None:
                     from ._finetune_packed_sampler import plan_native_packed_batches

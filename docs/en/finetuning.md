@@ -34,6 +34,16 @@ does not import the frameworks or load the weights.
 - Unpacked Axolotl configs convert epochs as Axolotl does:
   `ceil(samples * epochs / (micro_batch_size * gradient_accumulation_steps))`
   updates, which Axolotl passes to Trainer as `max_steps`.
+- Axolotl passes `max_grad_norm` to Trainer only when it is set, so an unset
+  value means Trainer's default of 1.0. An unset Axolotl `lora_r` has no
+  default (PEFT rejects it); the estimate assumes 8 and says so in
+  `assumptions`.
+- Without `parameter_dtype` or `torch_dtype`, weight storage follows the
+  framework. LLaMA-Factory keeps LoRA/QLoRA frozen weights in the dtype of the
+  local checkpoint's `config.json` (`torch_dtype="auto"`) and full tuning in
+  FP32. Axolotl loads weights in its precision flag's dtype (`bf16`, then
+  `fp16` or `load_in_8bit`). HF Trainer configs and checkpoints without a
+  declared dtype use FP32. `assumptions` names the rule that was applied.
 
 ```bash
 python -m fakegpu estimate-finetune \
@@ -173,6 +183,14 @@ finalization.
   tail batch: HF Trainer (Transformers 5.6.0) and LLaMA-Factory 0.9.5 with
   `disable_shuffling: true`, and Axolotl 0.18.0 (Transformers 5.14.1) with
   `curriculum_sampling: true`.
+- `--epochs` means the framework's own `num_epochs`. HF and LLaMA-Factory
+  finish every epoch's short final accumulation window. Axolotl runs
+  `ceil(rows * epochs / (micro_batch_size * gradient_accumulation_steps))`
+  updates, the `max_steps` it passes to Trainer. The same rule applies to
+  `plan-finetune-transfer` and `run-finetune --planning-epochs`. Packed
+  Axolotl horizons need a step count (`--max-steps`, or
+  `--planning-max-steps` for `run-finetune`), because Axolotl derives packed
+  epochs from its multipack length estimate.
 - Dataset, model, hardware, and execution settings must match the
   calibration, and a different row count needs a new calibration. Logging must
   be off or happen on every update. Checkpoint rotation and best-model reload

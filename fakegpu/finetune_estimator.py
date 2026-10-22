@@ -231,7 +231,7 @@ def estimate_finetuning(
         "Time extrapolation uses full-microbatch measurements for tail batches; short accumulation windows may have different amortized optimizer overhead.",
         "Activation/workspace storage depends on fused kernels, allocator behavior and framework versions; calibrate on the target stack.",
         "Explicit PyTorch AdamW/SGD uses parameter-dtype optimizer states without a master copy; other implementations use a conservative FP32 state/master-weight budget.",
-        "Compute precision does not determine parameter storage: absent parameter_dtype, base weights are budgeted as FP32.",
+        "Compute precision does not determine parameter storage: parameter_dtype comes from the config or the framework's loading rule (see assumptions), and is FP32 when neither gives it.",
         "Automatic attention dispatch budgets eager score storage; explicit fused backends and calibration can refine it.",
     ] + model["limitations"]
     if config.get("packing"):

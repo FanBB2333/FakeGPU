@@ -33,6 +33,14 @@ QLoRA 的 GPU 記憶體與**訓練迴圈**時間。它不會匯入訓練框架�
 - 未打包的 Axolotl 設定依 Axolotl 自己的規則換算 epochs：
   `ceil(samples * epochs / (micro_batch_size * gradient_accumulation_steps))`
   次更新，Axolotl 會把它作為 `max_steps` 傳給 Trainer。
+- Axolotl 只在設定了 `max_grad_norm` 時才把它傳給 Trainer，未設定即採用 Trainer
+  的預設值 1.0。Axolotl 的 `lora_r` 沒有預設值（PEFT 會拒絕）；未設定時估算以 8
+  計算，並在 `assumptions` 中註明。
+- 沒有 `parameter_dtype` 或 `torch_dtype` 時，權重儲存精度依框架規則決定。
+  LLaMA-Factory 的 LoRA/QLoRA 凍結權重保持本機 checkpoint `config.json` 宣告的
+  dtype（`torch_dtype="auto"`），全參數微調為 FP32。Axolotl 依精度開關的 dtype
+  載入權重（先 `bf16`，再 `fp16` 或 `load_in_8bit`）。HF Trainer 設定與未宣告
+  dtype 的 checkpoint 使用 FP32。`assumptions` 會寫明採用的規則。
 
 ```bash
 python -m fakegpu estimate-finetune \
@@ -157,6 +165,13 @@ setup、warmup、有序訓練視窗、評估、checkpoint、Trainer 間隙與收
 - 支援無 packing、保留尾批次的循序文字資料：HF Trainer（Transformers 5.6.0）與
   LLaMA-Factory 0.9.5 需設定 `disable_shuffling: true`，Axolotl 0.18.0
   （Transformers 5.14.1）需設定 `curriculum_sampling: true`。
+- `--epochs` 依框架自己的 `num_epochs` 含義換算。HF 與 LLaMA-Factory 會跑完每個
+  epoch 末尾不足一個累積視窗的 update。Axolotl 執行
+  `ceil(rows * epochs / (micro_batch_size * gradient_accumulation_steps))` 次
+  update，即它傳給 Trainer 的 `max_steps`。`plan-finetune-transfer` 與
+  `run-finetune --planning-epochs` 採用同一規則。打包的 Axolotl 執行須以步數指定
+  範圍（`--max-steps`，`run-finetune` 用 `--planning-max-steps`），因為 Axolotl
+  依 multipack 長度估計換算打包 epoch。
 - 資料、模型、硬體與執行設定須與校準一致，資料筆數改變時需要重新校準。日誌須關閉
   或每次 update 都記錄。不支援 checkpoint 輪替刪除與最佳模型重新載入。
 

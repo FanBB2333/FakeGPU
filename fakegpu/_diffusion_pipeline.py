@@ -87,6 +87,9 @@ _PIPELINE_DEFAULTS = {
         "steps": 28,
         "guidance_scale": 7.0,
         "text_tokens": 256,
+        # encode_prompt pads the CLIP embeddings to tokenizer_max_length and
+        # concatenates them before the T5 sequence (torch.cat(..., dim=-2)).
+        "clip_prefix": True,
     },
     "FluxPipeline": {
         "steps": 28,
@@ -97,6 +100,33 @@ _PIPELINE_DEFAULTS = {
         "default_sample_size": 128,
     },
 }
+
+
+# Pipeline classes without an entry above borrow these call defaults; reports
+# list every input that was filled from them.
+_ASSUMED_DEFAULTS_CLASS = "StableDiffusionPipeline"
+
+
+# default_generation.source values; checked-in profiles omit it (the first).
+_DEFAULT_SOURCES = (
+    "reference_profile",
+    "diffusers_pipeline_call_defaults",
+    "assumed_stable_diffusion_pipeline_defaults",
+)
+
+
+# StableDiffusion3Pipeline.__init__ uses this length when it has no tokenizer.
+_SD3_FALLBACK_TOKENIZER_MAX_LENGTH = 77
+
+
+def _sd3_tokenizer_max_length(root: Path) -> int:
+    """Return SD3's tokenizer_max_length: the CLIP tokenizer's model_max_length."""
+    path = root / "tokenizer" / "tokenizer_config.json"
+    if path.is_file():
+        value = _read_json_object(path).get("model_max_length")
+        if type(value) is int and 0 < value <= 1_000_000:
+            return value
+    return _SD3_FALLBACK_TOKENIZER_MAX_LENGTH
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -634,11 +664,19 @@ def _local_profile(
         if capacity is not None and capacity <= 1_000_000:
             text_capacities.append(capacity)
 
-    pipeline_defaults = _PIPELINE_DEFAULTS.get(
-        pipeline_class, _PIPELINE_DEFAULTS["StableDiffusionPipeline"]
-    )
+    known_pipeline = pipeline_class in _PIPELINE_DEFAULTS
+    pipeline_defaults = _PIPELINE_DEFAULTS[
+        pipeline_class if known_pipeline else _ASSUMED_DEFAULTS_CLASS
+    ]
     default_tokens = pipeline_defaults["text_tokens"]
     maximum_tokens = max([default_tokens, *text_capacities])
+    prefix_tokens = 0
+    if pipeline_defaults.get("clip_prefix"):
+        prefix_tokens = _sd3_tokenizer_max_length(root)
+        if "text_encoder_3" not in role_names["conditioning"]:
+            # Without text_encoder_3, _get_t5_prompt_embeds returns zeros of
+            # tokenizer_max_length tokens and ignores max_sequence_length.
+            default_tokens = maximum_tokens = prefix_tokens
     conditioning_width = _optional_positive_config(
         denoiser_config,
         (
@@ -715,6 +753,11 @@ def _local_profile(
             "width": default_width,
             "steps": pipeline_defaults["steps"],
             "guidance_scale": pipeline_defaults["guidance_scale"],
+            "source": (
+                "diffusers_pipeline_call_defaults"
+                if known_pipeline
+                else "assumed_stable_diffusion_pipeline_defaults"
+            ),
         },
         "latent": {
             "scale_factor": latent_scale,
@@ -733,6 +776,9 @@ def _local_profile(
             ],
             "max_tokens": maximum_tokens,
             "default_tokens": default_tokens,
+            **(
+                {"denoiser_prefix_tokens": prefix_tokens} if prefix_tokens else {}
+            ),
             "width": conditioning_width,
             "encoder_width": encoder_width,
             "layers": encoder_layers,
@@ -871,6 +917,14 @@ def _validate_profile(
         raise DiffusionEstimateError(
             f"diffusion profile {profile_id!r}: "
             "conditioning.default_tokens must be in [1, max_tokens]"
+        )
+    _nonnegative_integer(
+        conditioning.get("denoiser_prefix_tokens", 0),
+        "conditioning.denoiser_prefix_tokens",
+    )
+    if defaults.get("source", _DEFAULT_SOURCES[0]) not in _DEFAULT_SOURCES:
+        raise DiffusionEstimateError(
+            f"diffusion profile {profile_id!r}: invalid default_generation.source"
         )
     architecture = str(denoiser.get("architecture") or "")
     if architecture not in SUPPORTED_DENOISER_ARCHITECTURES:
