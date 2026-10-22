@@ -30,6 +30,9 @@ enum class CollectiveDataType {
     BFloat16,
     Float32,
     Float64,
+    // ncclFloat8e4m3 and ncclFloat8e5m2.
+    Float8E4M3,
+    Float8E5M2,
 };
 
 enum class CollectiveReduceOp {
@@ -124,6 +127,10 @@ inline const char* collective_data_type_name(CollectiveDataType dtype) {
             return "float32";
         case CollectiveDataType::Float64:
             return "float64";
+        case CollectiveDataType::Float8E4M3:
+            return "float8_e4m3";
+        case CollectiveDataType::Float8E5M2:
+            return "float8_e5m2";
     }
     return "unknown";
 }
@@ -175,6 +182,8 @@ inline bool parse_collective_data_type(const std::string& text, CollectiveDataTy
              CollectiveDataType::BFloat16,
              CollectiveDataType::Float32,
              CollectiveDataType::Float64,
+             CollectiveDataType::Float8E4M3,
+             CollectiveDataType::Float8E5M2,
          }) {
         if (text == collective_data_type_name(value)) {
             out = value;
@@ -222,6 +231,9 @@ inline std::size_t collective_data_type_size(CollectiveDataType dtype) {
             return sizeof(float);
         case CollectiveDataType::Float64:
             return sizeof(double);
+        case CollectiveDataType::Float8E4M3:
+        case CollectiveDataType::Float8E5M2:
+            return 1;
     }
     return 0;
 }

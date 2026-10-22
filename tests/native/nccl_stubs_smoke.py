@@ -22,13 +22,18 @@ NCCL_SUCCESS = 0
 NCCL_SYSTEM_ERROR = 2
 NCCL_INVALID_ARGUMENT = 4
 NCCL_INVALID_USAGE = 5
+NCCL_FLOAT16 = 6
 NCCL_FLOAT32 = 7
+NCCL_FLOAT8E4M3 = 10
 NCCL_SUM = 0
+NCCL_AVG = 4
+NCCL_SCALAR_DEVICE = 0
 NCCL_SCALAR_HOST_IMMEDIATE = 1
 # NCCL_SIM_INFO_INITIALIZER magic from nccl.h.
 NCCL_SIM_INFO_MAGIC = 0x74685283
 SPLIT_WORLD = 3
 REDUCE_WORLD = 2
+P2P_WORLD = 3
 
 
 class UniqueId(ctypes.Structure):
@@ -213,6 +218,309 @@ def child_empty_p2p_rank(rank: int) -> int:
     return 0
 
 
+def child_premul_rank(rank: int) -> int:
+    """PreMulSum operators behave as in NCCL's enqueue.cc.
+
+    A device scalar (ncclScalarDevice, which torch passes for a tensor factor)
+    is read like a host one, the operator is copied into a grouped operation
+    so it may be destroyed before ncclGroupEnd, and an operator only works with
+    its own datatype and communicator.
+    """
+
+    lib = load_nccl()
+    lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, UniqueId, ctypes.c_int]
+    comm = ctypes.c_void_p()
+    unique_id = UniqueId(internal=os.environ["NCCL_SMOKE_UNIQUE_ID"].encode())
+    expect_rc(lib.ncclCommInitRank(ctypes.byref(comm), REDUCE_WORLD, unique_id, rank), NCCL_SUCCESS, "ncclCommInitRank")
+    send = (ctypes.c_float * 2)(rank + 1.0, 10.0 * (rank + 1))
+    recv = (ctypes.c_float * 2)()
+
+    factor = ctypes.c_float(0.5)
+    op = ctypes.c_int(-1)
+    expect_rc(
+        lib.ncclRedOpCreatePreMulSum(ctypes.byref(op), ctypes.byref(factor), NCCL_FLOAT32, NCCL_SCALAR_DEVICE, comm),
+        NCCL_SUCCESS,
+        "ncclRedOpCreatePreMulSum with a device scalar",
+    )
+    expect_rc(lib.ncclAllReduce(send, recv, ctypes.c_size_t(2), NCCL_FLOAT32, op.value, comm, None), NCCL_SUCCESS, "device-scalar preMulSum")
+    if list(recv) != [1.5, 15.0]:
+        raise AssertionError(f"rank {rank}: device-scalar preMulSum produced {list(recv)}")
+    half = (ctypes.c_uint16 * 2)()
+    expect_rc(lib.ncclAllReduce(half, half, ctypes.c_size_t(2), NCCL_FLOAT16, op.value, comm, None), NCCL_INVALID_ARGUMENT, "preMulSum with another datatype")
+    expect_rc(lib.ncclRedOpDestroy(op.value, comm), NCCL_SUCCESS, "ncclRedOpDestroy")
+
+    factor = ctypes.c_float(2.0)
+    expect_rc(
+        lib.ncclRedOpCreatePreMulSum(ctypes.byref(op), ctypes.byref(factor), NCCL_FLOAT32, NCCL_SCALAR_HOST_IMMEDIATE, comm),
+        NCCL_SUCCESS,
+        "ncclRedOpCreatePreMulSum",
+    )
+    lib.ncclGroupStart()
+    expect_rc(lib.ncclAllReduce(send, recv, ctypes.c_size_t(2), NCCL_FLOAT32, op.value, comm, None), NCCL_SUCCESS, "grouped preMulSum")
+    expect_rc(lib.ncclRedOpDestroy(op.value, comm), NCCL_SUCCESS, "ncclRedOpDestroy inside the group")
+    expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, "ncclGroupEnd")
+    if list(recv) != [6.0, 60.0]:
+        raise AssertionError(f"rank {rank}: grouped preMulSum produced {list(recv)}")
+
+    child = ctypes.c_void_p()
+    expect_rc(lib.ncclCommSplit(comm, 0, rank, ctypes.byref(child), None), NCCL_SUCCESS, "ncclCommSplit")
+    expect_rc(
+        lib.ncclRedOpCreatePreMulSum(ctypes.byref(op), ctypes.byref(factor), NCCL_FLOAT32, NCCL_SCALAR_HOST_IMMEDIATE, comm),
+        NCCL_SUCCESS,
+        "ncclRedOpCreatePreMulSum",
+    )
+    expect_rc(lib.ncclAllReduce(send, recv, ctypes.c_size_t(2), NCCL_FLOAT32, op.value, child, None), NCCL_INVALID_ARGUMENT, "preMulSum on another communicator")
+    expect_rc(lib.ncclRedOpDestroy(op.value, child), NCCL_INVALID_ARGUMENT, "ncclRedOpDestroy on another communicator")
+    return 0
+
+
+def child_fp8_rank(rank: int) -> int:
+    """FP8 follows NCCL 2.27.5 (enqueue.cc, taskAppend).
+
+    Below compute capability 9.0 on any rank every non-empty FP8 collective is
+    ncclInvalidArgument (an Ampere GPU running NCCL 2.27.5 returned it for
+    all-reduce, reduce, reduce-scatter, broadcast and all-gather) and leaves the
+    communicator usable; send and receive work on any device.
+    """
+
+    lib = load_nccl()
+    lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, UniqueId, ctypes.c_int]
+    comm = ctypes.c_void_p()
+    unique_id = UniqueId(internal=os.environ["NCCL_SMOKE_UNIQUE_ID"].encode())
+    expect_rc(lib.ncclCommInitRank(ctypes.byref(comm), REDUCE_WORLD, unique_id, rank), NCCL_SUCCESS, "ncclCommInitRank")
+    # e4m3 bytes: rank 0 holds (1, 16), rank 1 holds (2, 1).
+    send = (ctypes.c_uint8 * 2)(*((0x38, 0x58) if rank == 0 else (0x40, 0x38)))
+    recv = (ctypes.c_uint8 * 4)()
+    size = ctypes.c_size_t
+    calls = {
+        "all-reduce": lambda: lib.ncclAllReduce(send, recv, size(2), NCCL_FLOAT8E4M3, NCCL_SUM, comm, None),
+        "reduce": lambda: lib.ncclReduce(send, recv, size(2), NCCL_FLOAT8E4M3, NCCL_SUM, 0, comm, None),
+        "reduce-scatter": lambda: lib.ncclReduceScatter(send, recv, size(1), NCCL_FLOAT8E4M3, NCCL_SUM, comm, None),
+        "broadcast": lambda: lib.ncclBroadcast(send, recv, size(2), NCCL_FLOAT8E4M3, 0, comm, None),
+        "all-gather": lambda: lib.ncclAllGather(send, recv, size(2), NCCL_FLOAT8E4M3, comm, None),
+    }
+    if os.environ["NCCL_SMOKE_FP8"] == "rejected":
+        for name, call in calls.items():
+            expect_rc(call(), NCCL_INVALID_ARGUMENT, f"FP8 {name} below compute capability 9.0")
+        expect_rc(lib.ncclAllReduce(send, recv, size(0), NCCL_FLOAT8E4M3, NCCL_SUM, comm, None), NCCL_SUCCESS, "empty FP8 all-reduce")
+        value = (ctypes.c_float * 1)(1.0)
+        expect_rc(lib.ncclAllReduce(value, value, size(1), NCCL_FLOAT32, NCCL_SUM, comm, None), NCCL_SUCCESS, "all-reduce after FP8 rejections")
+        if value[0] != 2.0:
+            raise AssertionError(f"rank {rank}: all-reduce after FP8 rejections produced {value[0]}")
+    else:
+        expect_rc(calls["all-reduce"](), NCCL_SUCCESS, "FP8 all-reduce")
+        # 1 + 2 = 3; 16 + 1 rounds back to 16 in e4m3.
+        if list(recv[:2]) != [0x44, 0x58]:
+            raise AssertionError(f"rank {rank}: FP8 all-reduce produced {list(recv[:2])}")
+        expect_rc(lib.ncclAllReduce(send, recv, size(2), NCCL_FLOAT8E4M3, NCCL_AVG, comm, None), NCCL_SUCCESS, "FP8 average")
+        # 0.5 * 1 + 0.5 * 2 = 1.5; 0.5 * 16 + 0.5 * 1 = 8.5 rounds to 8.
+        if list(recv[:2]) != [0x3C, 0x50]:
+            raise AssertionError(f"rank {rank}: FP8 average produced {list(recv[:2])}")
+    peer = 1 - rank
+    if rank == 0:
+        expect_rc(lib.ncclSend(send, size(2), NCCL_FLOAT8E4M3, peer, comm, None), NCCL_SUCCESS, "FP8 ncclSend")
+    else:
+        expect_rc(lib.ncclRecv(recv, size(2), NCCL_FLOAT8E4M3, peer, comm, None), NCCL_SUCCESS, "FP8 ncclRecv")
+        if list(recv[:2]) != [0x38, 0x58]:
+            raise AssertionError(f"rank 1: FP8 ncclRecv produced {list(recv[:2])}")
+    return 0
+
+
+def init_rank(lib: ctypes.CDLL, world: int, rank: int) -> ctypes.c_void_p:
+    lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, UniqueId, ctypes.c_int]
+    comm = ctypes.c_void_p()
+    unique_id = UniqueId(internal=os.environ["NCCL_SMOKE_UNIQUE_ID"].encode())
+    expect_rc(lib.ncclCommInitRank(ctypes.byref(comm), world, unique_id, rank), NCCL_SUCCESS, "ncclCommInitRank")
+    return comm
+
+
+def expect_values(actual, expected: list[float], what: str) -> None:
+    if list(actual) != expected:
+        raise AssertionError(f"{what} produced {list(actual)}, expected {expected}")
+
+
+def child_exchange_p2p_rank(rank: int) -> int:
+    """Sends and receives pair by (sender, receiver, per-pair sequence).
+
+    NCCL queues each peer's sends and receives in posting order (enqueue.cc,
+    taskAppend), so a group holding both a send and a receive works, a rank's
+    k-th send to a peer meets the peer's k-th receive, and grouped and
+    ungrouped calls pair with each other. Self pairs and their errors follow
+    NCCL 2.27.5 on an Ampere GPU (sm_80): ordered self pairs gave "3 4 1 2", a
+    lone send to self is ncclInvalidUsage (at ncclGroupEnd inside a group,
+    count 0 included) and leaves no async error.
+    """
+
+    lib = load_nccl()
+    lib.ncclCommGetAsyncError.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+    comm = init_rank(lib, REDUCE_WORLD, rank)
+    size = ctypes.c_size_t
+    floats = ctypes.c_float * 2
+    peer = 1 - rank
+    send = floats(rank + 1.0, rank + 2.0)
+    recv = floats()
+    lib.ncclGroupStart()
+    expect_rc(lib.ncclSend(send, size(2), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "grouped ncclSend")
+    expect_rc(lib.ncclRecv(recv, size(2), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "grouped ncclRecv")
+    expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, "ncclGroupEnd of a send/recv exchange")
+    expect_values(recv, [peer + 1.0, peer + 2.0], f"rank {rank}: grouped exchange")
+
+    first, second = floats(1.0, 2.0), floats(3.0, 4.0)
+    lib.ncclGroupStart()
+    if rank == 0:
+        lib.ncclSend(first, size(2), NCCL_FLOAT32, 1, comm, None)
+        lib.ncclSend(second, size(2), NCCL_FLOAT32, 1, comm, None)
+    else:
+        first, second = floats(), floats()
+        lib.ncclRecv(first, size(2), NCCL_FLOAT32, 0, comm, None)
+        lib.ncclRecv(second, size(2), NCCL_FLOAT32, 0, comm, None)
+    expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, "ncclGroupEnd of two sends to one peer")
+    if rank == 1:
+        expect_values(first, [1.0, 2.0], "first receive")
+        expect_values(second, [3.0, 4.0], "second receive")
+
+    recv = floats()
+    if rank == 0:
+        lib.ncclGroupStart()
+        lib.ncclSend(send, size(2), NCCL_FLOAT32, peer, comm, None)
+        lib.ncclRecv(recv, size(2), NCCL_FLOAT32, peer, comm, None)
+        expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, "grouped exchange with an ungrouped peer")
+    else:
+        expect_rc(lib.ncclSend(send, size(2), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "ungrouped ncclSend")
+        expect_rc(lib.ncclRecv(recv, size(2), NCCL_FLOAT32, peer, comm, None), NCCL_SUCCESS, "ungrouped ncclRecv")
+    expect_values(recv, [peer + 1.0, peer + 2.0], f"rank {rank}: mixed exchange")
+
+    source = (ctypes.c_float * 4)(1.0, 2.0, 3.0, 4.0)
+    target = (ctypes.c_float * 4)()
+    lib.ncclGroupStart()
+    lib.ncclSend(source, size(2), NCCL_FLOAT32, rank, comm, None)
+    lib.ncclSend(ctypes.byref(source, 8), size(2), NCCL_FLOAT32, rank, comm, None)
+    lib.ncclRecv(ctypes.byref(target, 8), size(2), NCCL_FLOAT32, rank, comm, None)
+    lib.ncclRecv(target, size(2), NCCL_FLOAT32, rank, comm, None)
+    expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, "ncclGroupEnd of ordered self pairs")
+    expect_values(target, [3.0, 4.0, 1.0, 2.0], "ordered self pairs")
+
+    expect_rc(lib.ncclSend(source, size(2), NCCL_FLOAT32, rank, comm, None), NCCL_INVALID_USAGE, "ungrouped send to self")
+    expect_rc(lib.ncclRecv(target, size(2), NCCL_FLOAT32, rank, comm, None), NCCL_INVALID_USAGE, "ungrouped recv from self")
+    expect_rc(lib.ncclSend(source, size(0), NCCL_FLOAT32, rank, comm, None), NCCL_INVALID_USAGE, "ungrouped empty send to self")
+    for count in (2, 0):
+        lib.ncclGroupStart()
+        expect_rc(lib.ncclSend(source, size(count), NCCL_FLOAT32, rank, comm, None), NCCL_SUCCESS, "grouped lone send to self")
+        expect_rc(lib.ncclGroupEnd(), NCCL_INVALID_USAGE, f"ncclGroupEnd of a lone send to self of {count} elements")
+    async_error = ctypes.c_int(-1)
+    expect_rc(lib.ncclCommGetAsyncError(comm, ctypes.byref(async_error)), NCCL_SUCCESS, "ncclCommGetAsyncError")
+    expect_rc(async_error.value, NCCL_SUCCESS, "async error after unmatched self operations")
+    value = (ctypes.c_float * 1)(1.0)
+    expect_rc(lib.ncclAllReduce(value, value, size(1), NCCL_FLOAT32, NCCL_SUM, comm, None), NCCL_SUCCESS, "all-reduce after point-to-point")
+    expect_values(value, [2.0], "all-reduce after point-to-point")
+    return 0
+
+
+def child_partial_p2p_rank(rank: int) -> int:
+    """Ranks outside a send/recv pair are not involved, and all-to-all-v works.
+
+    The all-to-all-v is issued like torch's all_to_all_single with splits:
+    every rank posts a send and a receive to every rank, itself included,
+    even when the count is zero.
+    """
+
+    lib = load_nccl()
+    comm = init_rank(lib, P2P_WORLD, rank)
+    size = ctypes.c_size_t
+    if rank < 2:
+        peer = 1 - rank
+        send = (ctypes.c_float * 2)(rank + 1.0, rank + 2.0)
+        recv = (ctypes.c_float * 2)()
+        lib.ncclGroupStart()
+        lib.ncclSend(send, size(2), NCCL_FLOAT32, peer, comm, None)
+        lib.ncclRecv(recv, size(2), NCCL_FLOAT32, peer, comm, None)
+        expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, f"rank {rank}: exchange without rank 2")
+        expect_values(recv, [peer + 1.0, peer + 2.0], f"rank {rank}: exchange without rank 2")
+    value = (ctypes.c_float * 1)(rank + 1.0)
+    expect_rc(lib.ncclAllReduce(value, value, size(1), NCCL_FLOAT32, NCCL_SUM, comm, None), NCCL_SUCCESS, f"rank {rank}: all-reduce")
+    expect_values(value, [6.0], f"rank {rank}: all-reduce after a partial exchange")
+
+    def split(src: int, dst: int) -> int:
+        return (src + dst) % P2P_WORLD
+
+    def payload(src: int, dst: int) -> list[float]:
+        return [100.0 * src + 10.0 * dst + k for k in range(split(src, dst))]
+
+    sends = [(ctypes.c_float * 2)(*payload(rank, peer)) for peer in range(P2P_WORLD)]
+    recvs = [(ctypes.c_float * 2)() for _ in range(P2P_WORLD)]
+    lib.ncclGroupStart()
+    for peer in range(P2P_WORLD):
+        lib.ncclSend(sends[peer], size(split(rank, peer)), NCCL_FLOAT32, peer, comm, None)
+        lib.ncclRecv(recvs[peer], size(split(peer, rank)), NCCL_FLOAT32, peer, comm, None)
+    expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, f"rank {rank}: all-to-all-v")
+    for peer in range(P2P_WORLD):
+        expected = payload(peer, rank)
+        expect_values(recvs[peer][: len(expected)], expected, f"rank {rank}: all-to-all-v from rank {peer}")
+    return 0
+
+
+def child_multi_comm(_rank: int) -> int:
+    """A group may span communicators, here both ranks of ncclCommInitAll.
+
+    An Ampere GPU running NCCL 2.27.5 completed groups holding all-reduces on
+    three communicators and send/recv on two, and returned ncclInvalidUsage
+    for a send to self on one communicator with the receive on another.
+    An error from an operation enqueued in a group drops the group and
+    ncclGroupEnd returns it (group.cc, ncclGroupEndInternal).
+    """
+
+    lib = load_nccl()
+    lib.ncclCommInitAll.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
+    handles = (ctypes.c_void_p * 2)()
+    expect_rc(lib.ncclCommInitAll(handles, 2, (ctypes.c_int * 2)(0, 1)), NCCL_SUCCESS, "ncclCommInitAll")
+    comms = [ctypes.c_void_p(handle) for handle in handles]
+    size = ctypes.c_size_t
+    floats = ctypes.c_float * 2
+    sends = [floats(1.0, 2.0), floats(3.0, 4.0)]
+
+    def grouped_all_reduce() -> list[ctypes.Array]:
+        recvs = [floats(), floats()]
+        lib.ncclGroupStart()
+        for index in range(2):
+            expect_rc(
+                lib.ncclAllReduce(sends[index], recvs[index], size(2), NCCL_FLOAT32, NCCL_SUM, comms[index], None),
+                NCCL_SUCCESS,
+                "grouped all-reduce",
+            )
+        expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, "ncclGroupEnd over two communicators")
+        return recvs
+
+    for recv in grouped_all_reduce():
+        expect_values(recv, [4.0, 6.0], "all-reduce over two communicators")
+
+    recvs = [floats(), floats()]
+    lib.ncclGroupStart()
+    for index in range(2):
+        lib.ncclSend(sends[index], size(2), NCCL_FLOAT32, 1 - index, comms[index], None)
+        lib.ncclRecv(recvs[index], size(2), NCCL_FLOAT32, 1 - index, comms[index], None)
+    expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, "ncclGroupEnd of an exchange over two communicators")
+    for index in range(2):
+        expect_values(recvs[index], list(sends[1 - index]), f"rank {index}: exchange")
+
+    untouched = floats(-1.0, -1.0)
+    lib.ncclGroupStart()
+    expect_rc(lib.ncclAllReduce(sends[0], untouched, size(2), NCCL_FLOAT32, NCCL_SUM, comms[0], None), NCCL_SUCCESS, "valid grouped all-reduce")
+    expect_rc(lib.ncclAllReduce(sends[1], recvs[1], size(2), 99, NCCL_SUM, comms[1], None), NCCL_INVALID_ARGUMENT, "grouped all-reduce with a bad datatype")
+    expect_rc(lib.ncclGroupEnd(), NCCL_INVALID_ARGUMENT, "ncclGroupEnd after an enqueue error")
+    expect_values(untouched, [-1.0, -1.0], "operation of a dropped group")
+
+    lib.ncclGroupStart()
+    lib.ncclSend(sends[0], size(2), NCCL_FLOAT32, 0, comms[0], None)
+    lib.ncclRecv(recvs[1], size(2), NCCL_FLOAT32, 1, comms[1], None)
+    expect_rc(lib.ncclGroupEnd(), NCCL_INVALID_USAGE, "send to self paired across communicators")
+
+    for recv in grouped_all_reduce():
+        expect_values(recv, [4.0, 6.0], "all-reduce after failed groups")
+    for comm in comms:
+        lib.ncclCommDestroy(comm)
+    return 0
+
+
 def child_init_all(_rank: int) -> int:
     """ncclCommInitAll validates its device list like init.cc does."""
 
@@ -308,6 +616,31 @@ def check_empty_point_to_point() -> None:
         raise AssertionError("zero-count ncclSend/ncclRecv were not accepted")
 
 
+def check_premul_sum_operators() -> None:
+    if not run_ranks("--premul-rank", REDUCE_WORLD, 3000):
+        raise AssertionError("PreMulSum operators do not behave as in NCCL")
+
+
+def check_fp8_compute_capability_gate() -> None:
+    # A100 profiles are sm_80, H100 profiles sm_90; one sm_80 rank decides.
+    for profiles, expected in (("a100:2", "rejected"), ("h100:2", "allowed"), ("h100,a100", "rejected")):
+        if not run_ranks("--fp8-rank", REDUCE_WORLD, 3000, {"FAKEGPU_PROFILES": profiles, "NCCL_SMOKE_FP8": expected}):
+            raise AssertionError(f"FP8 collectives on {profiles} were not {expected} as in NCCL")
+
+
+def check_point_to_point_pairing() -> None:
+    if not run_ranks("--exchange-p2p-rank", REDUCE_WORLD, 3000):
+        raise AssertionError("ncclSend/ncclRecv do not pair up as in NCCL")
+    # Socket payloads carry several sends and receives in one request.
+    if not run_ranks("--partial-p2p-rank", P2P_WORLD, 3000, {"FAKEGPU_STAGING_FORCE_SOCKET": "1"}):
+        raise AssertionError("partial point-to-point or all-to-all-v failed")
+
+
+def check_multi_communicator_groups() -> None:
+    if not run_ranks("--multi-comm", 1, 3000):
+        raise AssertionError("a group spanning two communicators failed")
+
+
 def check_init_all_device_list() -> None:
     if not run_ranks("--init-all", 1, 3000):
         raise AssertionError("ncclCommInitAll did not validate its device list")
@@ -339,14 +672,28 @@ def main() -> int:
         return child_init_all(int(sys.argv[2]))
     if sys.argv[1:2] == ["--current-device-rank"]:
         return child_current_device_rank(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--premul-rank"]:
+        return child_premul_rank(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--fp8-rank"]:
+        return child_fp8_rank(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--exchange-p2p-rank"]:
+        return child_exchange_p2p_rank(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--partial-p2p-rank"]:
+        return child_partial_p2p_rank(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--multi-comm"]:
+        return child_multi_comm(int(sys.argv[2]))
     if not LIBNCCL.exists():
         print(f"missing NCCL library: {LIBNCCL}", file=sys.stderr)
         return 2
     check_partial_real_nccl()
     check_lifecycle_contracts()
     check_empty_point_to_point()
+    check_point_to_point_pairing()
+    check_multi_communicator_groups()
     check_init_all_device_list()
     check_comm_binds_current_device()
+    check_premul_sum_operators()
+    check_fp8_compute_capability_gate()
     check_split_timeout()
     check_reduce_over_socket_payloads()
     print("nccl stubs smoke test passed")
