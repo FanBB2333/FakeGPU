@@ -55,6 +55,12 @@
 - Mixed-precision training plans size Adam and momentum state in FP32 next
   to the master copy, as DeepSpeed and PyTorch AMP keep it: 4 more bytes per
   parameter than before.
+- FakeCUDA `torch.cuda.mem_get_info()`, and the free memory that simulated
+  out-of-memory errors report, leave out a modeled CUDA context of 601.5 MiB.
+  The default was measured once on one Ampere GPU (sm_80) with torch 2.9.1
+  after the first cuBLAS call; other GPUs and drivers hold different amounts.
+  `FAKEGPU_CUDA_CONTEXT_BYTES` sets another value, and `0` restores the
+  previous numbers. Allocations can still use the whole profile memory.
 
 ### Fixed
 
@@ -83,6 +89,12 @@
   returns its segment and block layout.
 - The FakeCUDA memory API raises PyTorch's errors for a device index beyond
   the device count instead of reporting zero memory.
+- The FakeCUDA caching allocator models expandable segments, separate cached
+  blocks per stream, `Tensor.record_stream()`, garbage collection under a
+  memory fraction, and the release of oversize cached blocks before a retry.
+  Fraction rounding, out-of-memory wording and statistics keys follow the
+  installed torch. Allocation traces match a real GPU's allocated and
+  reserved bytes, segments and counters.
 - The console no longer fails with `NoMatches` when its periodic refresh
   fires while the app is shutting down.
 - FakeCUDA autocast now defaults to float16 like CUDA instead of the CPU

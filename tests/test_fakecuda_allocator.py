@@ -219,7 +219,11 @@ def test_allocator_oom_message_matches_cuda_caching_allocator() -> None:
         "2.00 GiB",
     ]
 
-    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    # Free memory is cudaMemGetInfo(); without the modeled CUDA context it
+    # is the capacity left after the reserved segments.
+    tracker = _DeviceMemoryTracker(
+        [64 * MIB], caching_allocator=True, context_bytes=0
+    )
     tracker.allocate(1, 60 * MIB - 100, 0)
     with pytest.raises(torch.OutOfMemoryError) as excinfo:
         tracker.allocate(2, 5 * MIB, 0)
