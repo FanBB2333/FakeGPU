@@ -1270,7 +1270,14 @@ def _fsdp_settings(
         tokens = []
     else:
         raise FinetuneConfigError("fsdp must be a strategy string, list or boolean")
-    strategies = {"full_shard", "shard_grad_op", "no_shard", "hybrid_shard"}
+    # transformers.trainer_utils.FSDPOption sharding strategies.
+    strategies = {
+        "full_shard",
+        "shard_grad_op",
+        "no_shard",
+        "hybrid_shard",
+        "hybrid_shard_zero2",
+    }
     if set(tokens) - strategies - {"offload", "auto_wrap"}:
         raise FinetuneConfigError("unsupported FSDP options")
     selected = set(tokens) & strategies

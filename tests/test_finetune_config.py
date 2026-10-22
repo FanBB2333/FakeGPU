@@ -498,6 +498,14 @@ def test_fsdp_strategy_and_axolotl_fsdp2() -> None:
     assert result["distributed_config"]["parameter_offload_device"] == "cpu"
 
 
+def test_fsdp_accepts_hybrid_shard_zero2() -> None:
+    # transformers FSDPOption.HYBRID_SHARD_ZERO2 = "hybrid_shard_zero2".
+    result = normalize_finetune_config(
+        hf_config(fsdp="hybrid_shard_zero2 auto_wrap", world_size=4)
+    )
+    assert result["distributed_config"]["sharding_strategy"] == "hybrid_shard_zero2"
+
+
 def test_fsdp_activation_checkpointing_is_preserved() -> None:
     result = normalize_finetune_config(
         hf_config(

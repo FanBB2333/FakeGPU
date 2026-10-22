@@ -728,6 +728,8 @@
   parameter shard at rest (`parameters_sharded` is true, with the new
   `parameters_resharded_after_forward` false), add the unsharded parameters
   from forward through backward and drop them for the optimizer step.
+  Fine-tuning configurations accept the Hugging Face `fsdp` option
+  `hybrid_shard_zero2` as well.
 - Training-plan phases describe a steady-state iteration. Forward and
   backward hold the optimizer state and master weights, and ZeRO-3 forward
   holds its gradient partition. The Adam temporary is one moment in the
