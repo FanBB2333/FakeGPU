@@ -68,6 +68,10 @@
   `GPU (\d+):` and `UUID: ([^)]+)` parsers work. Profile, compute capability,
   PCI bus ID and the MIG GI/CI/memory details moved to `-q` and `--json`. The
   `GPU 0 @ host` form remains only when several hosts are shown.
+- `fakegpu nvidia-smi -i` with a selector that matches no GPU prints `No
+  devices were found` and exits 6, as nvidia-smi does, instead of printing
+  nothing and exiting 0. `--format` accepts `csv`, `noheader` and `nounits`
+  in any order (`--format=noheader,csv`), as nvidia-smi 580 does.
 
 ### Fixed
 

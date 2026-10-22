@@ -611,7 +611,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--format",
         default=None,
         help=(
-            "Query output format: csv, csv,noheader, csv,nounits, or json."
+            "Query output format: csv, noheader and nounits in any order "
+            "(CSV is the default), or json."
         ),
     )
     parser.add_argument(
@@ -778,6 +779,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 device_selectors=selectors,
                 stale_after_seconds=args.stale_after_seconds,
             )
+            if selectors and states and not inventory["devices"]:
+                # nvidia-smi 580.178.04 with -i 9, -i GPU-<unknown> or an
+                # unknown bus ID prints this on stdout and exits 6 ("A query
+                # to find an object was unsuccessful").
+                print("No devices were found")
+                for error in errors:
+                    print(f"warning: {error}", file=sys.stderr)
+                return 6
 
             # Like nvidia-smi, a looping query appends rows under one header.
             if refresh and not args.json and query is None:
@@ -913,14 +922,16 @@ def _parse_query_format(
     )
     if parts == ("json",):
         return {"kind": "json", "noheader": True, "nounits": True}
-    if not parts or parts[0] != "csv":
-        parser.error("--format must start with csv or equal json")
-    options = set(parts[1:])
-    unknown = options - {"noheader", "nounits"}
+    # nvidia-smi 580.178.04 accepts its modifiers in any order and repeated,
+    # and prints CSV without "csv" too: --format=noheader,csv and
+    # --format=noheader both exit 0. An unknown modifier exits 2.
+    options = set(parts)
+    unknown = options - {"csv", "noheader", "nounits"}
     if unknown:
         parser.error(
-            "unsupported --format option(s): "
+            "Format modifier is not recognized: "
             + ", ".join(sorted(unknown))
+            + " (use csv, noheader and nounits, or json alone)"
         )
     return {
         "kind": "csv",

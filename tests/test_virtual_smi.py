@@ -1723,3 +1723,54 @@ def test_virtual_smi_list_names_hosts_only_when_several_are_shown(
         "GPU 0 @ node-a: Fake NVIDIA Test GPU",
         "GPU 0 @ node-b: Fake NVIDIA Test GPU",
     ]
+
+
+def test_virtual_smi_exits_6_when_a_selector_matches_no_gpu(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+
+    # nvidia-smi 580.178.04: -i 9, -i GPU-nonexistent and an unknown bus ID
+    # print "No devices were found" on stdout and exit 6, in every view.
+    for view in (
+        [], ["-q"], ["--query-gpu=index", "--format=csv"],
+        ["--query-compute-apps=pid", "--format=csv"],
+    ):
+        for selector in ("9", "GPU-nonexistent", "00000000:99:00.0"):
+            assert main([*view, "--state", str(path), "-i", selector]) == 6
+            assert capsys.readouterr().out == "No devices were found\n"
+
+    # A list that matches some GPUs prints those (-i 0,9 printed GPU 0).
+    assert main([
+        "--state", str(path), "-i", "0,9", "--query-gpu=index", "--format=csv",
+    ]) == 0
+    assert capsys.readouterr().out.splitlines() == ["index", "0"]
+
+
+def test_virtual_smi_accepts_format_modifiers_in_any_order(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "state.json"
+    SmiStatePublisher(path, _snapshot).publish_once(running=True)
+
+    # nvidia-smi 580.178.04 printed the same row for each of these, and
+    # CSV with a header when --format was left out.
+    for value in ("csv,noheader", "noheader,csv", "noheader", "csv,noheader,csv"):
+        assert main([
+            "--state", str(path), "--query-gpu=index,memory.total",
+            f"--format={value}",
+        ]) == 0
+        assert capsys.readouterr().out == "0, 8192 MiB\n", value
+    assert main(["--state", str(path), "--query-gpu=index", "--format=nounits,noheader,csv"]) == 0
+    assert capsys.readouterr().out == "0\n"
+    assert main(["--state", str(path), "--query-gpu=index"]) == 0
+    assert capsys.readouterr().out == "index\n0\n"
+
+    # "Format modifier is not recognized." exits 2.
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--state", str(path), "--query-gpu=index", "--format=csv,bogus"])
+    assert exc_info.value.code == 2
+    assert "Format modifier is not recognized" in capsys.readouterr().err

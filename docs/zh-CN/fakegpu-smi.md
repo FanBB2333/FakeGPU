@@ -68,12 +68,14 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 - `-L` 输出 nvidia-smi 格式的 `GPU 0: NAME (UUID: GPU-...)` 行，MIG 设备缩进
   列在所属 GPU 下方。只有同时显示多台主机时，索引后才带主机名。profile、
   compute capability 和 PCI Bus ID 见 `-q` 与 `--json`。
-- `-i` 按设备索引、UUID、PCI Bus ID 或 profile ID 筛选。`--json` 输出完整的标准化
-  数据。FakeGPU 写入 state schema v2，仍可读取 v1。
+- `-i` 按设备索引、UUID、PCI Bus ID 或 profile ID 筛选；没有匹配的 GPU 时和
+  nvidia-smi 一样输出 `No devices were found` 并以状态 6 退出。`--json`
+  输出完整的标准化数据。FakeGPU 写入 state schema v2，仍可读取 v1。
 - `--query-runtime` 以 CSV 或 JSON 输出相同的运行时信息。`--help-query-runtime`
   列出全部字段。
 - CSV 输出和 `nvidia-smi` 一样用 `, ` 分隔字段，只有包含逗号、引号或换行的单元格
-  才加引号。`--query-gpu=count` 在每一行重复 GPU 数量，符合 Accelerate 的预期；
+  才加引号。`--format` 的 `csv`、`noheader`、`nounits` 可按任意顺序给出，
+  默认输出 CSV。`--query-gpu=count` 在每一行重复 GPU 数量，符合 Accelerate 的预期；
   用 `-i` 选择部分 GPU 时仍计入全部 GPU。
 - `--query-gpu` 与 `--query-compute-apps` 还接受 nvidia-smi 590 `--help-query-*`
   列出的全部字段与别名，列名与 nvidia-smi 一致。FakeGPU 未建模的字段（如

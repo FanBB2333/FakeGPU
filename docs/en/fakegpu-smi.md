@@ -73,15 +73,17 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
   devices indented below their GPU. A host name follows the index only when
   several hosts are shown. Profile, compute capability and PCI bus ID are in
   `-q` and `--json`.
-- `-i` selects devices by index, UUID, PCI bus ID, or profile ID. `--json`
-  prints the full normalized inventory. FakeGPU writes state schema v2 and can
-  still read v1.
+- `-i` selects devices by index, UUID, PCI bus ID, or profile ID. When it
+  matches no GPU, the command prints `No devices were found` and exits 6,
+  like nvidia-smi. `--json` prints the full normalized inventory. FakeGPU
+  writes state schema v2 and can still read v1.
 - `--query-runtime` exposes the same runtime details as CSV or JSON.
   `--help-query-runtime` lists every field.
 - CSV output separates fields with `, ` like `nvidia-smi` and quotes only
-  cells that contain a comma, quote, or newline. `--query-gpu=count` repeats
-  the number of GPUs on every row, as Accelerate expects, and still counts
-  every GPU when `-i` selects some.
+  cells that contain a comma, quote, or newline. `--format` takes `csv`,
+  `noheader` and `nounits` in any order, and CSV is the default.
+  `--query-gpu=count` repeats the number of GPUs on every row, as Accelerate
+  expects, and still counts every GPU when `-i` selects some.
 - `--query-gpu` and `--query-compute-apps` also accept every field and alias
   of nvidia-smi 590's `--help-query-*` lists, headed by nvidia-smi's column
   names. Fields FakeGPU does not model, such as `utilization.gpu` or
