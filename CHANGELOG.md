@@ -72,6 +72,8 @@
   devices were found` and exits 6, as nvidia-smi does, instead of printing
   nothing and exiting 0. `--format` accepts `csv`, `noheader` and `nounits`
   in any order (`--format=noheader,csv`), as nvidia-smi 580 does.
+- `fakegpu nvidia-smi` prints power limits with two decimals, `400.00 W`,
+  like nvidia-smi.
 
 ### Fixed
 

@@ -990,7 +990,7 @@ def render_query(
             _csv_row(
                 _query_csv_value(
                     record[field],
-                    unit=available[field].unit,
+                    spec=available[field],
                     nounits=bool(output_format["nounits"]),
                 )
                 for field in fields

@@ -1595,8 +1595,24 @@ def test_virtual_smi_reports_the_reference_power_ceiling_and_unknown_specs(
     # The a100 profile's typical workload power is unknown (0); it is not the
     # ceiling. Specifications the catalog marks unknown print [N/A], not 0.
     assert rows == [
-        ["0", "400.0", "400.0", "1410", "108"],
+        ["0", "400.00", "400.00", "1410", "108"],
         ["1", "[N/A]", "[N/A]", "[N/A]", "[N/A]"],
+    ]
+
+    # nvidia-smi 580.178.04 prints watts with two decimals: "700.00 W" with
+    # units, "700.00" with nounits.
+    assert main([
+        "--state", str(path), "-i", "0",
+        "--query-gpu=power.default_limit,power.min_limit,power.max_limit",
+        "--format=csv,noheader",
+    ]) == 0
+    assert capsys.readouterr().out == "400.00 W, [N/A], 400.00 W\n"
+    assert main([
+        "--state", str(path), "-i", "0", "--query-gpu=power.max_limit",
+        "--format=json",
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)["records"] == [
+        {"power.max_limit": 400.0}
     ]
 
 

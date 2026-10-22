@@ -29,6 +29,9 @@ class QueryField:
     precision: int = 0
     # The field nvidia-smi names in the CSV header when this one is an alias.
     header: str | None = None
+    # CSV prints exactly `precision` decimals, as nvidia-smi prints watts
+    # ("700.00 W" on an H100 SXM).
+    fixed: bool = False
 
 
 GPU_QUERY_FIELDS: dict[str, QueryField] = {
@@ -196,19 +199,22 @@ GPU_QUERY_FIELDS: dict[str, QueryField] = {
         "profile.max_power_limit_mw",
         unit="W",
         divisor=1000,
-        precision=1,
+        precision=2,
+        fixed=True,
     ),
     "power.min_limit": QueryField(
         "profile.min_power_limit_mw",
         unit="W",
         divisor=1000,
-        precision=1,
+        precision=2,
+        fixed=True,
     ),
     "power.max_limit": QueryField(
         "profile.max_power_limit_mw",
         unit="W",
         divisor=1000,
-        precision=1,
+        precision=2,
+        fixed=True,
     ),
     "sm_count": QueryField("profile.sm_count"),
     "clocks.current.sm": QueryField(
@@ -683,15 +689,22 @@ def _query_csv_header(field: str, spec: QueryField) -> str:
 def _query_csv_value(
     value: Any,
     *,
-    unit: str | None,
+    spec: QueryField,
     nounits: bool,
 ) -> str:
     if value is None:
         # nvidia-smi's CSV marker for a value the GPU does not report.
         return "[N/A]"
-    text = str(value)
-    if unit and not nounits:
-        text += f" {unit}"
+    if (
+        spec.fixed
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    ):
+        text = f"{float(value):.{spec.precision}f}"
+    else:
+        text = str(value)
+    if spec.unit and not nounits:
+        text += f" {spec.unit}"
     return text
 
 
