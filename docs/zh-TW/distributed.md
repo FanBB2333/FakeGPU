@@ -13,6 +13,43 @@ FSDP2 `full_shard` 可向 `plan-training --parameter-shapes layout.json` 提供
 統一的 `--parameter-element-bytes`。它依原生每參數第 0 維 chunk 計算，並以最大的
 rank 編列預算。未提供形狀時使用均衡切分近似。自訂 placement 不在建模範圍內。
 
+DeepSpeed ZeRO 的 bucket 大小以元素個數計，預設值與 DeepSpeed 相同：
+`reduce_bucket_size` 與 `allgather_bucket_size` 為 5e8，`stage3_prefetch_bucket_size`
+為 5e7，`stage3_max_live_parameters` 與 `stage3_max_reuse_distance` 為 1e9。
+
+- reduce bucket 佔用元素個數乘以模型 dtype 的位元組數，模型再小也不縮減。開啟
+  `contiguous_gradients`（預設）時，stage 1 與 2 在 backward 期間持有它，並在
+  optimizer step 之前釋放；`overlap_comm` 使其加倍。stage 3 在整個執行期間持有
+  一個 bucket。
+- allgather bucket 原地寫入參數，不佔用記憶體。
+- ZeRO-3 的 gathered window 約為 `stage3_max_reuse_distance` 的一半加上 prefetch
+  bucket。單一 rank 不做 gather。
+- 設為 `auto` 的大小在傳入 `--hidden-size` 時取 HF Trainer 與 Accelerate 填入的值：
+  reduce bucket 為 `hidden_size²`，prefetch bucket 為 `0.9·hidden_size²`。未傳入時
+  使用 DeepSpeed 預設值，並在 notes 中註明。
+
+以上依據 DeepSpeed 0.15.3 與 0.19.8。FSDP 沒有 bucket 設定，FSDP 規劃仍沿用
+FakeGPU 的啟發式：每次 collective 取 `min(參數位元組數, 500 MB)`。
+
+FSDP `SHARD_GRAD_OP` 與 FSDP2 `reshard_after_forward=False`（`shard_grad_op`）
+平時只保留每個 rank 的參數分片。規劃從 forward 到 backward 結束額外計入完整的
+未分片參數，並在 optimizer step 前重新分片，與 FSDP 在梯度同步步 backward 之後
+的行為一致。`_HYBRID_SHARD_ZERO2`（`hybrid_shard_zero2`）在 shard group 內做同樣
+的事，在 group 之間複製。與 `HYBRID_SHARD` 一樣，group 預設取 Accelerate 每台
+機器的程序數。
+
+各階段描述的是穩定狀態下的一次迭代：
+
+- forward 與 backward 已持有先前各步留下的 optimizer state 與 master 權重。
+  ZeRO-3 還持有其梯度分區，梯度累積時也保留梯度。
+- optimizer step 時，foreach Adam（torch 在 CUDA 上的預設實作）額外配置一個
+  moment 大小的暫存張量。
+- DeepSpeed ZeRO 還會建立梯度分區的 FP32 副本。stage 1 與 2 會先釋放 16 位元梯度。
+
+在一張 Ampere GPU（sm_80）上以 DeepSpeed 0.15.3 單 rank 訓練 0.6B BF16 模型，
+stage 1 到 3 的 step 峰值與預測相差不到 0.2%。這不能說明其他模型規模或 rank 數
+下有相同的精度。
+
 [版本化原生驗收矩陣](../../tests/data/research_native_evidence.json)記錄六組
 FP32/FP16/BF16 LoRA 與 attention CPU_SIM 案例、CPU 與 GPU 上 tiny Qwen3 MoE 的
 路由與梯度，以及兩個 CPU rank 執行原生 DDP 與 FSDP2。實體 TP/PP/CP/EP、多 GPU

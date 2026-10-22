@@ -17,6 +17,17 @@ from .structured_io import load_mapping
 SCHEMA_VERSION = "fakegpu.training_plan.v1"
 SUPPORTED_FRAMEWORKS = {"auto", "deepspeed", "accelerate", "fsdp", "fsdp2"}
 
+# DeepSpeed ZeRO defaults, in elements (runtime/zero/config.py, identical in
+# DeepSpeed 0.15.3 and 0.19.8).
+DEEPSPEED_REDUCE_BUCKET_ELEMENTS = 500_000_000
+DEEPSPEED_ALLGATHER_BUCKET_ELEMENTS = 500_000_000
+DEEPSPEED_STAGE3_PREFETCH_BUCKET_ELEMENTS = 50_000_000
+DEEPSPEED_STAGE3_MAX_LIVE_PARAMETERS = 1_000_000_000
+DEEPSPEED_STAGE3_MAX_REUSE_DISTANCE = 1_000_000_000
+# FSDP has no bucket setting; FakeGPU budgets this many bytes per collective.
+FSDP_HEURISTIC_BUCKET_BYTES = 500_000_000
+_HYBRID_STRATEGIES = {"hybrid_shard", "hybrid_shard_zero2"}
+
 
 class TrainingPlanError(ValueError):
     pass
@@ -59,12 +70,16 @@ def estimate_training_plan(
     optimizer: str = "adamw",
     parameter_element_bytes: int = 2,
     parameter_shapes: Sequence[Sequence[int]] | None = None,
+    hidden_size: int | None = None,
 ) -> dict[str, Any]:
     """Estimate rank-local training memory from a normalized configuration.
 
     The estimate separates persistent tensor storage, communication workspaces,
     phase peaks, and CPU-offloaded bytes. It intentionally exposes every
     formula so real measurements can replace individual terms.
+
+    ``hidden_size`` resolves DeepSpeed bucket sizes set to ``"auto"`` the way
+    the HF Trainer and Accelerate fill them.
     """
 
     for name, value in (
@@ -73,6 +88,12 @@ def estimate_training_plan(
     ):
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise TrainingPlanError(f"{name} must be a non-negative integer")
+    if hidden_size is not None and (
+        not isinstance(hidden_size, int)
+        or isinstance(hidden_size, bool)
+        or hidden_size <= 0
+    ):
+        raise TrainingPlanError("hidden_size must be a positive integer")
     if (
         not isinstance(parameter_element_bytes, int)
         or isinstance(parameter_element_bytes, bool)
@@ -94,8 +115,12 @@ def estimate_training_plan(
 
     strategy = str(normalized.get("sharding_strategy") or "replicated")
     zero_stage = int(normalized.get("zero_stage", 0) or 0)
+    # full_shard reshards parameters after forward; SHARD_GRAD_OP keeps them
+    # unsharded until the end of backward. Both shard them outside compute.
     full_shard = strategy in {"full_shard", "hybrid_shard"} or zero_stage >= 3
-    if strategy == "hybrid_shard":
+    shard_grad_op = strategy in {"shard_grad_op", "hybrid_shard_zero2"}
+    shard_parameters = full_shard or shard_grad_op
+    if strategy in _HYBRID_STRATEGIES:
         shard_group_size = _positive_int(
             normalized.get("shard_group_size", 1),
             "shard_group_size",
@@ -106,12 +131,8 @@ def estimate_training_plan(
             )
     else:
         shard_group_size = ranks
-    shard_gradients = (
-        full_shard or strategy == "shard_grad_op" or zero_stage >= 2
-    )
-    shard_optimizer = (
-        full_shard or strategy == "shard_grad_op" or zero_stage >= 1
-    )
+    shard_gradients = shard_parameters or zero_stage >= 2
+    shard_optimizer = shard_parameters or zero_stage >= 1
 
     parameter_layout = None
     if parameter_shapes is not None:
@@ -147,7 +168,7 @@ def estimate_training_plan(
 
     rank_parameter_storage_bytes = (
         partition_bytes(parameter_bytes)
-        if full_shard
+        if shard_parameters
         else parameter_bytes
     )
     gradient_bytes = parameter_bytes
@@ -235,55 +256,59 @@ def estimate_training_plan(
         0 if offload_optimizer else rank_master_parameter_bytes
     )
 
-    reduce_bucket = _communication_bucket_bytes(
-        normalized,
-        bytes_key="reduce_bucket_bytes",
-        elements_key="reduce_bucket_elements",
-        parameter_element_bytes=parameter_element_bytes,
-    )
-    allgather_bucket = _communication_bucket_bytes(
-        normalized,
-        bytes_key="allgather_bucket_bytes",
-        elements_key="allgather_bucket_elements",
-        parameter_element_bytes=parameter_element_bytes,
-    )
-    stage3_prefetch_bucket = _communication_bucket_bytes(
-        normalized,
-        bytes_key="stage3_prefetch_bucket_bytes",
-        elements_key="stage3_prefetch_bucket_elements",
-        parameter_element_bytes=parameter_element_bytes,
-    )
-    if min(reduce_bucket, allgather_bucket, stage3_prefetch_bucket) < 0:
-        raise TrainingPlanError("communication bucket sizes must be non-negative")
-    default_bucket = min(
-        parameter_bytes,
-        500_000_000,
-    )
-    if shard_gradients and reduce_bucket == 0:
-        reduce_bucket = default_bucket
-    if full_shard and allgather_bucket == 0:
-        allgather_bucket = default_bucket
-    communication_workspace_bytes = max(
-        reduce_bucket,
-        allgather_bucket,
-        stage3_prefetch_bucket,
-    )
-
-    gathered_parameter_window = (
-        min(
-            parameter_bytes,
-            max(allgather_bucket, rank_parameter_storage_bytes),
+    notes: list[str] = []
+    if normalized.get("framework") == "deepspeed":
+        buckets = _deepspeed_buckets(
+            normalized,
+            zero_stage=zero_stage,
+            parameter_bytes=parameter_bytes,
+            element_bytes=parameter_element_bytes,
+            shard_group_size=shard_group_size,
+            rank_parameter_storage_bytes=rank_parameter_storage_bytes,
+            offload_parameters=offload_parameters,
+            offload_optimizer=offload_optimizer,
+            hidden_size=hidden_size,
+            notes=notes,
         )
-        if full_shard
-        else rank_parameter_storage_bytes
-        if offload_parameters
-        else 0
-    )
+    else:
+        buckets = _fsdp_heuristic_buckets(
+            normalized,
+            parameter_bytes=parameter_bytes,
+            element_bytes=parameter_element_bytes,
+            rank_parameter_storage_bytes=rank_parameter_storage_bytes,
+            full_shard=full_shard,
+            shard_grad_op=shard_grad_op,
+            shard_gradients=shard_gradients,
+            offload_parameters=offload_parameters,
+        )
+    workspace = buckets["workspace_by_phase"]
+    communication_workspace_bytes = max(workspace.values())
+    gathered_parameter_window = buckets["gathered_parameter_window_bytes"]
+    # Foreach Adam (torch's CUDA default) allocates sqrt(exp_avg_sq), one
+    # moment's worth, in the moments' dtype.
     optimizer_temporary_bytes = (
+        gpu_optimizer_state_bytes // 2 if optimizer in {"adam", "adamw"} else 0
+    )
+    deepspeed_zero = normalized.get("framework") == "deepspeed" and zero_stage >= 1
+    # DeepSpeed ZeRO steps an FP32 copy of the gradient partition. Stages 1
+    # and 2 free the 16-bit gradients first; stage 3 keeps its gradient
+    # partition buffer from engine start.
+    fp32_gradient_bytes = (
+        gpu_master_parameter_bytes if deepspeed_zero else 0
+    )
+    persistent_gradients = deepspeed_zero and zero_stage >= 3
+    forward_gradient_bytes = (
         gpu_gradient_bytes
-        if optimizer in {"adam", "adamw"} and not offload_optimizer
+        if persistent_gradients
+        or int(normalized.get("gradient_accumulation_steps", 1) or 1) > 1
         else 0
     )
+    # Optimizer state and master weights persist across iterations, so every
+    # phase after the first optimizer step holds them.
+    resident = {
+        "optimizer_state": gpu_optimizer_state_bytes,
+        "master_parameters": gpu_master_parameter_bytes,
+    }
     timeline = [
         _phase(
             "model_load",
@@ -298,32 +323,37 @@ def estimate_training_plan(
             "forward",
             {
                 "parameters": gpu_parameter_bytes,
+                **resident,
+                "gradients": forward_gradient_bytes,
                 "activations": retained_activation_bytes,
                 "allgathered_parameters": gathered_parameter_window,
-                "communication_workspace": communication_workspace_bytes,
+                "communication_workspace": workspace["forward"],
             },
         ),
         _phase(
             "backward",
             {
                 "parameters": gpu_parameter_bytes,
+                **resident,
                 "activations": retained_activation_bytes,
                 "gradients": gpu_gradient_bytes,
                 "allgathered_parameters": gathered_parameter_window,
-                "communication_workspace": communication_workspace_bytes,
+                "communication_workspace": workspace["backward"],
             },
         ),
         _phase(
             "optimizer_step",
             {
                 "parameters": gpu_parameter_bytes,
-                "gradients": gpu_gradient_bytes,
-                "optimizer_state": gpu_optimizer_state_bytes,
-                "master_parameters": gpu_master_parameter_bytes,
-                "optimizer_temporary": optimizer_temporary_bytes,
-                "communication_workspace": (
-                    reduce_bucket if shard_gradients else 0
+                "gradients": (
+                    0
+                    if fp32_gradient_bytes and not persistent_gradients
+                    else gpu_gradient_bytes
                 ),
+                "fp32_gradients": fp32_gradient_bytes,
+                **resident,
+                "optimizer_temporary": optimizer_temporary_bytes,
+                "communication_workspace": workspace["optimizer_step"],
             },
         ),
     ]
@@ -345,7 +375,8 @@ def estimate_training_plan(
             "strategy": strategy,
             "zero_stage": zero_stage,
             "shard_group_size": shard_group_size,
-            "parameters_sharded": full_shard,
+            "parameters_sharded": shard_parameters,
+            "parameters_resharded_after_forward": full_shard,
             "gradients_sharded": shard_gradients,
             "optimizer_state_sharded": shard_optimizer,
         },
@@ -387,12 +418,7 @@ def estimate_training_plan(
         },
         "estimated_rank_peak_bytes": peak,
         "communication": {
-            "reduce_bucket_bytes": reduce_bucket,
-            "allgather_bucket_bytes": allgather_bucket,
-            "stage3_prefetch_bucket_bytes": stage3_prefetch_bucket,
-            "overlap_communication": bool(
-                normalized.get("overlap_communication", False)
-            ),
+            **buckets["communication"],
             "gradient_accumulation_steps": int(
                 normalized.get("gradient_accumulation_steps", 1) or 1
             ),
@@ -403,11 +429,13 @@ def estimate_training_plan(
             "backend_operator_workspaces",
             "prefetch_schedule_specific_overlap",
             "fused_optimizer_temporaries",
+            *buckets["unmodeled_components"],
         ],
         "notes": [
             "Gradient accumulation retains one gradient buffer; it does not multiply gradient storage by the accumulation count.",
             "Activation checkpointing uses the configured retention factor and does not predict recomputation time.",
-            "ZeRO and FSDP prefetch windows depend on module granularity; bucket sizes provide a conservative communication workspace.",
+            *buckets["notes"],
+            *notes,
             "Use a matching real-GPU calibration to replace unmodeled runtime and allocator terms.",
         ],
     }
@@ -443,6 +471,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--parameter-shapes",
         help="JSON/TOML/YAML object with shapes: [[...], ...]; explicit FSDP2 full_shard dim-0 layout.",
     )
+    parser.add_argument(
+        "--hidden-size",
+        type=int,
+        help=(
+            "Model hidden size; resolves DeepSpeed bucket sizes set to auto "
+            "as the HF Trainer and Accelerate do."
+        ),
+    )
     add_json_path_argument(parser)
     args = parser.parse_args(argv)
     try:
@@ -467,6 +503,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             optimizer=args.optimizer,
             parameter_element_bytes=args.parameter_element_bytes,
             parameter_shapes=shapes,
+            hidden_size=args.hidden_size,
         )
         if args.json_path:
             emit_json_report(args.json_path, report, "Training plan")
@@ -536,20 +573,37 @@ def _normalize_deepspeed(config: Mapping[str, Any]) -> dict[str, Any]:
             or checkpoint_config.get("cpu_checkpointing")
             or config.get("gradient_checkpointing")
         ),
-        "overlap_communication": _bool_value(
-            zero_config.get("overlap_comm", False)
+        # DeepSpeed defaults overlap_comm to True for stage 3 only and
+        # contiguous_gradients to True.
+        "overlap_communication": (
+            stage == 3
+            if zero_config.get("overlap_comm") is None
+            else _bool_value(zero_config["overlap_comm"])
         ),
         "contiguous_gradients": _bool_value(
-            zero_config.get("contiguous_gradients", False)
+            zero_config.get("contiguous_gradients", True)
         ),
-        "reduce_bucket_elements": _int_or_zero(
+        # Element counts; "auto" is filled by the HF Trainer or Accelerate
+        # from the model's hidden size.
+        "reduce_bucket_elements": _bucket_elements(
             zero_config.get("reduce_bucket_size"),
+            DEEPSPEED_REDUCE_BUCKET_ELEMENTS,
         ),
-        "allgather_bucket_elements": _int_or_zero(
+        "allgather_bucket_elements": _bucket_elements(
             zero_config.get("allgather_bucket_size"),
+            DEEPSPEED_ALLGATHER_BUCKET_ELEMENTS,
         ),
-        "stage3_prefetch_bucket_elements": _int_or_zero(
-            zero_config.get("stage3_prefetch_bucket_size"),
+        "stage3_prefetch_bucket_elements": _bucket_elements(
+            _zero_alias(zero_config, "stage3_prefetch_bucket_size"),
+            DEEPSPEED_STAGE3_PREFETCH_BUCKET_ELEMENTS,
+        ),
+        "stage3_max_live_parameters": _bucket_elements(
+            _zero_alias(zero_config, "stage3_max_live_parameters"),
+            DEEPSPEED_STAGE3_MAX_LIVE_PARAMETERS,
+        ),
+        "stage3_max_reuse_distance": _bucket_elements(
+            _zero_alias(zero_config, "stage3_max_reuse_distance"),
+            DEEPSPEED_STAGE3_MAX_REUSE_DISTANCE,
         ),
     }
 
@@ -664,9 +718,10 @@ def _normalize_fsdp(
         "NO_SHARD": "no_shard",
         "4": "hybrid_shard",
         "HYBRID_SHARD": "hybrid_shard",
-        "5": "shard_grad_op",
-        "_HYBRID_SHARD_ZERO2": "shard_grad_op",
-        "HYBRID_SHARD_ZERO2": "shard_grad_op",
+        # SHARD_GRAD_OP within the shard group, replicated across groups.
+        "5": "hybrid_shard_zero2",
+        "_HYBRID_SHARD_ZERO2": "hybrid_shard_zero2",
+        "HYBRID_SHARD_ZERO2": "hybrid_shard_zero2",
     }.get(raw_strategy)
     if strategy is None:
         raise TrainingPlanError(
@@ -691,7 +746,7 @@ def _normalize_fsdp(
     )
     default_shard_group_size = (
         min(hybrid_shard_group_size, world_size)
-        if strategy == "hybrid_shard"
+        if strategy in _HYBRID_STRATEGIES
         else world_size
     )
     shard_group_size = _positive_int(
@@ -811,6 +866,245 @@ def _int_or_zero(value: Any) -> int:
     if parsed < 0:
         raise TrainingPlanError("memory bucket size must be non-negative")
     return parsed
+
+
+def _deepspeed_buckets(
+    normalized: Mapping[str, Any],
+    *,
+    zero_stage: int,
+    parameter_bytes: int,
+    element_bytes: int,
+    shard_group_size: int,
+    rank_parameter_storage_bytes: int,
+    offload_parameters: bool,
+    offload_optimizer: bool,
+    hidden_size: int | None,
+    notes: list[str],
+) -> dict[str, Any]:
+    """Per-rank memory of DeepSpeed ZeRO buckets and the ZeRO-3 window.
+
+    Bucket sizes count elements in the model dtype, which is the reduction
+    dtype unless data_types.grad_accum_dtype differs.
+    """
+
+    def resolve(key: str, default: int, auto_value: int | None) -> int:
+        value = normalized.get(key)
+        if value is None:
+            return default
+        if value != "auto":
+            return int(value)
+        if auto_value is not None:
+            return auto_value
+        notes.append(
+            f"DeepSpeed {key.removesuffix('_elements')}=auto is unresolved"
+            + (
+                "; pass hidden_size, which the HF Trainer and Accelerate use "
+                "to fill it."
+                if hidden_size is None
+                else " because the HF Trainer and Accelerate do not fill it."
+            )
+            + f" The DeepSpeed default {default} was used."
+        )
+        return default
+
+    square = hidden_size * hidden_size if hidden_size else None
+    reduce_elements = resolve(
+        "reduce_bucket_elements", DEEPSPEED_REDUCE_BUCKET_ELEMENTS, square
+    )
+    allgather_elements = resolve(
+        "allgather_bucket_elements", DEEPSPEED_ALLGATHER_BUCKET_ELEMENTS, None
+    )
+    prefetch_elements = resolve(
+        "stage3_prefetch_bucket_elements",
+        DEEPSPEED_STAGE3_PREFETCH_BUCKET_ELEMENTS,
+        int(0.9 * square) if square else None,
+    )
+    max_live = resolve(
+        "stage3_max_live_parameters", DEEPSPEED_STAGE3_MAX_LIVE_PARAMETERS, None
+    )
+    max_reuse = resolve(
+        "stage3_max_reuse_distance", DEEPSPEED_STAGE3_MAX_REUSE_DISTANCE, None
+    )
+    overlap = normalized.get("overlap_communication")
+    overlap = zero_stage == 3 if overlap is None else _bool_value(overlap)
+    # Stages 1 and 2 force contiguous gradients when the optimizer is offloaded.
+    contiguous = _bool_value(normalized.get("contiguous_gradients", True)) or (
+        zero_stage in {1, 2} and offload_optimizer
+    )
+    parameter_elements = _ceil_div(parameter_bytes, element_bytes)
+    reduce_bucket = reduce_elements * element_bytes
+    # Without contiguous gradients each bucket's gradients are flattened into
+    # one transient copy, which never exceeds the gradients themselves.
+    uncontiguous_copy = min(reduce_elements, parameter_elements) * element_bytes
+    workspace = {"forward": 0, "backward": 0, "optimizer_step": 0}
+    buffers = 0
+    if zero_stage in {1, 2}:
+        # backward() allocates the bucket (a second one with overlap_comm);
+        # the reduction epilogue frees it before the optimizer step.
+        if contiguous:
+            buffers = 2 if overlap else 1
+            workspace["backward"] = buffers * reduce_bucket
+        else:
+            workspace["backward"] = uncontiguous_copy
+    elif zero_stage >= 3:
+        # Stage 3 allocates one bucket when the engine starts and keeps it.
+        if contiguous:
+            buffers = 1
+            workspace = dict.fromkeys(workspace, reduce_bucket)
+        else:
+            workspace["backward"] = uncontiguous_copy
+
+    window_elements = 0
+    if zero_stage >= 3 and (shard_group_size > 1 or offload_parameters):
+        # Parameters reused within stage3_max_reuse_distance stay gathered.
+        # Forward and backward visit every later parameter, so about half the
+        # distance is still gathered at the turn; prefetch adds up to the
+        # prefetch bucket while the gathered total is below max_live.
+        retained = _ceil_div(max_reuse, 2)
+        prefetch = min(prefetch_elements, max(0, max_live - retained))
+        window_elements = min(parameter_elements, retained + prefetch)
+    window = window_elements * element_bytes
+    if zero_stage < 3 and offload_parameters:
+        window = rank_parameter_storage_bytes
+
+    bucket_notes = []
+    unmodeled = []
+    if zero_stage >= 1:
+        bucket_notes.append(
+            "DeepSpeed ZeRO buckets follow DeepSpeed 0.15.3 and 0.19.8: "
+            "reduce_bucket_size elements of the model dtype, held during "
+            "backward by stages 1 and 2 (twice with overlap_comm) when "
+            "contiguous_gradients is on, and for the whole run by stage 3. "
+            "The allgather bucket writes in place and allocates nothing."
+        )
+    if zero_stage >= 3:
+        bucket_notes.append(
+            "The ZeRO-3 gathered window is about half of "
+            "stage3_max_reuse_distance plus prefetch up to the prefetch bucket "
+            "while fewer than stage3_max_live_parameters are gathered; one "
+            "rank gathers nothing because its partition is the parameter. A "
+            "module larger than the window, such as an untied LM head, is "
+            "gathered whole."
+        )
+        unmodeled.extend(
+            [
+                "zero3_current_module_parameters",
+                "zero3_persistent_small_parameters",
+            ]
+        )
+    return {
+        "workspace_by_phase": workspace,
+        "gathered_parameter_window_bytes": window,
+        "communication": {
+            "bucket_model": "deepspeed_zero",
+            "reduce_bucket_elements": reduce_elements,
+            "reduce_bucket_bytes": reduce_bucket,
+            "reduce_bucket_buffers": buffers,
+            "allgather_bucket_elements": allgather_elements,
+            "allgather_bucket_bytes": allgather_elements * element_bytes,
+            "stage3_prefetch_bucket_elements": prefetch_elements,
+            "stage3_prefetch_bucket_bytes": prefetch_elements * element_bytes,
+            "stage3_max_live_parameters": max_live,
+            "stage3_max_reuse_distance": max_reuse,
+            "gathered_parameter_window_elements": window_elements,
+            "contiguous_gradients": contiguous,
+            "overlap_communication": overlap,
+        },
+        "notes": bucket_notes,
+        "unmodeled_components": unmodeled,
+    }
+
+
+def _fsdp_heuristic_buckets(
+    normalized: Mapping[str, Any],
+    *,
+    parameter_bytes: int,
+    element_bytes: int,
+    rank_parameter_storage_bytes: int,
+    full_shard: bool,
+    shard_grad_op: bool,
+    shard_gradients: bool,
+    offload_parameters: bool,
+) -> dict[str, Any]:
+    reduce_bucket, allgather_bucket, prefetch_bucket = (
+        _communication_bucket_bytes(
+            normalized,
+            bytes_key=f"{name}_bytes",
+            elements_key=f"{name}_elements",
+            parameter_element_bytes=element_bytes,
+        )
+        for name in (
+            "reduce_bucket",
+            "allgather_bucket",
+            "stage3_prefetch_bucket",
+        )
+    )
+    if min(reduce_bucket, allgather_bucket, prefetch_bucket) < 0:
+        raise TrainingPlanError("communication bucket sizes must be non-negative")
+    default_bucket = min(parameter_bytes, FSDP_HEURISTIC_BUCKET_BYTES)
+    if shard_gradients and reduce_bucket == 0:
+        reduce_bucket = default_bucket
+    if full_shard and allgather_bucket == 0:
+        allgather_bucket = default_bucket
+    workspace_bytes = max(reduce_bucket, allgather_bucket, prefetch_bucket)
+    if full_shard:
+        window = min(
+            parameter_bytes, max(allgather_bucket, rank_parameter_storage_bytes)
+        )
+    elif shard_grad_op:
+        # Every unit stays unsharded from its forward to the end of backward;
+        # the post-backward hook reshards it before the optimizer step.
+        window = parameter_bytes
+    elif offload_parameters:
+        window = rank_parameter_storage_bytes
+    else:
+        window = 0
+    notes = []
+    if full_shard or shard_gradients:
+        notes.append(
+            "FSDP has no bucket setting. FakeGPU budgets min(parameter bytes, "
+            "500 MB) per reduce-scatter and all-gather and a gathered window of "
+            "max(all-gather bucket, local shard); these are heuristics."
+        )
+    if shard_grad_op:
+        notes.append(
+            "SHARD_GRAD_OP and HYBRID_SHARD_ZERO2 keep the unsharded parameters "
+            "from forward through backward and reshard them before the "
+            "optimizer step, except inside no_sync()."
+        )
+    return {
+        "workspace_by_phase": {
+            "forward": workspace_bytes,
+            "backward": workspace_bytes,
+            "optimizer_step": reduce_bucket if shard_gradients else 0,
+        },
+        "gathered_parameter_window_bytes": window,
+        "communication": {
+            "bucket_model": "fsdp_heuristic",
+            "reduce_bucket_bytes": reduce_bucket,
+            "allgather_bucket_bytes": allgather_bucket,
+            "stage3_prefetch_bucket_bytes": prefetch_bucket,
+            "overlap_communication": _bool_value(
+                normalized.get("overlap_communication", False)
+            ),
+        },
+        "notes": notes,
+        "unmodeled_components": [],
+    }
+
+
+def _zero_alias(zero_config: Mapping[str, Any], name: str) -> Any:
+    # DeepSpeed accepts each stage3_* key under its field name as well.
+    value = zero_config.get(name)
+    return zero_config.get(name.removeprefix("stage3_")) if value is None else value
+
+
+def _bucket_elements(value: Any, default: int) -> int | str:
+    if value is None:
+        return default
+    if str(value).strip().lower() == "auto":
+        return "auto"
+    return _int_or_zero(value)
 
 
 def _communication_bucket_bytes(

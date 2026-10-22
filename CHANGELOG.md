@@ -396,6 +396,36 @@
   Accelerate's `Accelerator().device` and transformers'
   `TrainingArguments.device` chose MPS before CUDA, so single-process
   training ran on MPS and bypassed the simulated GPUs.
+- Checkpoint inspection reads every dtype a safetensors 0.8 header accepts:
+  `F8_E4M3FNUZ`, `F8_E5M2FNUZ` and `F8_E8M0` (1 byte), `C64` (8 bytes), and
+  the packed `F4` (2 elements per byte) and `F6_E2M3`/`F6_E3M2` (4 elements
+  per 3 bytes). These checkpoints were rejected before; low-precision ones
+  count as quantized storage, and FP4 storage declares 4-bit weights.
+- DeepSpeed training plans size ZeRO buckets as DeepSpeed allocates them. An
+  omitted `reduce_bucket_size` is 5e8 elements, not 5e8 bytes clamped to the
+  model. The bucket takes the model dtype's bytes, also at stage 1, is doubled
+  by `overlap_comm` and is gone at the optimizer step; stage 3 keeps one for
+  the whole run. `overlap_comm` now defaults to on for stage 3 and
+  `contiguous_gradients` to on, as in DeepSpeed. The allgather bucket no
+  longer counts, and the ZeRO-3 gathered window follows
+  `stage3_max_reuse_distance`, the prefetch bucket and
+  `stage3_max_live_parameters` (nothing on one rank). `plan-training
+  --hidden-size` resolves `auto` bucket sizes as the HF Trainer and Accelerate
+  do. FSDP plans keep their bucket heuristic.
+- FSDP `_HYBRID_SHARD_ZERO2` (and enum value 5) normalizes to the new
+  `hybrid_shard_zero2` strategy instead of `shard_grad_op`: it shards over the
+  intra-node group, not the whole world. `shard_grad_op` plans now keep the
+  parameter shard at rest (`parameters_sharded` is true, with the new
+  `parameters_resharded_after_forward` false), add the unsharded parameters
+  from forward through backward and drop them for the optimizer step.
+- Training-plan phases describe a steady-state iteration. Forward and
+  backward hold the optimizer state and master weights, and ZeRO-3 forward
+  holds its gradient partition. The Adam temporary is one moment in the
+  moments' dtype, not one gradient. DeepSpeed ZeRO steps add the FP32
+  gradient partition (`fp32_gradients`), and stages 1 and 2 drop the 16-bit
+  gradients first. Single-rank DeepSpeed 0.15.3 BF16 runs of a 0.6B model now
+  match the measured step peak within 0.2%; before, plans were 15–27% low.
+  The validation example becomes 149.01 → 37.72 GiB per rank.
 
 ## v1.6.0 - 2026-10-17
 

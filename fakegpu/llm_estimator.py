@@ -23,23 +23,41 @@ KV_CACHE_STRATEGIES = frozenset(
     {"dynamic", "static", "quantized", "paged"}
 )
 
-_DTYPE_BYTES = {
-    "BOOL": 1,
-    "U8": 1,
-    "I8": 1,
-    "F8_E4M3": 1,
-    "F8_E5M2": 1,
-    "I16": 2,
-    "U16": 2,
-    "F16": 2,
-    "BF16": 2,
-    "I32": 4,
-    "U32": 4,
-    "F32": 4,
-    "I64": 8,
-    "U64": 8,
-    "F64": 8,
+# Bits per element for every dtype a safetensors 0.8 header accepts. F4 and
+# the F6 types are packed: the header shape counts logical elements, and the
+# payload is numel * bits / 8 bytes, which must end on a byte boundary.
+_DTYPE_BITS = {
+    "BOOL": 8,
+    "U8": 8,
+    "I8": 8,
+    "F8_E4M3": 8,
+    "F8_E5M2": 8,
+    "F8_E4M3FNUZ": 8,
+    "F8_E5M2FNUZ": 8,
+    "F8_E8M0": 8,
+    "F4": 4,
+    "F6_E2M3": 6,
+    "F6_E3M2": 6,
+    "I16": 16,
+    "U16": 16,
+    "F16": 16,
+    "BF16": 16,
+    "I32": 32,
+    "U32": 32,
+    "F32": 32,
+    "C64": 64,
+    "I64": 64,
+    "U64": 64,
+    "F64": 64,
 }
+# Byte width of the whole-byte dtypes; packed dtypes have no per-element width.
+_DTYPE_BYTES = {
+    dtype: bits // 8 for dtype, bits in _DTYPE_BITS.items() if bits % 8 == 0
+}
+# Low-precision storage that marks a checkpoint as quantized.
+_LOW_PRECISION_STORAGE_DTYPES = frozenset(
+    dtype for dtype, bits in _DTYPE_BITS.items() if bits <= 8 and dtype != "BOOL"
+)
 
 _TORCH_DTYPE_TO_BYTES = {
     "float16": 2,
@@ -358,7 +376,7 @@ def inspect_safetensors_checkpoint(
                 raise ValueError(f"invalid tensor metadata for {tensor_name!r} in {shard_path}")
             dtype = str(metadata.get("dtype", ""))
             shape = metadata.get("shape")
-            if dtype not in _DTYPE_BYTES:
+            if dtype not in _DTYPE_BITS:
                 raise ValueError(f"unsupported safetensors dtype {dtype!r} in {shard_path}")
             if not isinstance(shape, list) or any(
                 not isinstance(dimension, int) or dimension < 0
@@ -366,7 +384,13 @@ def inspect_safetensors_checkpoint(
             ):
                 raise ValueError(f"invalid shape for {tensor_name!r} in {shard_path}")
             numel = math.prod(shape)
-            nbytes = numel * _DTYPE_BYTES[dtype]
+            nbits = numel * _DTYPE_BITS[dtype]
+            if nbits % 8:
+                raise ValueError(
+                    f"packed {dtype} tensor {tensor_name!r} in {shard_path} "
+                    "does not end on a byte boundary"
+                )
+            nbytes = nbits // 8
             offsets = metadata.get("data_offsets")
             if (
                 not isinstance(offsets, list)
@@ -1613,9 +1637,7 @@ def _quantization_summary(
         )
     dtype_bytes = dict(checkpoint.get("dtype_bytes") or {})
     quantized_storage_dtypes = sorted(
-        dtype
-        for dtype in dtype_bytes
-        if dtype in {"U8", "I8", "F8_E4M3", "F8_E5M2"}
+        dtype for dtype in dtype_bytes if dtype in _LOW_PRECISION_STORAGE_DTYPES
     )
     enabled = bool(
         quantization_config
@@ -1634,8 +1656,10 @@ def _quantization_summary(
     if bits is None:
         if config.get("load_in_4bit"):
             bits = 4
-        elif config.get("load_in_8bit") or quantized_storage_dtypes:
+        elif config.get("load_in_8bit"):
             bits = 8
+        elif quantized_storage_dtypes:
+            bits = min(_DTYPE_BITS[dtype] for dtype in quantized_storage_dtypes)
 
     return {
         "enabled": enabled,

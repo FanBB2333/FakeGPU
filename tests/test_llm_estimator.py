@@ -40,13 +40,14 @@ def _write_safetensors(
 ) -> None:
     offset = 0
     normalized: dict[str, object] = {}
-    dtype_bytes = {
-        "BF16": 2, "F16": 2, "F32": 4, "I8": 1, "U8": 1, "F8_E4M3": 1,
+    dtype_bits = {
+        "BF16": 16, "F16": 16, "F32": 32, "I8": 8, "U8": 8, "F8_E4M3": 8,
+        "F4": 4,
     }
     for name, raw in header.items():
         metadata = dict(raw)
         shape = metadata["shape"]
-        nbytes = math.prod(shape) * dtype_bytes[str(metadata["dtype"])]
+        nbytes = math.prod(shape) * dtype_bits[str(metadata["dtype"])] // 8
         metadata["data_offsets"] = [offset, offset + nbytes]
         offset += nbytes
         normalized[name] = metadata
@@ -106,6 +107,79 @@ def test_checkpoint_headers_are_read_without_tensor_materialization(tmp_path: Pa
     assert report["parameter_count"] == 320
     assert report["checkpoint_bytes"] == 640
     assert report["dtype_bytes"] == {"BF16": 640}
+
+
+def _write_raw_safetensors(path: Path, header: dict[str, object], payload: int) -> None:
+    encoded = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    encoded += b" " * ((-len(encoded)) % 8)
+    path.write_bytes(struct.pack("<Q", len(encoded)) + encoded + b"\0" * payload)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "payload_bytes"),
+    [
+        # safetensors 0.8 accepts these header dtypes for a [4, 6] tensor only
+        # with these payload sizes: FNUZ FP8 and E8M0 take 1 byte per element,
+        # C64 8 bytes, F4 packs 2 elements per byte and F6 4 elements per 3.
+        ("F8_E4M3FNUZ", 24),
+        ("F8_E5M2FNUZ", 24),
+        ("F8_E8M0", 24),
+        ("C64", 192),
+        ("F4", 12),
+        ("F6_E2M3", 18),
+        ("F6_E3M2", 18),
+    ],
+)
+def test_checkpoint_inspection_reads_every_safetensors_dtype(
+    tmp_path: Path,
+    dtype: str,
+    payload_bytes: int,
+) -> None:
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    _write_raw_safetensors(
+        model_dir / "model.safetensors",
+        {"w": {"dtype": dtype, "shape": [4, 6], "data_offsets": [0, payload_bytes]}},
+        payload_bytes,
+    )
+
+    report = inspect_safetensors_checkpoint(model_dir)
+
+    # The header shape counts logical elements, also for packed dtypes.
+    assert report["parameter_count"] == 24
+    assert report["checkpoint_bytes"] == payload_bytes
+    assert report["dtype_bytes"] == {dtype: payload_bytes}
+
+
+def test_checkpoint_inspection_rejects_packed_tensor_off_a_byte_boundary(
+    tmp_path: Path,
+) -> None:
+    # safetensors rejects 9 F4 elements (36 bits): a sub-byte slice must end
+    # on a byte boundary.
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    _write_raw_safetensors(
+        model_dir / "model.safetensors",
+        {"w": {"dtype": "F4", "shape": [3, 3], "data_offsets": [0, 5]}},
+        5,
+    )
+
+    with pytest.raises(ValueError, match="byte boundary"):
+        inspect_safetensors_checkpoint(model_dir)
+
+
+def test_packed_fp4_checkpoint_counts_as_four_bit_storage(tmp_path: Path) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir, checkpoint_dtype="F4")
+
+    report = estimate_decoder_inference(model_dir, prompt_tokens=1)
+
+    quantization = report["weight_storage"]["quantization"]
+    assert quantization["enabled"] is True
+    assert quantization["quantized_storage_dtypes"] == ["F4"]
+    assert quantization["declared_weight_bits"] == 4
+    # 320 packed elements take 160 bytes of payload.
+    assert report["weight_storage"]["base_model_runtime_bytes"] == 160
 
 
 @pytest.mark.parametrize(

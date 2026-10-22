@@ -1122,7 +1122,10 @@ def test_training_plan_handles_accelerate_fsdp_and_auto_deepspeed_values() -> No
         parameter_bytes=2_000,
         activation_bytes=500,
     )
-    assert fsdp_report["sharding"]["parameters_sharded"] is False
+    # SHARD_GRAD_OP shards parameters outside compute but does not reshard
+    # them after forward.
+    assert fsdp_report["sharding"]["parameters_sharded"] is True
+    assert fsdp_report["sharding"]["parameters_resharded_after_forward"] is False
     assert fsdp_report["sharding"]["gradients_sharded"] is True
     assert fsdp_report["rank_local_storage"]["gradient_bytes"] == 1_000
     assert fsdp["activation_checkpointing"] is False
@@ -1142,7 +1145,9 @@ def test_training_plan_handles_accelerate_fsdp_and_auto_deepspeed_values() -> No
     )
     assert deepspeed["zero_stage"] == 3
     assert deepspeed["optimizer_offload_device"] == "cpu"
-    assert deepspeed["reduce_bucket_elements"] == 0
+    # Accelerate builds zero_optimization from zero_stage and the offload
+    # devices only, so DeepSpeed's default bucket applies.
+    assert deepspeed["reduce_bucket_elements"] == 500_000_000
 
 
 def test_training_plan_converts_deepspeed_bucket_elements_to_bytes() -> None:
@@ -1166,14 +1171,228 @@ def test_training_plan_converts_deepspeed_bucket_elements_to_bytes() -> None:
     )
 
     assert normalized["reduce_bucket_elements"] == 500_000_000
-    assert report["communication"] == {
-        "reduce_bucket_bytes": 1_000_000_000,
-        "allgather_bucket_bytes": 500_000_000,
-        "stage3_prefetch_bucket_bytes": 250_000_000,
-        "overlap_communication": False,
-        "gradient_accumulation_steps": 1,
-    }
+    communication = report["communication"]
+    assert communication["reduce_bucket_bytes"] == 1_000_000_000
+    assert communication["allgather_bucket_bytes"] == 500_000_000
+    assert communication["stage3_prefetch_bucket_bytes"] == 250_000_000
+    # DeepSpeed turns overlap_comm on by default for stage 3 only.
+    assert communication["overlap_communication"] is True
     assert report["rank_local_storage"]["communication_workspace_bytes"] == 1_000_000_000
+
+
+# Single-rank DeepSpeed 0.15.3 runs of a 596,049,920-parameter BF16 model on
+# an Ampere GPU (sm_80): torch.empty(reduce_bucket_size) BF16 buckets were
+# 1e9 B by default, 2e9 B with overlap_comm, 4e8 B at 2e8 elements and 2e9 B at
+# 1e9 elements (larger than the model), and none without contiguous_gradients.
+# Stages 1 and 2 free them before the optimizer step; stage 3 keeps one from
+# engine start, also with overlap_comm.
+_MEASURED_PARAMETERS = 596_049_920
+
+
+@pytest.mark.parametrize(
+    ("zero", "expected"),
+    [
+        ({"stage": 1}, (0, 1_000_000_000, 0)),
+        ({"stage": 1, "overlap_comm": True}, (0, 2_000_000_000, 0)),
+        ({"stage": 2}, (0, 1_000_000_000, 0)),
+        ({"stage": 2, "overlap_comm": True}, (0, 2_000_000_000, 0)),
+        ({"stage": 2, "reduce_bucket_size": 200_000_000}, (0, 400_000_000, 0)),
+        ({"stage": 2, "reduce_bucket_size": 1e9}, (0, 2_000_000_000, 0)),
+        # Without contiguous gradients each bucket is flattened into a copy.
+        ({"stage": 2, "contiguous_gradients": False}, (0, 1_000_000_000, 0)),
+        ({"stage": 3}, (1_000_000_000,) * 3),
+        ({"stage": 3, "overlap_comm": False}, (1_000_000_000,) * 3),
+        ({"stage": 3, "reduce_bucket_size": 200_000_000}, (400_000_000,) * 3),
+        ({"stage": 3, "contiguous_gradients": False}, (0, 1_000_000_000, 0)),
+    ],
+)
+def test_training_plan_sizes_deepspeed_reduce_buckets_like_deepspeed(
+    zero: dict[str, object],
+    expected: tuple[int, int, int],
+) -> None:
+    normalized = normalize_training_config(
+        {"bf16": {"enabled": True}, "zero_optimization": zero}
+    )
+    report = estimate_training_plan(
+        normalized,
+        parameter_bytes=2 * _MEASURED_PARAMETERS,
+        activation_bytes=0,
+    )
+
+    workspace = tuple(
+        phase["components"].get("communication_workspace", 0)
+        for phase in report["memory_timeline"]["phases"][1:]
+    )
+    assert workspace == expected
+
+
+@pytest.mark.parametrize(
+    ("stage", "measured_step_peak", "step_bytes_per_parameter", "bucket"),
+    [
+        (1, 13_131_453_952, 22, 0),
+        (2, 13_131_453_952, 22, 0),
+        (3, 15_323_555_328, 24, 1_000_000_000),
+    ],
+)
+def test_training_plan_matches_measured_deepspeed_phases(
+    stage: int,
+    measured_step_peak: int,
+    step_bytes_per_parameter: int,
+    bucket: int,
+) -> None:
+    # Same single-rank runs, second iteration (torch AdamW, foreach). Every
+    # iteration starts with the BF16 parameters, FP32 master and FP32 Adam
+    # state resident (14 B/parameter; stage 3 adds its BF16 gradient buffer
+    # and bucket). The step builds an FP32 gradient partition (4 B) and Adam's
+    # sqrt(exp_avg_sq) temporary (4 B); stages 1 and 2 free the BF16
+    # gradients first.
+    parameters = _MEASURED_PARAMETERS
+    normalized = normalize_training_config(
+        {"bf16": {"enabled": True}, "zero_optimization": {"stage": stage}}
+    )
+    report = estimate_training_plan(
+        normalized, parameter_bytes=2 * parameters, activation_bytes=0
+    )
+
+    phases = {
+        phase["phase"]: phase for phase in report["memory_timeline"]["phases"]
+    }
+    forward = phases["forward"]["components"]
+    assert forward["optimizer_state"] == 8 * parameters
+    assert forward["master_parameters"] == 4 * parameters
+    assert forward.get("gradients", 0) == (2 * parameters if stage == 3 else 0)
+    assert phases["backward"]["components"]["optimizer_state"] == 8 * parameters
+    step = phases["optimizer_step"]
+    assert step["components"]["fp32_gradients"] == 4 * parameters
+    assert step["components"]["optimizer_temporary"] == 4 * parameters
+    assert step["peak_bytes"] == step_bytes_per_parameter * parameters + bucket
+    assert abs(step["peak_bytes"] - measured_step_peak) / measured_step_peak < 0.005
+
+
+def test_training_plan_reads_deepspeed_zero_defaults() -> None:
+    stage2 = normalize_training_config({"zero_optimization": {"stage": 2}})
+    stage3 = normalize_training_config({"zero_optimization": {"stage": 3}})
+
+    # DeepSpeed runtime/zero/config.py: contiguous_gradients=True, and
+    # overlap_comm=None becomes stage == 3.
+    assert stage2["contiguous_gradients"] is True
+    assert stage2["overlap_communication"] is False
+    assert stage3["overlap_communication"] is True
+    assert (
+        stage3["reduce_bucket_elements"],
+        stage3["allgather_bucket_elements"],
+        stage3["stage3_prefetch_bucket_elements"],
+        stage3["stage3_max_live_parameters"],
+        stage3["stage3_max_reuse_distance"],
+    ) == (500_000_000, 500_000_000, 50_000_000, 1_000_000_000, 1_000_000_000)
+    # The un-prefixed field names are accepted as well.
+    aliases = normalize_training_config(
+        {"zero_optimization": {"stage": 3, "prefetch_bucket_size": 7, "max_live_parameters": 9}}
+    )
+    assert aliases["stage3_prefetch_bucket_elements"] == 7
+    assert aliases["stage3_max_live_parameters"] == 9
+
+
+def test_training_plan_resolves_auto_buckets_from_hidden_size() -> None:
+    # transformers integrations/deepspeed.py and Accelerate fill "auto" with
+    # hidden_size**2 and int(0.9 * hidden_size**2).
+    normalized = normalize_training_config(
+        {
+            "bf16": {"enabled": True},
+            "zero_optimization": {
+                "stage": 3,
+                "reduce_bucket_size": "auto",
+                "stage3_prefetch_bucket_size": "auto",
+            },
+        }
+    )
+    assert normalized["reduce_bucket_elements"] == "auto"
+
+    resolved = estimate_training_plan(
+        normalized, parameter_bytes=10**9, activation_bytes=0, hidden_size=4096
+    )
+    unresolved = estimate_training_plan(
+        normalized, parameter_bytes=10**9, activation_bytes=0
+    )
+
+    assert resolved["communication"]["reduce_bucket_elements"] == 4096 * 4096
+    assert resolved["communication"]["stage3_prefetch_bucket_elements"] == int(
+        0.9 * 4096 * 4096
+    )
+    assert unresolved["communication"]["reduce_bucket_elements"] == 500_000_000
+    assert any("pass hidden_size" in note for note in unresolved["notes"])
+
+
+def test_plan_training_cli_takes_hidden_size_for_auto_buckets(tmp_path: Path) -> None:
+    from fakegpu.training_plan import main as plan_main
+
+    config = tmp_path / "ds.json"
+    output = tmp_path / "plan.json"
+    config.write_text(
+        json.dumps(
+            {"bf16": {"enabled": True}, "zero_optimization": {"stage": 2, "reduce_bucket_size": "auto"}}
+        )
+    )
+
+    assert plan_main(
+        [
+            str(config),
+            "--parameter-bytes", "2000000",
+            "--activation-bytes", "0",
+            "--hidden-size", "1024",
+            "--json", str(output),
+        ]
+    ) == 0
+    assert json.loads(output.read_text())["communication"]["reduce_bucket_bytes"] == 2 * 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    ("world_size", "parameters", "zero", "window_elements"),
+    [
+        # One rank: the gathered parameter is a view of its partition
+        # (partition_parameters.py NoGatherHandle).
+        (1, 10**10, {}, 0),
+        # Half the reuse distance stays gathered, plus the prefetch bucket.
+        (8, 10**10, {}, 550_000_000),
+        (
+            8,
+            10**10,
+            {"stage3_max_reuse_distance": 0, "stage3_max_live_parameters": 10**8},
+            50_000_000,
+        ),
+        # Prefetch stops once max_live parameters are gathered.
+        (
+            8,
+            10**10,
+            {"stage3_max_reuse_distance": 4 * 10**8, "stage3_max_live_parameters": 10**8},
+            200_000_000,
+        ),
+        # Never more than the model.
+        (8, 3 * 10**8, {}, 300_000_000),
+    ],
+)
+def test_training_plan_bounds_the_zero3_gathered_window(
+    world_size: int,
+    parameters: int,
+    zero: dict[str, object],
+    window_elements: int,
+) -> None:
+    normalized = normalize_training_config(
+        {
+            "world_size": world_size,
+            "bf16": {"enabled": True},
+            "zero_optimization": {"stage": 3, **zero},
+        }
+    )
+    report = estimate_training_plan(
+        normalized,
+        parameter_bytes=2 * parameters,
+        activation_bytes=0,
+    )
+
+    assert report["communication"]["gathered_parameter_window_elements"] == window_elements
+    forward = report["memory_timeline"]["phases"][1]["components"]
+    assert forward.get("allgathered_parameters", 0) == 2 * window_elements
 
 
 @pytest.mark.parametrize(
@@ -1223,11 +1442,16 @@ def test_training_plan_scopes_hybrid_shard_to_local_group() -> None:
     assert report["rank_local_storage"]["optimizer_state_bytes"] == 4_000
 
 
-def test_training_plan_maps_hybrid_shard_zero2_to_shard_grad_op() -> None:
+def test_training_plan_scopes_hybrid_shard_zero2_to_the_node() -> None:
+    # torch fsdp/api.py: _HYBRID_SHARD_ZERO2 applies SHARD_GRAD_OP within a
+    # node and replicates across nodes; without a process group FSDP shards
+    # over the intra-node group (_init_utils.py), num_processes // num_machines
+    # under accelerate.
     normalized = normalize_training_config(
         {
             "distributed_type": "FSDP",
-            "num_processes": 8,
+            "num_machines": 2,
+            "num_processes": 16,
             "fsdp_config": {
                 "fsdp_sharding_strategy": "_HYBRID_SHARD_ZERO2",
             },
@@ -1235,14 +1459,45 @@ def test_training_plan_maps_hybrid_shard_zero2_to_shard_grad_op() -> None:
     )
     report = estimate_training_plan(
         normalized,
-        parameter_bytes=8_000,
+        parameter_bytes=16_000,
         activation_bytes=0,
     )
 
-    assert normalized["sharding_strategy"] == "shard_grad_op"
-    assert report["sharding"]["parameters_sharded"] is False
-    assert report["rank_local_storage"]["parameter_bytes"] == 8_000
-    assert report["rank_local_storage"]["gradient_bytes"] == 1_000
+    assert normalized["sharding_strategy"] == "hybrid_shard_zero2"
+    assert normalized["shard_group_size"] == 8
+    assert report["sharding"]["parameters_sharded"] is True
+    assert report["sharding"]["parameters_resharded_after_forward"] is False
+    storage = report["rank_local_storage"]
+    assert storage["parameter_bytes"] == 2_000
+    assert storage["gradient_bytes"] == 2_000
+    assert storage["optimizer_state_bytes"] == 4_000
+
+
+@pytest.mark.parametrize("strategy", ["SHARD_GRAD_OP", "_HYBRID_SHARD_ZERO2"])
+def test_training_plan_reshards_shard_grad_op_parameters_for_the_optimizer_step(
+    strategy: str,
+) -> None:
+    # torch fsdp/_runtime_utils.py _should_free_in_backward frees the
+    # unsharded parameters in post-backward on a gradient-sync step; FSDP2
+    # reshards after backward by default. Forward and backward still hold
+    # every unit unsharded next to the local shard.
+    normalized = normalize_training_config(
+        {
+            "distributed_type": "FSDP",
+            "num_processes": 4,
+            "fsdp_config": {"fsdp_sharding_strategy": strategy},
+        }
+    )
+    report = estimate_training_plan(
+        normalized, parameter_bytes=8_000, activation_bytes=0
+    )
+
+    phases = {phase["phase"]: phase["components"] for phase in report["memory_timeline"]["phases"]}
+    assert phases["forward"]["parameters"] == 2_000
+    assert phases["forward"]["allgathered_parameters"] == 8_000
+    assert phases["backward"]["allgathered_parameters"] == 8_000
+    assert phases["optimizer_step"]["parameters"] == 2_000
+    assert "allgathered_parameters" not in phases["optimizer_step"]
 
 
 @pytest.mark.parametrize(
@@ -1252,10 +1507,10 @@ def test_training_plan_maps_hybrid_shard_zero2_to_shard_grad_op() -> None:
         # fsdp_reshard_after_forward, using accelerate's FSDP_SHARDING_STRATEGY.
         ({"fsdp_version": 1, "fsdp_reshard_after_forward": "NO_SHARD"}, "fsdp", "no_shard"),
         ({"fsdp_version": 1, "fsdp_reshard_after_forward": "SHARD_GRAD_OP"}, "fsdp", "shard_grad_op"),
-        ({"fsdp_sharding_strategy": "HYBRID_SHARD_ZERO2"}, "fsdp", "shard_grad_op"),
+        ({"fsdp_sharding_strategy": "HYBRID_SHARD_ZERO2"}, "fsdp", "hybrid_shard_zero2"),
         # torch ShardingStrategy enum values: 2 SHARD_GRAD_OP, 5 _HYBRID_SHARD_ZERO2.
         ({"fsdp_sharding_strategy": 2}, "fsdp", "shard_grad_op"),
-        ({"fsdp_sharding_strategy": 5}, "fsdp", "shard_grad_op"),
+        ({"fsdp_sharding_strategy": 5}, "fsdp", "hybrid_shard_zero2"),
         # FSDP2 takes a bool; False keeps unsharded parameters after forward.
         ({"fsdp_version": 2, "fsdp_reshard_after_forward": False}, "fsdp2", "shard_grad_op"),
         ({"fsdp_version": 2, "fsdp_reshard_after_forward": True}, "fsdp2", "full_shard"),

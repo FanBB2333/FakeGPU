@@ -14,6 +14,43 @@
 并以最大的 rank 做预算。没有提供 shape 时退回均衡切分近似。自定义 placement 不在
 建模范围内。
 
+DeepSpeed ZeRO 的 bucket 大小按元素个数计，默认值与 DeepSpeed 一致：
+`reduce_bucket_size` 与 `allgather_bucket_size` 为 5e8，`stage3_prefetch_bucket_size`
+为 5e7，`stage3_max_live_parameters` 与 `stage3_max_reuse_distance` 为 1e9。
+
+- reduce bucket 占用元素个数乘以模型 dtype 的字节数，模型再小也不缩减。开启
+  `contiguous_gradients`（默认）时，stage 1 和 2 在 backward 期间持有它，并在
+  optimizer step 之前释放；`overlap_comm` 使其翻倍。stage 3 在整个运行期间持有
+  一个 bucket。
+- allgather bucket 原地写入参数，不占用显存。
+- ZeRO-3 的 gathered window 约为 `stage3_max_reuse_distance` 的一半加上 prefetch
+  bucket。单个 rank 不做 gather。
+- 设为 `auto` 的大小在传入 `--hidden-size` 时取 HF Trainer 与 Accelerate 填入的值：
+  reduce bucket 为 `hidden_size²`，prefetch bucket 为 `0.9·hidden_size²`。未传入时
+  使用 DeepSpeed 默认值，并在 notes 中注明。
+
+以上依据 DeepSpeed 0.15.3 与 0.19.8。FSDP 没有 bucket 设置，FSDP 规划仍沿用
+FakeGPU 的启发式：每次 collective 取 `min(参数字节数, 500 MB)`。
+
+FSDP `SHARD_GRAD_OP` 与 FSDP2 `reshard_after_forward=False`（`shard_grad_op`）
+平时只保留每个 rank 的参数分片。规划从 forward 到 backward 结束额外计入完整的
+未分片参数，并在 optimizer step 前重新分片，与 FSDP 在梯度同步步 backward 之后
+的行为一致。`_HYBRID_SHARD_ZERO2`（`hybrid_shard_zero2`）在 shard group 内做同样
+的事，在 group 之间复制。与 `HYBRID_SHARD` 一样，group 默认取 Accelerate 每台
+机器的进程数。
+
+各阶段描述的是稳定状态下的一次迭代：
+
+- forward 与 backward 已经持有之前各步留下的 optimizer state 和 master 权重。
+  ZeRO-3 还持有其梯度分区，梯度累积时也保留梯度。
+- optimizer step 时，foreach Adam（torch 在 CUDA 上的默认实现）额外分配一个
+  moment 大小的临时张量。
+- DeepSpeed ZeRO 还会构建梯度分区的 FP32 副本。stage 1 和 2 会先释放 16 位梯度。
+
+在一块 Ampere GPU（sm_80）上用 DeepSpeed 0.15.3 单 rank 训练 0.6B BF16 模型，
+stage 1 到 3 的 step 峰值与预测相差不到 0.2%。这不能说明其他模型规模或 rank 数
+下有同样的精度。
+
 [版本化原生验证矩阵](../../tests/data/research_native_evidence.json)记录了六组
 FP32/FP16/BF16 LoRA 与 attention 的 CPU_SIM 用例、tiny Qwen3 MoE 在 CPU 和 GPU 上
 的路由与梯度，以及两个 CPU rank 上运行的原生 DDP 和 FSDP2。物理 TP/PP/CP/EP、
