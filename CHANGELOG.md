@@ -202,14 +202,6 @@
   CUDA 12 builds: FakeGPU provides `libcudart.so.12` and `libcublas.so.12`
   with the CUDA 12 ABI, while CUDA 13 builds, such as the default Linux
   `torch` 2.14 wheels on PyPI, link the `.so.13` names.
-
-### Deprecated
-
-- The `fakegpu metrics` families `fakegpu_device_nvlink`,
-  `fakegpu_device_native_activity`, `fakegpu_publisher_writes` and
-  `fakegpu_publisher_duration_microseconds` mix units or quantities. They
-  are still exported, with a deprecation note in their HELP text, and will
-  be removed in the next release.
 - Native `cuMemGetInfo` and `cudaMemGetInfo` leave a modeled CUDA context
   out of free memory, `FAKEGPU_CUDA_CONTEXT_BYTES` (default 601.5 MiB), as
   FakeCUDA does.
@@ -299,6 +291,14 @@
   `destroy_process_group`, and so does building `DistributedDataParallel`;
   they used to return 0, 1 and `None`. With no backend named,
   `get_backend()` reports `undefined`, as torch does, instead of `nccl`.
+
+### Deprecated
+
+- The `fakegpu metrics` families `fakegpu_device_nvlink`,
+  `fakegpu_device_native_activity`, `fakegpu_publisher_writes` and
+  `fakegpu_publisher_duration_microseconds` mix units or quantities. They
+  are still exported, with a deprecation note in their HELP text, and will
+  be removed in the next release.
 
 ### Fixed
 
