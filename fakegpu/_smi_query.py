@@ -668,6 +668,20 @@ _add_nvidia_fields(
         "remapped_rows.dbe": "remapped_rows.uncorrectable",
     },
 )
+# nvidia-smi 580.178.04 --help-query-accounted-apps, with the units of its
+# CSV header. Accounting is not modeled, so the query lists no processes, as
+# nvidia-smi does while accounting mode is disabled.
+ACCOUNTED_APPS_QUERY_FIELDS: dict[str, QueryField] = dict(_DEVICE_IDENTITY_FIELDS)
+_add_nvidia_fields(
+    ACCOUNTED_APPS_QUERY_FIELDS,
+    {
+        None: ("vgpu_instance", "pid"),
+        "%": ("gpu_utilization", "mem_utilization"),
+        "MiB": ("max_memory_usage",),
+        "ms": ("time",),
+    },
+    {"gpu_util": "gpu_utilization", "mem_util": "mem_utilization"},
+)
 _add_nvidia_fields(GPU_QUERY_FIELDS, _NVIDIA_GPU_FIELDS, _NVIDIA_GPU_ALIASES)
 # nvidia-smi 590.48.01 --help-query-compute-apps.
 _add_nvidia_fields(

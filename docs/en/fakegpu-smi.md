@@ -95,7 +95,8 @@ python3 -m fakegpu nvidia-smi --state-dir build/smi \
 - `--query-retired-pages` and `--query-remapped-rows` accept nvidia-smi
   580's fields and print its rows: one per retirement cause and GPU, and one
   per GPU. FakeGPU models neither page retirement nor row remapping, so
-  addresses and counts print `[N/A]`.
+  addresses and counts print `[N/A]`. `--query-accounted-apps` prints only
+  its header, as nvidia-smi does while accounting mode is disabled.
 - `memory.reserved` is nvidia-smi's "memory reserved by the NVIDIA driver
   and firmware", which FakeGPU does not model, so it prints `[N/A]`. The
   caching allocator's reserved memory, which `memory.reserved` reported

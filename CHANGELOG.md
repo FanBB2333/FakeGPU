@@ -33,6 +33,8 @@
 - `fakegpu nvidia-smi --query-retired-pages` and `--query-remapped-rows`
   with nvidia-smi 580's fields and rows (sos report runs the first).
   Retirement addresses and remap counts print `[N/A]`.
+  `--query-accounted-apps` prints its header only, as nvidia-smi does with
+  accounting disabled.
 - On macOS the build directory links `libnvidia-ml.so.1` and the wheel ships
   it, so unmodified `pynvml` (and nvitop's NVML) under the native launcher
   find FakeGPU's NVML; nvidia-ml-py loads that name on every platform but

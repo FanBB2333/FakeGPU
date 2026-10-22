@@ -29,6 +29,7 @@ from ._smi_environment import (
     _nonnegative_int,
 )
 from ._smi_query import (
+    ACCOUNTED_APPS_QUERY_FIELDS,
     GPU_QUERY_FIELDS,
     PROCESS_QUERY_FIELDS,
     QueryField,
@@ -101,6 +102,13 @@ _QUERIES = (
         "query_remapped_rows",
         "help_query_remapped_rows",
         REMAPPED_ROWS_QUERY_FIELDS,
+        "devices",
+    ),
+    (
+        "accounted-apps",
+        "query_accounted_apps",
+        "help_query_accounted_apps",
+        ACCOUNTED_APPS_QUERY_FIELDS,
         "devices",
     ),
 )
@@ -610,6 +618,11 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="FIELDS",
         help="Query remapped-row fields; counts are not modeled ([N/A]).",
     )
+    output_group.add_argument(
+        "--query-accounted-apps",
+        metavar="FIELDS",
+        help="Query accounted-process fields; accounting is not modeled.",
+    )
     parser.add_argument(
         "-m",
         "--matrix",
@@ -690,6 +703,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="List supported --query-remapped-rows fields and exit.",
     )
+    parser.add_argument(
+        "--help-query-accounted-apps",
+        action="store_true",
+        help="List supported --query-accounted-apps fields and exit.",
+    )
     loop_group = parser.add_mutually_exclusive_group()
     loop_group.add_argument(
         "-l",
@@ -748,8 +766,7 @@ def _check_view_arguments(
         )
     if args.format is not None and not querying:
         parser.error(
-            "--format requires --query-gpu, --query-compute-apps, "
-            "--query-runtime, --query-retired-pages, or --query-remapped-rows"
+            "--format requires a --query-* option"
         )
 
 
@@ -883,6 +900,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         for device in records
                         for cause in RETIRED_PAGE_CAUSES
                     ]
+                elif query_kind == "accounted-apps":
+                    # Accounting is not modeled; nvidia-smi 580.178.04 prints
+                    # only the header while accounting mode is disabled.
+                    records = []
                 text = render_query(
                     records,
                     fields=fields,

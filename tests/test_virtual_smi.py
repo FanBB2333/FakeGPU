@@ -1940,3 +1940,19 @@ def test_virtual_smi_queries_retired_pages_and_remapped_rows(
 
     assert main(["--help-query-retired-pages"]) == 0
     assert "retired_pages.cause" in capsys.readouterr().out
+
+    # Accounting is not modeled: nvidia-smi 580.178.04 printed only this
+    # header for a GPU with accounting disabled, aliases headed by the
+    # first name.
+    assert main([
+        "--state", str(path),
+        "--query-accounted-apps=timestamp,gpu_name,gpu_bus_id,gpu_serial,"
+        "gpu_uuid,vgpu_instance,pid,gpu_utilization,gpu_util,mem_utilization,"
+        "mem_util,max_memory_usage,time",
+        "--format=csv",
+    ]) == 0
+    assert capsys.readouterr().out == (
+        "timestamp, gpu_name, gpu_bus_id, gpu_serial, gpu_uuid, vgpu_instance, "
+        "pid, gpu_utilization [%], gpu_utilization [%], mem_utilization [%], "
+        "mem_utilization [%], max_memory_usage [MiB], time [ms]\n"
+    )
