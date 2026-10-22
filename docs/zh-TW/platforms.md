@@ -76,11 +76,12 @@ PCIe 伺服器、工作站、桌上型電腦與筆電範本是代表性配置，
 依拓撲作答；對沒有 peer access 的 GPU 對，`cudaDeviceEnablePeerAccess` 回傳
 `cudaErrorPeerAccessUnsupported`。
 
-`fakegpu nvidia-smi topo -m` 以 NVIDIA 的圖例顯示結果：
+`fakegpu nvidia-smi topo -m` 以 nvidia-smi 的定位字元版面與圖例顯示結果，
+之後是 FakeGPU 的平台說明：
 
 ```text
-      GPU0  GPU1  GPU2  GPU3  GPU4  GPU5  GPU6  GPU7  NUMA Affinity
-GPU0  X     NV1   NV1   NV2   NV2   SYS   SYS   SYS   0
+        GPU0    GPU1    GPU2    GPU3    GPU4    GPU5    GPU6    GPU7    CPU Affinity    NUMA Affinity   GPU NUMA ID
+GPU0     X      NV1     NV1     NV2     NV2     SYS     SYS     SYS     N/A     0               N/A
 ```
 
 ## 拷貝時間與吞吐
