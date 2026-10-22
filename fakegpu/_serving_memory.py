@@ -14,9 +14,31 @@ from ._serving_kv import (
     _transient_bytes,
     estimate_serving_kv_pool,
     estimate_serving_request_kv_pool,
+    serving_kv_model,
 )
 from ._serving_speculative import _select_larger_transient, _speculative_report
+from .llm_estimator import DEFAULT_KV_QUANTIZATION_GROUP_SIZE
 from .llm_estimator import _effective_context_tokens as _effective_tokens
+
+
+def _prefix_hit_tokens(
+    *,
+    shared_prefix_tokens: int,
+    prompt_tokens: int,
+    kv_cache_strategy: str,
+    block_tokens: int,
+) -> int:
+    """Prompt tokens a prefix-cache hit lets the prefill skip.
+
+    A paged cache hits whole blocks only, and like vLLM's
+    ``get_computed_blocks`` it caps the hit at prompt_tokens - 1 so the last
+    prompt token is recomputed for its logits.
+    """
+
+    if kv_cache_strategy != "paged" or not shared_prefix_tokens:
+        return shared_prefix_tokens
+    capped = min(shared_prefix_tokens, prompt_tokens - 1)
+    return capped // block_tokens * block_tokens
 
 
 def _serving_memory_breakdown(
@@ -141,6 +163,9 @@ def _serving_batch_memory(
     runtime_overhead_bytes: int,
     scheduler_overhead_bytes_per_sequence: int,
     speculative: Mapping[str, Any] | None,
+    kv_model: Mapping[str, Any] | None = None,
+    mla_kv_cache_layout: str = "auto",
+    kv_cache_group_size: int = DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
 ) -> dict[str, Any]:
     effective_speculative_tokens = (
         min(int(speculative["speculative_tokens"]), generated_tokens)
@@ -151,18 +176,15 @@ def _serving_batch_memory(
         generated_tokens + effective_speculative_tokens
     )
 
-    def kv_pool(
-        model: Mapping[str, Any],
-        model_element_bytes: int,
-    ) -> dict[str, Any]:
+    def kv_pool(kv: Mapping[str, Any]) -> dict[str, Any]:
         return estimate_serving_kv_pool(
-            num_hidden_layers=int(model["num_hidden_layers"]),
-            num_key_value_heads=int(model["num_key_value_heads"]),
-            head_dim=int(model["head_dim"]),
+            num_hidden_layers=int(kv["num_hidden_layers"]),
+            num_key_value_heads=int(kv["num_key_value_heads"]),
+            head_dim=int(kv["head_dim"]),
             active_sequences=active_sequences,
             prompt_tokens=prompt_tokens,
             generated_tokens=cache_generation_tokens,
-            element_bytes=model_element_bytes,
+            element_bytes=int(kv["element_bytes"]),
             strategy=kv_cache_strategy,
             shared_prefix_tokens=shared_prefix_tokens,
             quantized_bits=kv_cache_bits,
@@ -171,9 +193,24 @@ def _serving_batch_memory(
             max_cache_tokens=kv_cache_max_tokens,
             window_tokens=kv_cache_window_tokens,
             elements_per_token_per_layer=int(
-                model["kv_cache_elements_per_token_per_layer"]
+                kv["elements_per_token_per_layer"]
             ),
-            cache_layout=str(model["kv_cache_layout"]),
+            cache_layout=str(kv["cache_layout"]),
+            sliding_window_layers=int(kv["sliding_window_layers"]),
+            sliding_window_tokens=kv["sliding_window_tokens"],
+            prefill_chunk_tokens=prefill_chunk_tokens,
+            quantized_group_size=kv_cache_group_size,
+        )
+
+    def kv_description(
+        model: Mapping[str, Any],
+        model_element_bytes: int,
+    ) -> Mapping[str, Any]:
+        return serving_kv_model(
+            model,
+            element_bytes=model_element_bytes,
+            kv_cache_strategy=kv_cache_strategy,
+            mla_kv_cache_layout=mla_kv_cache_layout,
         )
 
     def transient(
@@ -191,8 +228,18 @@ def _serving_batch_memory(
             attention_implementation=attention_implementation,
         )
 
-    kv_cache = kv_pool(dimensions, element_bytes)
-    uncached_prompt_tokens = prompt_tokens - shared_prefix_tokens
+    kv_cache = kv_pool(
+        kv_model
+        if kv_model is not None
+        else kv_description(dimensions, element_bytes)
+    )
+    prefix_hit_tokens = _prefix_hit_tokens(
+        shared_prefix_tokens=shared_prefix_tokens,
+        prompt_tokens=prompt_tokens,
+        kv_cache_strategy=kv_cache_strategy,
+        block_tokens=kv_cache_block_tokens,
+    )
+    uncached_prompt_tokens = prompt_tokens - prefix_hit_tokens
     effective_chunk_tokens = (
         min(prefill_chunk_tokens, uncached_prompt_tokens)
         if prefill_chunk_tokens is not None
@@ -238,7 +285,9 @@ def _serving_batch_memory(
     else:
         draft_dimensions = speculative["model"]
         draft_element_bytes = int(speculative["element_bytes"])
-        draft_kv_cache = kv_pool(draft_dimensions, draft_element_bytes)
+        draft_kv_cache = kv_pool(
+            kv_description(draft_dimensions, draft_element_bytes)
+        )
         draft_prefill_transient = transient(
             draft_dimensions,
             draft_element_bytes,
@@ -337,8 +386,9 @@ def _serving_batch_memory(
             "prefix_cache": {
                 "enabled": shared_prefix_tokens > 0,
                 "shared_prefix_tokens": shared_prefix_tokens,
+                "hit_tokens": prefix_hit_tokens,
                 "prompt_token_hit_percent": (
-                    shared_prefix_tokens / prompt_tokens * 100
+                    prefix_hit_tokens / prompt_tokens * 100
                 ),
                 "prefill_savings_bytes": int(
                     kv_cache["prefill"]["prefix_cache_savings_bytes"]
@@ -440,6 +490,9 @@ def _serving_request_set_memory(
     runtime_overhead_bytes: int,
     scheduler_overhead_bytes_per_sequence: int,
     speculative: Mapping[str, Any] | None,
+    kv_model: Mapping[str, Any] | None = None,
+    mla_kv_cache_layout: str = "auto",
+    kv_cache_group_size: int = DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
 ) -> dict[str, Any]:
     effective_proposal_tokens = {
         request["id"]: min(
@@ -463,16 +516,13 @@ def _serving_request_set_memory(
         else requests
     )
 
-    def kv_pool(
-        model: Mapping[str, Any],
-        model_element_bytes: int,
-    ) -> dict[str, Any]:
+    def kv_pool(kv: Mapping[str, Any]) -> dict[str, Any]:
         return estimate_serving_request_kv_pool(
             cache_requests,
-            num_hidden_layers=int(model["num_hidden_layers"]),
-            num_key_value_heads=int(model["num_key_value_heads"]),
-            head_dim=int(model["head_dim"]),
-            element_bytes=model_element_bytes,
+            num_hidden_layers=int(kv["num_hidden_layers"]),
+            num_key_value_heads=int(kv["num_key_value_heads"]),
+            head_dim=int(kv["head_dim"]),
+            element_bytes=int(kv["element_bytes"]),
             strategy=kv_cache_strategy,
             quantized_bits=kv_cache_bits,
             quantized_residual_tokens=kv_cache_residual_tokens,
@@ -480,9 +530,24 @@ def _serving_request_set_memory(
             max_cache_tokens=kv_cache_max_tokens,
             window_tokens=kv_cache_window_tokens,
             elements_per_token_per_layer=int(
-                model["kv_cache_elements_per_token_per_layer"]
+                kv["elements_per_token_per_layer"]
             ),
-            cache_layout=str(model["kv_cache_layout"]),
+            cache_layout=str(kv["cache_layout"]),
+            sliding_window_layers=int(kv["sliding_window_layers"]),
+            sliding_window_tokens=kv["sliding_window_tokens"],
+            prefill_chunk_tokens=prefill_chunk_tokens,
+            quantized_group_size=kv_cache_group_size,
+        )
+
+    def kv_description(
+        model: Mapping[str, Any],
+        model_element_bytes: int,
+    ) -> Mapping[str, Any]:
+        return serving_kv_model(
+            model,
+            element_bytes=model_element_bytes,
+            kv_cache_strategy=kv_cache_strategy,
+            mla_kv_cache_layout=mla_kv_cache_layout,
         )
 
     def transient(
@@ -500,7 +565,11 @@ def _serving_request_set_memory(
             attention_implementation=attention_implementation,
         )
 
-    kv_cache = kv_pool(dimensions, element_bytes)
+    kv_cache = kv_pool(
+        kv_model
+        if kv_model is not None
+        else kv_description(dimensions, element_bytes)
+    )
     if speculative is not None:
         draft_dimensions = speculative["model"]
         draft_element_bytes = int(speculative["element_bytes"])
@@ -511,9 +580,11 @@ def _serving_request_set_memory(
             request["id"],
             0,
         )
-        uncached_prompt_tokens = (
-            request["prompt_tokens"]
-            - request["shared_prefix_tokens"]
+        uncached_prompt_tokens = request["prompt_tokens"] - _prefix_hit_tokens(
+            shared_prefix_tokens=request["shared_prefix_tokens"],
+            prompt_tokens=request["prompt_tokens"],
+            kv_cache_strategy=kv_cache_strategy,
+            block_tokens=kv_cache_block_tokens,
         )
         effective_chunk_tokens = (
             min(prefill_chunk_tokens, uncached_prompt_tokens)
@@ -609,7 +680,9 @@ def _serving_request_set_memory(
         decode_transient = target_decode_transient
         speculative_report = {"enabled": False}
     else:
-        draft_kv_cache = kv_pool(draft_dimensions, draft_element_bytes)
+        draft_kv_cache = kv_pool(
+            kv_description(draft_dimensions, draft_element_bytes)
+        )
         draft_prefill_transient = _worst_concurrent_transient(
             request_details,
             field="draft_prefill_transient",

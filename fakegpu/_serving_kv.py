@@ -20,8 +20,10 @@ from ._serving_types import (
     _positive_integer,
 )
 from .llm_estimator import (
+    DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
     KV_CACHE_STRATEGIES,
     _forward_transient_bytes,
+    _kv_cache_layout,
     estimate_kv_cache_memory,
 )
 from .structured_io import load_mapping
@@ -51,12 +53,18 @@ def estimate_serving_kv_pool(
     window_tokens: int | None = None,
     elements_per_token_per_layer: int | None = None,
     cache_layout: str = "separate_key_value",
+    sliding_window_layers: int = 0,
+    sliding_window_tokens: int | None = None,
+    prefill_chunk_tokens: int | None = None,
+    quantized_group_size: int = DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
 ) -> dict[str, Any]:
     """Estimate a homogeneous online-serving KV pool.
 
     Prefix caching is modeled as one shared cache segment plus one private
-    segment per active sequence. Dynamic allocation is token-exact. Paged
-    allocation rounds the shared and private segments independently.
+    segment per active sequence. Dynamic allocation is token-exact. A paged
+    cache shares only full prefix blocks. Prefix sharing covers the
+    full-attention layers; sliding-window layers keep a private window per
+    sequence.
     """
 
     _positive_integer(active_sequences, "active_sequences")
@@ -96,9 +104,17 @@ def estimate_serving_kv_pool(
         window_tokens=window_tokens,
         elements_per_token_per_layer=elements_per_token_per_layer,
         cache_layout=cache_layout,
+        sliding_window_layers=sliding_window_layers,
+        sliding_window_tokens=sliding_window_tokens,
+        prefill_chunk_tokens=prefill_chunk_tokens,
+        quantized_group_size=quantized_group_size,
     )
     bytes_per_token_per_sequence = int(
         baseline["bytes_per_token_per_sequence_at_compute_dtype"]
+    )
+    # Prefix segments hold the full-attention layers only.
+    shared_bytes_per_token = int(
+        baseline["full_attention_bytes_per_token_per_sequence"]
     )
 
     phases: dict[str, dict[str, Any]] = {}
@@ -120,6 +136,7 @@ def estimate_serving_kv_pool(
         )
         private_tokens = effective_tokens - retained_prefix_tokens
         without_prefix_bytes = int(baseline_phase["allocated_bytes"])
+        sliding = baseline_phase["sliding_attention"] or {}
 
         if not shared_prefix_tokens:
             shared_allocation = _empty_cache_segment()
@@ -142,30 +159,29 @@ def estimate_serving_kv_pool(
             shared_allocation = _cache_segment(
                 tokens=retained_prefix_tokens,
                 sequence_count=1,
-                bytes_per_token_per_sequence=(
-                    bytes_per_token_per_sequence
-                ),
+                bytes_per_token_per_sequence=shared_bytes_per_token,
                 strategy=strategy,
                 block_tokens=block_tokens,
             )
             private_allocation = _cache_segment(
                 tokens=private_tokens,
                 sequence_count=active_sequences,
-                bytes_per_token_per_sequence=(
-                    bytes_per_token_per_sequence
-                ),
+                bytes_per_token_per_sequence=shared_bytes_per_token,
                 strategy=strategy,
                 block_tokens=block_tokens,
             )
-            allocated_bytes = int(
-                shared_allocation["allocated_bytes"]
-            ) + int(private_allocation["allocated_bytes"])
+            allocated_bytes = (
+                int(shared_allocation["allocated_bytes"])
+                + int(private_allocation["allocated_bytes"])
+                + int(sliding.get("allocated_bytes", 0))
+            )
             storage_logical_bytes = (
-                bytes_per_token_per_sequence
+                shared_bytes_per_token
                 * (
                     retained_prefix_tokens
                     + active_sequences * private_tokens
                 )
+                + int(sliding.get("storage_logical_bytes", 0))
             )
             reservation_overhead_bytes = (
                 allocated_bytes - storage_logical_bytes
@@ -190,11 +206,14 @@ def estimate_serving_kv_pool(
             ),
             "shared_segment": shared_allocation,
             "private_segments": private_allocation,
+            "sliding_attention": baseline_phase["sliding_attention"],
         }
 
     return {
         "strategy": strategy,
         "active_sequences": active_sequences,
+        "attention_layers": baseline["attention_layers"],
+        "quantized_group_size": baseline["quantized_group_size"],
         "cache_layout": baseline["cache_layout"],
         "elements_per_token_per_layer": baseline[
             "elements_per_token_per_layer"
@@ -238,8 +257,16 @@ def estimate_serving_request_kv_pool(
     window_tokens: int | None = None,
     elements_per_token_per_layer: int | None = None,
     cache_layout: str = "separate_key_value",
+    sliding_window_layers: int = 0,
+    sliding_window_tokens: int | None = None,
+    prefill_chunk_tokens: int | None = None,
+    quantized_group_size: int = DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
 ) -> dict[str, Any]:
-    """Estimate KV storage for an ordered heterogeneous request set."""
+    """Estimate KV storage for an ordered heterogeneous request set.
+
+    Prefix groups share full-attention layers only; sliding-window layers
+    keep a private window per request.
+    """
 
     normalized = _normalize_serving_requests(requests)
     if strategy not in KV_CACHE_STRATEGIES:
@@ -278,12 +305,20 @@ def estimate_serving_request_kv_pool(
                 elements_per_token_per_layer
             ),
             cache_layout=cache_layout,
+            sliding_window_layers=sliding_window_layers,
+            sliding_window_tokens=sliding_window_tokens,
+            prefill_chunk_tokens=prefill_chunk_tokens,
+            quantized_group_size=quantized_group_size,
         )
     first_baseline = baselines[normalized[0]["id"]]
     bytes_per_token = int(
         first_baseline[
             "bytes_per_token_per_sequence_at_compute_dtype"
         ]
+    )
+    # Prefix segments hold the full-attention layers only.
+    shared_bytes_per_token = int(
+        first_baseline["full_attention_bytes_per_token_per_sequence"]
     )
     static_capacities = (
         {
@@ -360,15 +395,20 @@ def estimate_serving_request_kv_pool(
                     baseline_phase["storage_logical_bytes"]
                 )
             else:
+                sliding = baseline_phase["sliding_attention"] or {}
                 private_segment = _cache_segment(
                     tokens=private_tokens,
                     sequence_count=1,
-                    bytes_per_token_per_sequence=bytes_per_token,
+                    bytes_per_token_per_sequence=shared_bytes_per_token,
                     strategy=strategy,
                     block_tokens=block_tokens,
                 )
+                private_segment["allocated_bytes"] += int(
+                    sliding.get("allocated_bytes", 0)
+                )
                 request_storage_bytes = (
-                    private_tokens * bytes_per_token
+                    private_tokens * shared_bytes_per_token
+                    + int(sliding.get("storage_logical_bytes", 0))
                 )
                 prefix_members.setdefault(
                     request["prefix_group"],
@@ -414,12 +454,12 @@ def estimate_serving_request_kv_pool(
             segment = _cache_segment(
                 tokens=shared_tokens,
                 sequence_count=1,
-                bytes_per_token_per_sequence=bytes_per_token,
+                bytes_per_token_per_sequence=shared_bytes_per_token,
                 strategy=strategy,
                 block_tokens=block_tokens,
             )
             shared_allocated_bytes += int(segment["allocated_bytes"])
-            storage_logical_bytes += shared_tokens * bytes_per_token
+            storage_logical_bytes += shared_tokens * shared_bytes_per_token
             prefix_groups.append(
                 {
                     "id": group_id,
@@ -468,6 +508,8 @@ def estimate_serving_request_kv_pool(
     return {
         "strategy": strategy,
         "request_count": len(normalized),
+        "attention_layers": first_baseline["attention_layers"],
+        "quantized_group_size": first_baseline["quantized_group_size"],
         "request_ids": [request["id"] for request in normalized],
         "cache_layout": first_baseline["cache_layout"],
         "elements_per_token_per_layer": first_baseline[
@@ -505,6 +547,37 @@ def estimate_serving_request_kv_pool(
         "modeled_overheads": list(
             first_baseline["modeled_overheads"]
         ),
+    }
+
+
+def serving_kv_model(
+    dimensions: Mapping[str, Any],
+    *,
+    element_bytes: int,
+    kv_cache_strategy: str,
+    mla_kv_cache_layout: str,
+) -> dict[str, Any]:
+    """Describe the cache one model keeps: layers, layout, window, bytes."""
+
+    layout = _kv_cache_layout(
+        dimensions,
+        mla_layout=mla_kv_cache_layout,
+        kv_cache_strategy=kv_cache_strategy,
+    )
+    return {
+        "num_hidden_layers": int(dimensions["num_hidden_layers"]),
+        "num_key_value_heads": int(dimensions["num_key_value_heads"]),
+        "head_dim": int(dimensions["head_dim"]),
+        "elements_per_token_per_layer": int(
+            layout["elements_per_token_per_layer"]
+        ),
+        "cache_layout": str(layout["layout"]),
+        "mla_layout": layout["mla_layout"],
+        "sliding_window_layers": int(
+            dimensions.get("sliding_attention_layers", 0)
+        ),
+        "sliding_window_tokens": dimensions.get("sliding_window_tokens"),
+        "element_bytes": int(element_bytes),
     }
 
 

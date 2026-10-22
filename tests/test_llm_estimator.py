@@ -1374,7 +1374,8 @@ def test_vllm_runtime_models_executor_budget_and_reserved_kv_blocks(
 ) -> None:
     model_dir = tmp_path / "model"
     _write_model(model_dir)
-    capacity_bytes = 2**20
+    # Synthetic budget large enough for the modeled non-torch allowance.
+    capacity_bytes = 2**30
 
     report = estimate_serving_plan(
         model_dir,
@@ -1405,8 +1406,13 @@ def test_vllm_runtime_models_executor_budget_and_reserved_kv_blocks(
         "requested_model_executor_memory_bytes"
     ] == requested_memory
     assert runtime_memory["non_kv_cache_memory_source"] == (
-        "fakegpu_profile_shape_model"
+        "fakegpu_vllm_profile_run_model"
     )
+    # The default token budget is capped at max_num_seqs * max_model_len,
+    # and the profile run spreads it over min(tokens, max_num_seqs) requests.
+    assert runtime["configuration"]["max_num_seqs"] == 8
+    assert runtime["configuration"]["max_num_batched_tokens"] == 8 * 81
+    assert runtime["configuration"]["profiled_sequence_count"] == 8
     assert runtime_cache["num_gpu_blocks"] == expected_blocks
     assert runtime_cache["allocatable_bytes"] == expected_cache_bytes
     assert runtime_cache["size_tokens"] == expected_blocks * 16
@@ -1527,8 +1533,13 @@ def test_vllm_runtime_supports_ordered_request_prefix_admission(
     )
 
     assert report["runtime"]["configuration"]["profile_scope"] == (
-        "configured_request_manifest_prefix"
+        "vllm_profile_run_max_num_batched_tokens"
     )
+    # max_model_len comes from the longest of the three candidates.
+    assert report["runtime"]["configuration"]["max_model_len_tokens"] == 104
+    assert report["runtime"]["configuration"][
+        "max_num_batched_tokens"
+    ] == 3 * 104
     assert report["scheduler"]["admitted_request_ids"] == ["a", "b"]
     assert report["scheduler"]["rejected_request_ids"] == ["c"]
     assert report["scheduler"]["limiting_factor"] == (

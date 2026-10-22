@@ -30,9 +30,14 @@
 - Execute nested device-side child launches through direct PTX and linked
   SASS modules; accept nvcc linked fatbin wrapper v2. Cubin globals share
   their CUDA address with host backing for CPU library interoperability.
-- `estimate-llm` takes `--mla-kv-cache-layout` (`auto`, `latent`,
-  `decompressed`) and `--kv-cache-group-size` (quantized caches, default
-  64).
+- `plan-serving --runtime vllm` takes `--vllm-max-num-batched-tokens`,
+  `--vllm-kv-cache-dtype` (`auto`, `bfloat16`, `float16`, `fp8`,
+  `fp8_e4m3`, `fp8_e5m2`) and `--vllm-usage-context` (`api_server` or
+  `llm_class`). The report gives the batch limits, the profile-run
+  breakdown, the KV cache groups, and the "GPU KV cache size" vLLM logs.
+- `estimate-llm` and `plan-serving` take `--mla-kv-cache-layout`
+  (`auto`, `latent`, `decompressed`) and `--kv-cache-group-size` (quantized
+  caches, default 64).
 
 ### Changed
 
@@ -58,10 +63,22 @@
 - Mixed-precision training plans size Adam and momentum state in FP32 next
   to the master copy, as DeepSpeed and PyTorch AMP keep it: 4 more bytes per
   parameter than before.
+- `plan-serving --runtime vllm` models vLLM 0.19.1's startup profile run for
+  non-KV memory: one forward of `max_num_batched_tokens` tokens and a sampler
+  pass over one row per request, plus the weights and a modeled 112 MiB of
+  non-torch memory. It used to profile `--max-batch-size` full-length
+  sequences, which left no KV cache in most plans. Unset `--max-batch-size`
+  and `--kv-cache-block-tokens` now take vLLM's defaults in vLLM mode (the
+  `vllm serve` batch limits for the device unless `--vllm-usage-context
+  llm_class`; block size 16, or the MLA backend's size on compute
+  capability 10.x), and prefill is chunked at `max_num_batched_tokens`. `runtime.configuration.profile_scope` is now
+  `vllm_profile_run_max_num_batched_tokens`. CUDA graph memory is listed as
+  unmodeled.
 - KV caches count sliding-window layers from the model config
   (`layer_types`, `sliding_window_pattern`, Qwen's `use_sliding_window`)
-  instead of keeping the whole context on every layer.
-  `--kv-cache-window-tokens` still applies one window to every layer.
+  instead of keeping the whole context on every layer. vLLM plans use
+  vLLM's hybrid KV cache groups. `--kv-cache-window-tokens` still applies
+  one window to every layer.
 - MLA models cache decompressed per-head keys and values with the dynamic,
   static, and quantized strategies, as Transformers does, and the latent plus
   RoPE key with the paged strategy, as vLLM does. Non-paged MLA estimates
@@ -411,6 +428,9 @@
   Accelerate's `Accelerator().device` and transformers'
   `TrainingArguments.device` chose MPS before CUDA, so single-process
   training ran on MPS and bypassed the simulated GPUs.
+- A paged prefix-cache hit skips whole blocks only, and at most
+  `prompt_tokens - 1` tokens, as vLLM recomputes the last prompt token.
+  Prefill planning used the whole shared prefix.
 
 ## v1.6.0 - 2026-10-17
 
