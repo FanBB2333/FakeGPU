@@ -4,6 +4,7 @@
 # Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
 # Additional source: https://github.com/NVIDIA/gpu-operator/blob/main/assets/state-mig-manager/0400_configmap.yaml
 # Additional source: https://developer.nvidia.com/blog/nvidia-grace-hopper-superchip-architecture-in-depth/
+# Device name and reported memory: nvidia-smi shows GH200 120GB with 97871MiB (driver 535.129.03, Figure 9): https://docs.nvidia.com/gh200-superchip-mgx-system-quick-start-guide.pdf
 id: gh200-96gb
 name: Fake NVIDIA GH200 96GB (GPU HBM only)
 torch_name: NVIDIA GH200 96GB
@@ -34,6 +35,7 @@ max_power_limit_mw: 0
 pci_device_id: 591532254
 memory_type: HBM3
 memory_bandwidth_gbps: 4000
+reported_memory_bytes: 102625181696
 form_factor: superchip
 nvlink_generation: 4
 c2c_bandwidth_gbps: 900

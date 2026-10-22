@@ -13,6 +13,102 @@
 
 namespace fake_gpu {
 
+namespace {
+
+// Ratio of FP32 to FP64 throughput, as CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_
+// PRECISION_PERF_RATIO reports it. CUDA Programming Guide: the "Ratio of FP32
+// to FP64 Throughput" row of "Device and Streaming Multiprocessor (SM)
+// Information per Compute Capability" for 7.5 and newer, and the CUDA 12.4
+// guide's "Throughput of Native Arithmetic Instructions" (32- and 64-bit
+// floating-point add/multiply results per clock per SM) for older devices.
+int fp32_to_fp64_throughput_ratio(int major, int minor) {
+    switch (major) {
+        case 5: return 32;                       // 128 : 4
+        case 6: return minor == 0 ? 2 : 32;      // 6.0 64 : 32; 6.1/6.2 128 : 4
+        case 7: return minor == 5 ? 32 : 2;      // 7.0/7.2 64 : 32; 7.5 64 : 2
+        case 8: return minor == 0 ? 2 : 64;      // 8.0 2:1; 8.6, 8.7, 8.9 64:1
+        case 9: return 2;
+        case 10:
+            if (minor == 0) return 2;
+            if (minor == 7) return 4;
+            return 64;                           // 10.3
+        case 11:
+        case 12: return 64;
+        default: return 2;
+    }
+}
+
+// Largest accessPolicyWindow.num_bytes. Modeled default: the value one Ampere
+// (sm_80) GPU reports under driver 580 (128 MiB - 4 KiB). The access policy
+// window controls L2 persistence, which the CUDA Programming Guide limits to
+// compute capability 8.0 and newer.
+constexpr int kModeledAccessPolicyWindowBytes = 134213632;
+
+// Fill the per-SKU CUDA device attributes from the YAML overrides or the
+// defaults of the profile's class (segment, form factor, compute capability).
+void resolve_device_attributes(GpuProfile& profile, const GpuProfileParams& params) {
+    const bool persistence = profile.compute_major >= 8;
+    const bool embedded = params.form_factor == "embedded";
+
+    // ECC_ENABLED reports the current ECC mode. Data-center GPUs ship with
+    // ECC on (NVIDIA's nvidia-smi and deviceQuery outputs for A100, H100, L4
+    // and GH200 show it enabled); HBM workstation boards that support ECC are
+    // modeled the same way. GeForce, Jetson and GDDR workstation boards are
+    // modeled with ECC off: NVIDIA does not publish the latter's default.
+    int ecc_default = 0;
+    if (params.ecc != "unsupported") {
+        if (params.segment == "datacenter") {
+            ecc_default = 1;
+        } else if (params.ecc == "supported" && params.memory_type.rfind("HBM", 0) == 0) {
+            ecc_default = 1;
+        }
+    }
+    profile.ecc_enabled = params.ecc_enabled.value_or(ecc_default);
+
+    // Modeled: the number of copy engines CUDA reports varies by SKU and driver.
+    profile.async_engine_count = params.async_engine_count.value_or(2);
+
+    profile.single_to_double_precision_perf_ratio = params.single_to_double_precision_perf_ratio.value_or(
+        fp32_to_fp64_throughput_ratio(profile.compute_major, profile.compute_minor));
+
+    // L2 persistence needs compute capability 8.0 (CUDA Programming Guide,
+    // "L2 cache set-aside"). Modeled maximum: 75% of L2, the share NVIDIA's
+    // A100 example sets aside (30 MB of 40 MB); real GPUs can allow less.
+    profile.max_persisting_l2_cache_bytes = params.max_persisting_l2_cache_bytes.value_or(
+        persistence ? static_cast<int>(static_cast<int64_t>(profile.l2_cache_bytes) * 3 / 4) : 0);
+
+    // Pageable memory access is 1 under Linux HMM (compute capability 7.5+,
+    // open kernel modules) and with ATS on NVLink-C2C superchips (CUDA
+    // Programming Guide, "Understanding Memory"). The modeled host is a
+    // current Linux driver with the open kernel modules. Jetson is modeled 0.
+    int pageable_default = 0;
+    if (!embedded) {
+        if (params.form_factor == "superchip" ||
+            profile.compute_major > 7 ||
+            (profile.compute_major == 7 && profile.compute_minor >= 5)) {
+            pageable_default = 1;
+        }
+    }
+    profile.pageable_memory_access = params.pageable_memory_access.value_or(pageable_default);
+
+    // Modeled 0: an x86 Linux host reports 0 (observed on one Ampere GPU).
+    profile.can_flush_remote_writes = params.can_flush_remote_writes.value_or(0);
+
+    profile.max_access_policy_window_bytes = params.max_access_policy_window_bytes.value_or(
+        persistence ? kModeledAccessPolicyWindowBytes : 0);
+
+    // CUDA Programming Guide (compute capability 8.x and 9.0): "The 1 KB of
+    // shared memory not made available to a thread block is reserved for
+    // system use", the gap between the per-SM and the per-block opt-in
+    // maximum (1 KB in the catalog's limits). Older GPUs reserve none; their
+    // per-block limit is an architectural cap, not a reservation.
+    profile.reserved_shared_mem_per_block = persistence
+        ? std::max(0, profile.shared_mem_per_sm - profile.shared_mem_per_block_optin)
+        : 0;
+}
+
+} // namespace
+
 ArchProfile::ArchProfile(GpuArch arch, int compute_major, std::vector<GpuDataType> default_types)
     : arch(arch), compute_major(compute_major), default_types(std::move(default_types)) {
 }
@@ -23,7 +119,9 @@ GpuProfile ArchProfile::build(const GpuProfileParams& params) const {
     profile.architecture = arch;
     profile.compute_major = params.compute_major > 0 ? params.compute_major : compute_major;
     profile.compute_minor = params.compute_minor;
-    profile.memory_bytes = params.memory_bytes;
+    profile.nominal_memory_bytes = params.memory_bytes;
+    profile.memory_bytes = params.reported_memory_bytes > 0 ? params.reported_memory_bytes : params.memory_bytes;
+    profile.mig_max_instances = params.mig_max_instances;
     profile.sm_count = params.sm_count;
     profile.memory_bus_width_bits = params.memory_bus_width_bits;
     profile.core_clock_mhz = params.core_clock_mhz;
@@ -42,6 +140,7 @@ GpuProfile ArchProfile::build(const GpuProfileParams& params) const {
     profile.pcie_generation = params.pcie_generation;
     profile.pcie_lanes = params.pcie_lanes;
     profile.supported_types = params.supported_types.empty() ? default_types : params.supported_types;
+    resolve_device_attributes(profile, params);
     return profile;
 }
 
@@ -353,6 +452,53 @@ std::optional<ProfileDefinition> parse_definition(const ProfileYamlBlob& blob) {
             return std::nullopt;
         }
     }
+    if (auto it = parsed.scalars.find("reported_memory_bytes"); it != parsed.scalars.end()) {
+        if (!parse_integer(it->second, def.params.reported_memory_bytes)) {
+            FGPU_LOG("[GpuProfile] Failed to parse numeric key 'reported_memory_bytes' in %s (value=%s)\n", blob.filename, it->second.c_str());
+            return std::nullopt;
+        }
+    }
+    if (auto it = parsed.scalars.find("mig_max_instances"); it != parsed.scalars.end()) {
+        if (!parse_integer(it->second, def.params.mig_max_instances)) {
+            FGPU_LOG("[GpuProfile] Failed to parse numeric key 'mig_max_instances' in %s (value=%s)\n", blob.filename, it->second.c_str());
+            return std::nullopt;
+        }
+    }
+    for (const auto& [key, target] : {
+             std::pair<const char*, std::optional<int>*>{"ecc_enabled", &def.params.ecc_enabled},
+             std::pair<const char*, std::optional<int>*>{"async_engine_count", &def.params.async_engine_count},
+             std::pair<const char*, std::optional<int>*>{"single_to_double_precision_perf_ratio", &def.params.single_to_double_precision_perf_ratio},
+             std::pair<const char*, std::optional<int>*>{"max_persisting_l2_cache_bytes", &def.params.max_persisting_l2_cache_bytes},
+             std::pair<const char*, std::optional<int>*>{"pageable_memory_access", &def.params.pageable_memory_access},
+             std::pair<const char*, std::optional<int>*>{"can_flush_remote_writes", &def.params.can_flush_remote_writes},
+             std::pair<const char*, std::optional<int>*>{"max_access_policy_window_bytes", &def.params.max_access_policy_window_bytes}}) {
+        auto optional_it = parsed.scalars.find(key);
+        if (optional_it == parsed.scalars.end()) continue;
+        int value = 0;
+        if (!parse_integer(optional_it->second, value)) {
+            FGPU_LOG("[GpuProfile] Failed to parse numeric key '%s' in %s (value=%s)\n", key, blob.filename, optional_it->second.c_str());
+            return std::nullopt;
+        }
+        *target = value;
+    }
+    for (const auto& [key, target] : {
+             std::pair<const char*, std::string*>{"ecc", &def.params.ecc},
+             std::pair<const char*, std::string*>{"form_factor", &def.params.form_factor},
+             std::pair<const char*, std::string*>{"memory_kind", &def.params.memory_kind},
+             std::pair<const char*, std::string*>{"memory_type", &def.params.memory_type}}) {
+        if (auto it = parsed.scalars.find(key); it != parsed.scalars.end()) {
+            *target = it->second;
+        }
+    }
+    // <architecture>/<segment>/<id>.yaml, as the Python catalog reads it.
+    if (blob.relative_path) {
+        const std::string relative_path = blob.relative_path;
+        const size_t first = relative_path.find('/');
+        const size_t second = first == std::string::npos ? std::string::npos : relative_path.find('/', first + 1);
+        if (second != std::string::npos) {
+            def.params.segment = to_lower(relative_path.substr(first + 1, second - first - 1));
+        }
+    }
 
     auto types_it = parsed.lists.find("supported_types");
     if (types_it != parsed.lists.end()) {
@@ -407,13 +553,6 @@ std::optional<GpuProfile> profile_from_yaml_id(const std::string& id) {
     return std::nullopt;
 }
 
-GpuProfile build_profile_with_fallback(const std::string& id, GpuArch arch, const GpuProfileParams& params) {
-    std::optional<GpuProfile> yaml_profile = profile_from_yaml_id(id);
-    if (yaml_profile.has_value()) return yaml_profile.value();
-    GpuProfile profile = get_arch_profile(arch)->build(params);
-    profile.id = id;
-    return profile;
-}
 } // namespace
 
 std::vector<std::string> builtin_profile_ids() {
@@ -430,22 +569,7 @@ std::optional<GpuProfile> profile_from_preset_id(const std::string& id) {
     const std::string normalized = normalize_profile_id(id);
     if (normalized.empty()) return std::nullopt;
 
-    if (std::optional<GpuProfile> yaml_profile = profile_from_yaml_id(normalized); yaml_profile.has_value()) {
-        return yaml_profile.value();
-    }
-
-    if (normalized == "gtx980") return GpuProfile::GTX980();
-    if (normalized == "p100") return GpuProfile::P100();
-    if (normalized == "v100") return GpuProfile::V100();
-    if (normalized == "t4") return GpuProfile::T4();
-    if (normalized == "a40") return GpuProfile::A40();
-    if (normalized == "a100") return GpuProfile::A100();
-    if (normalized == "h100") return GpuProfile::H100();
-    if (normalized == "l40s") return GpuProfile::L40S();
-    if (normalized == "b100") return GpuProfile::B100();
-    if (normalized == "b200") return GpuProfile::B200();
-
-    return std::nullopt;
+    return profile_from_yaml_id(normalized);
 }
 
 std::optional<GpuDataType> cuda_dtype_to_gpu_dtype(int cuda_data_type) {
@@ -464,234 +588,19 @@ std::optional<GpuDataType> cuda_dtype_to_gpu_dtype(int cuda_data_type) {
     }
 }
 
-GpuProfile GpuProfile::GTX980() {
-    GpuProfileParams params;
-    params.name = "Fake NVIDIA GeForce GTX 980";
-    params.compute_minor = 2;
-    params.memory_bytes = 4ULL * 1024 * 1024 * 1024;
-    params.sm_count = 16;
-    params.memory_bus_width_bits = 256;
-    params.core_clock_mhz = 1216;
-    params.memory_clock_mhz = 1750;
-    params.l2_cache_bytes = 2097152;
-    params.shared_mem_per_sm = 65536;
-    params.shared_mem_per_block = 49152;
-    params.shared_mem_per_block_optin = 65536;
-    params.regs_per_block = 65536;
-    params.regs_per_multiprocessor = 65536;
-    params.max_threads_per_multiprocessor = 2048;
-    params.max_blocks_per_multiprocessor = 32;
-    params.typical_power_usage_mw = 165000;
-    params.max_power_limit_mw = 180000;
-    params.pci_device_id = 0x13C010DE;
-    return build_profile_with_fallback("gtx980", GpuArch::Maxwell, params);
-}
-
-GpuProfile GpuProfile::P100() {
-    GpuProfileParams params;
-    params.name = "Fake NVIDIA Tesla P100-PCIE-16GB";
-    params.compute_minor = 0;
-    params.memory_bytes = 16ULL * 1024 * 1024 * 1024;
-    params.sm_count = 56;
-    params.memory_bus_width_bits = 4096;
-    params.core_clock_mhz = 1328;
-    params.memory_clock_mhz = 715;
-    params.l2_cache_bytes = 4194304;
-    params.shared_mem_per_sm = 65536;
-    params.shared_mem_per_block = 49152;
-    params.shared_mem_per_block_optin = 65536;
-    params.regs_per_block = 65536;
-    params.regs_per_multiprocessor = 65536;
-    params.max_threads_per_multiprocessor = 2048;
-    params.max_blocks_per_multiprocessor = 32;
-    params.typical_power_usage_mw = 250000;
-    params.max_power_limit_mw = 300000;
-    params.pci_device_id = 0x15F810DE;
-    return build_profile_with_fallback("p100", GpuArch::Pascal, params);
-}
-
-GpuProfile GpuProfile::V100() {
-    GpuProfileParams params;
-    params.name = "Fake NVIDIA Tesla V100-SXM2-32GB";
-    params.compute_minor = 0;
-    params.memory_bytes = 32ULL * 1024 * 1024 * 1024;
-    params.sm_count = 80;
-    params.memory_bus_width_bits = 4096;
-    params.core_clock_mhz = 1380;
-    params.memory_clock_mhz = 877;
-    params.l2_cache_bytes = 6291456;
-    params.shared_mem_per_sm = 98304;
-    params.shared_mem_per_block = 49152;
-    params.shared_mem_per_block_optin = 98304;
-    params.regs_per_block = 65536;
-    params.regs_per_multiprocessor = 65536;
-    params.max_threads_per_multiprocessor = 2048;
-    params.max_blocks_per_multiprocessor = 32;
-    params.typical_power_usage_mw = 250000;
-    params.max_power_limit_mw = 300000;
-    params.pci_device_id = 0x1DB410DE;
-    return build_profile_with_fallback("v100", GpuArch::Volta, params);
-}
-
-GpuProfile GpuProfile::T4() {
-    GpuProfileParams params;
-    params.name = "Fake NVIDIA T4";
-    params.compute_minor = 5;
-    params.memory_bytes = 16ULL * 1024 * 1024 * 1024;
-    params.sm_count = 40;
-    params.memory_bus_width_bits = 256;
-    params.core_clock_mhz = 1590;
-    params.memory_clock_mhz = 1000;
-    params.l2_cache_bytes = 4194304;
-    params.shared_mem_per_sm = 65536;
-    params.shared_mem_per_block = 49152;
-    params.shared_mem_per_block_optin = 65536;
-    params.regs_per_block = 65536;
-    params.regs_per_multiprocessor = 65536;
-    params.max_threads_per_multiprocessor = 1024;
-    params.max_blocks_per_multiprocessor = 32;
-    params.typical_power_usage_mw = 70000;
-    params.max_power_limit_mw = 75000;
-    params.pci_device_id = 0x1EB810DE;
-    return build_profile_with_fallback("t4", GpuArch::Turing, params);
-}
-
-GpuProfile GpuProfile::A40() {
-    GpuProfileParams params;
-    params.name = "Fake NVIDIA A40";
-    params.compute_minor = 6;
-    params.memory_bytes = 48ULL * 1024 * 1024 * 1024;
-    params.sm_count = 84;
-    params.memory_bus_width_bits = 384;
-    params.core_clock_mhz = 1530;
-    params.memory_clock_mhz = 1188;
-    params.l2_cache_bytes = 6291456;
-    params.shared_mem_per_sm = 102400;
-    params.shared_mem_per_block = 49152;
-    params.shared_mem_per_block_optin = 102400;
-    params.regs_per_block = 65536;
-    params.regs_per_multiprocessor = 65536;
-    params.max_threads_per_multiprocessor = 1536;
-    params.max_blocks_per_multiprocessor = 32;
-    params.typical_power_usage_mw = 300000;
-    params.max_power_limit_mw = 350000;
-    params.pci_device_id = 0x223510DE;
-    return build_profile_with_fallback("a40", GpuArch::Ampere, params);
-}
-
 GpuProfile GpuProfile::A100() {
-    GpuProfileParams params;
-    params.name = "Fake NVIDIA A100-SXM4-80GB";
-    params.compute_minor = 0;
-    params.memory_bytes = 80ULL * 1024 * 1024 * 1024;
-    params.sm_count = 108;
-    params.memory_bus_width_bits = 5120;
-    params.core_clock_mhz = 1410;
-    params.memory_clock_mhz = 1215;
-    params.l2_cache_bytes = 41943040;
-    params.shared_mem_per_sm = 167936;
-    params.shared_mem_per_block = 49152;
-    params.shared_mem_per_block_optin = 166912;
-    params.regs_per_block = 65536;
-    params.regs_per_multiprocessor = 65536;
-    params.max_threads_per_multiprocessor = 2048;
-    params.max_blocks_per_multiprocessor = 32;
-    params.typical_power_usage_mw = 300000;  // 300W
-    params.max_power_limit_mw = 400000;      // 400W
-    params.pci_device_id = 0x20B010DE;
-    return build_profile_with_fallback("a100", GpuArch::Ampere, params);
-}
-
-GpuProfile GpuProfile::H100() {
-    GpuProfileParams params;
-    params.name = "Fake NVIDIA H100-SXM-80GB";
-    params.compute_minor = 0;
-    params.memory_bytes = 80ULL * 1024 * 1024 * 1024;
-    params.sm_count = 132;
-    params.memory_bus_width_bits = 5120;
-    params.core_clock_mhz = 1800;
-    params.memory_clock_mhz = 1593;
-    params.l2_cache_bytes = 52428800;
-    params.shared_mem_per_sm = 229376;
-    params.shared_mem_per_block = 98304;
-    params.shared_mem_per_block_optin = 229376;
-    params.regs_per_block = 65536;
-    params.regs_per_multiprocessor = 65536;
-    params.max_threads_per_multiprocessor = 2048;
-    params.max_blocks_per_multiprocessor = 32;
-    params.typical_power_usage_mw = 500000;
-    params.max_power_limit_mw = 700000;
-    params.pci_device_id = 0x233010DE;
-    return build_profile_with_fallback("h100", GpuArch::Hopper, params);
-}
-
-GpuProfile GpuProfile::L40S() {
-    GpuProfileParams params;
-    params.name = "Fake NVIDIA L40S";
-    params.compute_minor = 9;
-    params.memory_bytes = 48ULL * 1024 * 1024 * 1024;
-    params.sm_count = 142;
-    params.memory_bus_width_bits = 384;
-    params.core_clock_mhz = 2520;
-    params.memory_clock_mhz = 1500;
-    params.l2_cache_bytes = 73728000;
-    params.shared_mem_per_sm = 102400;
-    params.shared_mem_per_block = 65536;
-    params.shared_mem_per_block_optin = 102400;
-    params.regs_per_block = 65536;
-    params.regs_per_multiprocessor = 65536;
-    params.max_threads_per_multiprocessor = 1536;
-    params.max_blocks_per_multiprocessor = 32;
-    params.typical_power_usage_mw = 300000;
-    params.max_power_limit_mw = 350000;
-    params.pci_device_id = 0x26B010DE;
-    return build_profile_with_fallback("l40s", GpuArch::Ada, params);
-}
-
-GpuProfile GpuProfile::B100() {
-    GpuProfileParams params;
-    params.name = "Fake NVIDIA B100";
-    params.compute_minor = 0;
-    params.memory_bytes = 80ULL * 1024 * 1024 * 1024;
-    params.sm_count = 144;
-    params.memory_bus_width_bits = 5120;
-    params.core_clock_mhz = 1950;
-    params.memory_clock_mhz = 2300;
-    params.l2_cache_bytes = 65536000;
-    params.shared_mem_per_sm = 262144;
-    params.shared_mem_per_block = 131072;
-    params.shared_mem_per_block_optin = 262144;
-    params.regs_per_block = 65536;
-    params.regs_per_multiprocessor = 131072;
-    params.max_threads_per_multiprocessor = 2048;
-    params.max_blocks_per_multiprocessor = 32;
-    params.typical_power_usage_mw = 600000;
-    params.max_power_limit_mw = 700000;
-    params.pci_device_id = 0x26B410DE;
-    return build_profile_with_fallback("b100", GpuArch::Blackwell, params);
-}
-
-GpuProfile GpuProfile::B200() {
-    GpuProfileParams params;
-    params.name = "Fake NVIDIA B200";
-    params.compute_minor = 0;
-    params.memory_bytes = 192ULL * 1024 * 1024 * 1024;
-    params.sm_count = 192;
-    params.memory_bus_width_bits = 6144;
-    params.core_clock_mhz = 2050;
-    params.memory_clock_mhz = 2400;
-    params.l2_cache_bytes = 90112000;
-    params.shared_mem_per_sm = 262144;
-    params.shared_mem_per_block = 131072;
-    params.shared_mem_per_block_optin = 262144;
-    params.regs_per_block = 65536;
-    params.regs_per_multiprocessor = 131072;
-    params.max_threads_per_multiprocessor = 2048;
-    params.max_blocks_per_multiprocessor = 32;
-    params.typical_power_usage_mw = 700000;
-    params.max_power_limit_mw = 800000;
-    params.pci_device_id = 0x26B510DE;
-    return build_profile_with_fallback("b200", GpuArch::Blackwell, params);
+    // Every compiled YAML profile parses (tests/test_native_profile_attributes.py
+    // checks the native catalog against the Python one), so a missing a100
+    // means a broken build. Log it and return a zeroed profile rather than
+    // abort inside the host process.
+    if (std::optional<GpuProfile> profile = profile_from_yaml_id("a100"); profile.has_value()) {
+        return profile.value();
+    }
+    FGPU_LOG("[GpuProfile] The compiled a100 profile is missing; the build is broken\n");
+    GpuProfile profile;
+    profile.id = "a100";
+    profile.name = "a100";
+    return profile;
 }
 
 const char* to_string(GpuArch arch) {

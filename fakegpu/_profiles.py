@@ -30,7 +30,7 @@ _PROFILE_NAMES: dict[str, str] = {
 
 
 _PROFILE_TOTAL_MEMORY: dict[str, int] = {
-    profile_id: profile.memory_bytes for profile_id, profile in _PROFILE_CATALOG.items()
+    profile_id: profile.device_memory_bytes for profile_id, profile in _PROFILE_CATALOG.items()
 }
 
 

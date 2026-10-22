@@ -82,7 +82,30 @@ _OPTIONAL_INTEGER_FIELDS = (
     "nvlink_links",
     "mig_max_instances",
     "min_power_limit_mw",
+    # The device total an NVIDIA document shows the driver reporting
+    # (nvidia-smi memory.total or deviceQuery's global memory); CUDA and NVML
+    # report it instead of the nominal memory_bytes.
+    "reported_memory_bytes",
+    # Per-SKU CUDA device attributes; an absent key takes the class default
+    # documented in profiles/README.md.
+    "ecc_enabled",
+    "async_engine_count",
+    "single_to_double_precision_perf_ratio",
+    "max_persisting_l2_cache_bytes",
+    "pageable_memory_access",
+    "can_flush_remote_writes",
+    "max_access_policy_window_bytes",
 )
+DEVICE_ATTRIBUTE_FIELDS = (
+    "ecc_enabled",
+    "async_engine_count",
+    "single_to_double_precision_perf_ratio",
+    "max_persisting_l2_cache_bytes",
+    "pageable_memory_access",
+    "can_flush_remote_writes",
+    "max_access_policy_window_bytes",
+)
+_BOOLEAN_ATTRIBUTE_FIELDS = ("ecc_enabled", "pageable_memory_access", "can_flush_remote_writes")
 _OPTIONAL_NUMBER_FIELDS = (
     "memory_bandwidth_gbps",
     "nvlink_bandwidth_gbps",
@@ -165,6 +188,14 @@ class GpuProfile:
     c2c_bandwidth_gbps: float | None = None
     mig_max_instances: int | None = None
     min_power_limit_mw: int | None = None
+    reported_memory_bytes: int | None = None
+    ecc_enabled: int | None = None
+    async_engine_count: int | None = None
+    single_to_double_precision_perf_ratio: int | None = None
+    max_persisting_l2_cache_bytes: int | None = None
+    pageable_memory_access: int | None = None
+    can_flush_remote_writes: int | None = None
+    max_access_policy_window_bytes: int | None = None
     # Several profiles may report the same driver name (memory or laptop
     # variants of one product). ``canonical`` marks the one a name lookup such
     # as FAKEGPU_DEVICE_NAME resolves to.
@@ -184,6 +215,12 @@ class GpuProfile:
     @property
     def compiler_target(self) -> str:
         return f"sm_{self.compute_major}{self.compute_minor}"
+
+    @property
+    def device_memory_bytes(self) -> int:
+        """Memory total CUDA and NVML report: the published driver total, else nominal."""
+
+        return self.reported_memory_bytes or self.memory_bytes
 
     @property
     def unavailable_fields(self) -> tuple[str, ...]:
@@ -497,6 +534,13 @@ def _optional_spec_errors(profile: GpuProfile, prefix: str) -> list[str]:
     for key, value in numbers.items():
         if value is not None and (value < 0 or value != value):
             errors.append(f"{prefix} {key} must not be negative")
+    if profile.reported_memory_bytes is not None and not 0 < profile.reported_memory_bytes <= profile.memory_bytes:
+        errors.append(f"{prefix} reported_memory_bytes must be positive and at most memory_bytes")
+    for key in _BOOLEAN_ATTRIBUTE_FIELDS:
+        if getattr(profile, key) not in (None, 0, 1):
+            errors.append(f"{prefix} {key} must be 0 or 1")
+    if profile.single_to_double_precision_perf_ratio == 0 or profile.async_engine_count == 0:
+        errors.append(f"{prefix} single_to_double_precision_perf_ratio and async_engine_count must be positive")
     if profile.nvlink_generation == 0 and (profile.nvlink_links or profile.nvlink_bandwidth_gbps):
         errors.append(f"{prefix} nvlink_generation 0 (none) contradicts NVLink links or bandwidth")
     if profile.base_clock_mhz and profile.core_clock_mhz and profile.base_clock_mhz > profile.core_clock_mhz:

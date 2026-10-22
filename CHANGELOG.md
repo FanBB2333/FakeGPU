@@ -81,6 +81,28 @@
   was NVIDIA's bidirectional GB/s figure read as Gbit/s, which made NVLink
   transfers 4× too slow. Simulation outputs for configs that omit the value
   change.
+- CUDA, NVML and `torch.cuda` report the memory total an NVIDIA document
+  shows the driver reporting, where one exists, instead of the nominal
+  capacity: H100 80GB HBM3 and H100 PCIe 81559 MiB, L4 23034 MiB (ECC on),
+  GH200 96GB 97871 MiB, A100 PCIe 40GB 42405855232 bytes and Jetson T5000
+  131881811968 bytes. Profiles record it as `reported_memory_bytes`;
+  `memory_bytes` stays nominal. Memory-fit results for these GPUs shrink
+  accordingly.
+- `cuDeviceGetAttribute` and `cudaGetDeviceProperties` read ECC, copy-engine
+  count, FP32:FP64 throughput ratio, persisting-L2 maximum, pageable memory
+  access, remote-write flushing and the access-policy window from the
+  profile, with per-class defaults documented in `profiles/README.md`.
+  GeForce, Jetson and GDDR workstation GPUs now report ECC off; the FP32:FP64
+  ratio follows the CUDA Programming Guide (64 on RTX 30/40/50, 32 on Turing);
+  the persisting-L2 maximum is 75% of L2 on compute capability 8.0 and newer
+  and 0 before; GPUs older than Turing report no pageable memory access;
+  `CAN_FLUSH_REMOTE_WRITES` is 0; and the access-policy window is 0 before
+  compute capability 8.0 and 134213632 bytes after. The reserved shared
+  memory per block is 1 KB from compute capability 8.0 (was 0), the system
+  reservation the CUDA Programming Guide describes, which occupancy
+  calculations subtract per block. NVIDIA's deviceQuery
+  outputs set A100 PCIe 40GB to 3 copy engines and Jetson T5000 to 1 copy
+  engine with ECC off.
 
 ### Fixed
 

@@ -1,4 +1,5 @@
 # Additional source: https://dam-cdn.nvd.orangelogic.com/AssetLink/v686u306w26ftuk863xjeimilimtx55e.pdf
+# Device name, L2, reported memory, copy engines and ECC: deviceQuery on the Jetson AGX Thor Developer Kit (T5000 module) shows NVIDIA Thor, a 33554432-byte L2, 131881811968 bytes, 1 copy engine and ECC disabled (CUDA 13.0): https://docs.nvidia.com/jetson/agx-thor-devkit/user-guide/latest/setup_cuda.html
 id: jetson-t5000
 name: Fake NVIDIA Jetson T5000
 torch_name: NVIDIA Jetson T5000
@@ -10,7 +11,7 @@ memory_kind: unified
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
 spec_source: https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-thor/
-notes: Unified-memory reference profile; the 128 GiB budget is shared by CPU and GPU on real Jetson hardware.
+notes: Unified-memory reference profile; the 128 GiB budget is shared by CPU and GPU on real Jetson hardware, and CUDA reports 131881811968 bytes of it on the developer kit.
 memory_bytes: 137438953472
 sm_count: 20
 memory_bus_width_bits: 256
@@ -29,10 +30,13 @@ max_power_limit_mw: 130000
 pci_device_id: 0
 memory_type: LPDDR5X
 memory_bandwidth_gbps: 273
+reported_memory_bytes: 131881811968
 ecc: supported
 form_factor: embedded
 mig_max_instances: 2
 min_power_limit_mw: 40000
+ecc_enabled: 0
+async_engine_count: 1
 fp64_tflops: 0.126
 fp32_tflops: 8.064
 tensor_fp16_tflops: 258

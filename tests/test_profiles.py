@@ -17,7 +17,7 @@ def test_every_catalog_profile_resolves_consistently(monkeypatch):
         uniform = _resolve_per_device_profiles(2)
         monkeypatch.setenv("FAKEGPU_PROFILES", f"{profile_id}:2")
         assert _resolve_per_device_profiles(2) == uniform
-        assert uniform[0]["total_memory"] == profile.memory_bytes
+        assert uniform[0]["total_memory"] == profile.device_memory_bytes
         assert uniform[0]["name"] == profile.torch_name
         assert (uniform[0]["compute_major"], uniform[0]["compute_minor"]) == profile.compute_capability
         monkeypatch.delenv("FAKEGPU_PROFILES")
@@ -37,7 +37,7 @@ def test_device_name_selects_the_base_profile_not_a_variant(monkeypatch, device_
     monkeypatch.setenv("FAKEGPU_DEVICE_NAME", device_name)
     device = _resolve_per_device_profiles(1)[0]
     assert device["profile_id"] == profile_id
-    assert device["total_memory"] == _PROFILE_CATALOG[profile_id].memory_bytes
+    assert device["total_memory"] == _PROFILE_CATALOG[profile_id].device_memory_bytes
 
 
 def test_profile_padding_and_truncation_keep_independent_devices(monkeypatch):

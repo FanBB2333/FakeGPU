@@ -102,6 +102,29 @@ def render() -> str:
         "`doctor --json` exposes `unavailable_fields`. Timing estimates reject profiles missing SM count, core clock, bus width, or memory clock.",
         "- Memory capacity is expressed in GiB (nominal vendor GB is represented as binary capacity unless notes specify otherwise). "
         "Multi-GPU boards and superchips are represented per CUDA GPU, not by adding memory across devices.",
+        "- `reported_memory_bytes`, where present, is the total an NVIDIA document shows the driver reporting "
+        "(nvidia-smi `memory.total`, or deviceQuery's global memory); the YAML header cites the document and driver. "
+        "CUDA (`cuDeviceTotalMem`, `cudaMemGetInfo`, `torch.cuda` total memory) and NVML report it instead of the "
+        "nominal `memory_bytes`. Firmware carve-outs and GDDR inline ECC make it smaller than nominal. A real CUDA total "
+        "is lower still by the memory the driver reserves (`nvidia-smi -q` lists it as Reserved; 466 MiB on one Ampere "
+        "GPU under driver 580), which FakeGPU does not model.",
+        "- `mig_max_instances` is the MIG user guide's maximum; a profile without it, or with 0, has no MIG, and NVML "
+        "`nvmlDeviceGetMigMode` returns `NOT_SUPPORTED` for it. `nvmlDeviceGetMaxMigDeviceCount` returns this maximum "
+        "while a MIG layout is configured and 0 otherwise, as on a GPU with MIG disabled.",
+        "- Optional CUDA device attributes, read by `cuDeviceGetAttribute`, set per-SKU values where an NVIDIA document "
+        "gives them (deviceQuery outputs, for example); otherwise these class defaults apply. "
+        "`ecc_enabled`: 1 for data-center profiles (other than `ecc: unsupported`) and HBM workstation boards with "
+        "`ecc: supported`, 0 for GeForce, Jetson and GDDR workstation boards, whose default NVIDIA does not publish. "
+        "`single_to_double_precision_perf_ratio`: the CUDA Programming Guide's FP32:FP64 throughput ratio for the "
+        "compute capability (2 for 6.0, 7.0, 8.0, 9.0 and 10.0; 32 for 5.x, 6.1 and 7.5; 64 for 8.6–8.9, 10.3, 11.0 and "
+        "12.x). `max_persisting_l2_cache_bytes`: 0 below compute capability 8.0, otherwise a modeled 75% of L2 "
+        "(NVIDIA's A100 example sets aside 30 MB of 40 MB; real GPUs can allow less). "
+        "`max_access_policy_window_bytes`: 0 below 8.0, otherwise a modeled 134213632 (128 MiB − 4 KiB, observed on one "
+        "Ampere GPU). `pageable_memory_access`: 1 from compute capability 7.5 (Linux HMM with the open kernel "
+        "modules) and on NVLink-C2C superchips (ATS), 0 for older GPUs and Jetson. `async_engine_count`: a modeled 2. "
+        "`can_flush_remote_writes`: 0, as an x86 Linux host reports. The reserved shared memory per block is derived, "
+        "not set: from compute capability 8.0 it is `shared_mem_per_sm` minus `shared_mem_per_block_optin`, the 1 KB the CUDA Programming Guide reserves "
+        "for system use; before 8.0 it is 0.",
         "- Memory MHz follows the existing analytical convention: half the effective per-pin data rate, "
         "so bandwidth in bytes/s = bus bits / 8 × memory MHz × 2,000,000. This may be derived from published bandwidth "
         "and is not necessarily the physical DRAM oscillator reported by a monitoring tool. Rounding can slightly change derived bandwidth.",

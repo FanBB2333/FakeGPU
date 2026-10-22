@@ -225,7 +225,7 @@ def test_torch_patch_registries_are_generated_from_yaml() -> None:
         assert _profiles._PROFILE_CC[profile_id] == profile.compute_capability
         assert _profiles._PROFILE_NAMES[profile_id] == profile.torch_name
         assert (
-            _profiles._PROFILE_TOTAL_MEMORY[profile_id] == profile.memory_bytes
+            _profiles._PROFILE_TOTAL_MEMORY[profile_id] == profile.device_memory_bytes
         )
         assert (
             _profiles._PROFILE_SUPPORTED_TYPES[profile_id]
