@@ -174,6 +174,19 @@ curl http://127.0.0.1:9400/api/v1/history
   samples by default and 1,440 at most.
 - Everything stays in memory. Use Prometheus or another scraper for long-term
   retention.
+- Metric names follow Prometheus's naming practices: one unit per family,
+  base units (bytes, seconds, bytes per second), and `_total` on counters.
+  NVLink values are `fakegpu_device_nvlink_active_links`,
+  `fakegpu_device_nvlink_peers` and
+  `fakegpu_device_nvlink_bandwidth_bytes_per_second`; native activity is a
+  set of `fakegpu_device_native_*_total` counters; publisher health is
+  `fakegpu_publisher_writes_total{result}` and
+  `fakegpu_publisher_{last,max}_duration_seconds`. The previous
+  `fakegpu_device_nvlink`, `fakegpu_device_native_activity`,
+  `fakegpu_publisher_writes` and `fakegpu_publisher_duration_microseconds`
+  families remain for this release, marked deprecated in their HELP text.
+- A value FakeGPU does not know, such as the state age of an idle machine
+  GPU, has no sample.
 - The server binds to `127.0.0.1` without authentication. Put it behind an
   authenticated proxy before exposing it. Exported values keep FakeGPU-SMI's
   distinction between modeled and observed data.

@@ -91,6 +91,20 @@
 - `fakegpu metrics` leaves out a sample whose value is unknown instead of
   exporting 0: an idle machine GPU or a state without a timestamp no longer
   reports a state age of 0 seconds, which read as fresh.
+- `fakegpu metrics` names follow Prometheus's naming practices: one unit per
+  family, base units and `_total` counters. New families:
+  `fakegpu_device_nvlink_active_links`, `fakegpu_device_nvlink_peers`,
+  `fakegpu_device_nvlink_bandwidth_bytes_per_second`, seven
+  `fakegpu_device_native_*_total` counters, `fakegpu_publisher_writes_total`
+  and `fakegpu_publisher_{last,max}_duration_seconds`.
+
+### Deprecated
+
+- The `fakegpu metrics` families `fakegpu_device_nvlink`,
+  `fakegpu_device_native_activity`, `fakegpu_publisher_writes` and
+  `fakegpu_publisher_duration_microseconds` mix units or quantities. They
+  are still exported, with a deprecation note in their HELP text, and will
+  be removed in the next release.
 
 ### Fixed
 

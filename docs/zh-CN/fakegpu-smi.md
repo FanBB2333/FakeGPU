@@ -153,6 +153,16 @@ curl http://127.0.0.1:9400/api/v1/history
 - 进程序列优先保留显存占用最高的进程，默认 128 个，最多 256 个。
   `--max-process-series 0` 可以关闭。历史默认保留 300 个样本，最多 1,440 个。
 - 数据只保存在内存中。长期留存请用 Prometheus 或其他采集系统。
+- 指标名遵循 Prometheus 命名规范：每个指标族只用一种单位，使用基本单位（bytes、
+  seconds、bytes per second），计数器以 `_total` 结尾。NVLink 数值为
+  `fakegpu_device_nvlink_active_links`、`fakegpu_device_nvlink_peers` 和
+  `fakegpu_device_nvlink_bandwidth_bytes_per_second`；原生活动是一组
+  `fakegpu_device_native_*_total` 计数器；发布器健康状态为
+  `fakegpu_publisher_writes_total{result}` 与
+  `fakegpu_publisher_{last,max}_duration_seconds`。旧的 `fakegpu_device_nvlink`、
+  `fakegpu_device_native_activity`、`fakegpu_publisher_writes` 和
+  `fakegpu_publisher_duration_microseconds` 在本版本中保留，HELP 文本标注为已弃用。
+- FakeGPU 不知道的数值（如空闲机器 GPU 的状态时长）不输出样本。
 - 服务只监听 `127.0.0.1`，不提供认证。对外开放前应放在带认证的代理后面。导出的
   数据沿用 FakeGPU-SMI 对建模值和观测值的区分。
 

@@ -340,6 +340,102 @@ def test_metrics_cli_rejects_missing_source_and_invalid_limits() -> None:
         main(["--state", "state.json", "--serve", "--json"])
 
 
+def _families(rendered: str) -> dict[str, dict]:
+    families: dict[str, dict] = {}
+    for line in rendered.splitlines():
+        if line.startswith("# HELP "):
+            name, _, text = line[len("# HELP "):].partition(" ")
+            families.setdefault(name, {"samples": []})["help"] = text
+        elif line.startswith("# TYPE "):
+            name, _, kind = line[len("# TYPE "):].partition(" ")
+            assert "type" not in families[name], name
+            families[name]["type"] = kind
+        elif line:
+            series, _, value = line.rpartition(" ")
+            name = series.partition("{")[0]
+            families[name]["samples"].append((series, float(value)))
+    return families
+
+
+def test_metrics_follow_prometheus_naming_and_keep_old_names_one_release(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("FAKEGPU_NVLINK_GROUPS", "0,1")
+    monkeypatch.setenv("FAKEGPU_NVLINK_BANDWIDTH_GBPS", "800")
+    state = SmiStatePublisher(
+        tmp_path / "state.json",
+        lambda: {
+            "devices": [
+                {
+                    "index": index,
+                    "name": "Fake NVIDIA A100-SXM4-80GB",
+                    "profile_id": "a100",
+                    "total_memory": 80 * 2**30,
+                }
+                for index in range(2)
+            ]
+        },
+    ).publish_once(running=True)
+    # The native publisher writes these counters.
+    state["devices"][0]["native_activity"] = {
+        "io_calls": 3,
+        "io_bytes": 4096,
+        "kernel_launches": 5,
+        "gemm_calls": 2,
+        "gemm_flops": 8192,
+        "compatibility_events": 1,
+        "unsupported_api_calls": 0,
+    }
+    snapshot = build_metrics_snapshot(build_inventory([state]))
+    families = _families(render_prometheus(snapshot))
+
+    # prometheus/docs naming.md: one unit and quantity per family, base
+    # units (bytes, seconds), and `_total` on accumulating counts.
+    for name, family in families.items():
+        if family["help"].startswith("Deprecated"):
+            continue
+        assert "microseconds" not in name and "gbps" not in name, name
+        assert (family["type"] == "counter") == name.endswith("_total"), name
+
+    def value(name: str, gpu: str = "0") -> float:
+        return next(
+            sample
+            for series, sample in families[name]["samples"]
+            if f'gpu_index="{gpu}"' in series or "gpu_index" not in series
+        )
+
+    assert value("fakegpu_device_nvlink_active_links") == 1
+    assert value("fakegpu_device_nvlink_peers") == 1
+    assert value("fakegpu_device_nvlink_bandwidth_bytes_per_second") == 800e9
+    assert value("fakegpu_device_native_io_calls_total") == 3
+    assert value("fakegpu_device_native_io_bytes_total") == 4096
+    assert value("fakegpu_device_native_kernel_launches_total") == 5
+    assert value("fakegpu_device_native_gemm_flops_total") == 8192
+    assert families["fakegpu_device_native_io_bytes_total"]["type"] == "counter"
+
+    writes = dict(families["fakegpu_publisher_writes_total"]["samples"])
+    assert sorted(writes.values()) == [0, 1]
+    assert families["fakegpu_publisher_writes_total"]["type"] == "counter"
+    health = snapshot["runtimes"][0]["publisher"]["health"]
+    assert value("fakegpu_publisher_last_duration_seconds") == pytest.approx(
+        health["last_duration_us"] / 1e6
+    )
+    assert value("fakegpu_publisher_max_duration_seconds") == pytest.approx(
+        health["max_duration_us"] / 1e6
+    )
+
+    # The previous names stay for one release, marked deprecated.
+    for old in (
+        "fakegpu_device_nvlink",
+        "fakegpu_device_native_activity",
+        "fakegpu_publisher_writes",
+        "fakegpu_publisher_duration_microseconds",
+    ):
+        assert families[old]["help"].startswith("Deprecated"), old
+        assert families[old]["samples"], old
+
+
 def test_metrics_omit_samples_whose_value_is_unknown() -> None:
     # A layout-only device (the background machine's idle GPU) and a
     # runtime state without a timestamp have no age. Prometheus convention

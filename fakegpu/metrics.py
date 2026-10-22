@@ -66,11 +66,42 @@ PROCESS_MEMORY_KINDS = (
     "reserved_peak",
 )
 
-# Each family is (name, help, samples); samples(record) returns the
+GAUGE = "gauge"
+COUNTER = "counter"
+
+
+def _deprecated(replacement: str) -> str:
+    return f"Deprecated, removed in the next release: use {replacement}."
+
+
+# Native activity counters. They accumulate per process and may reset when
+# a contributing process exits, which rate() treats as a counter reset.
+NATIVE_COUNTER_FAMILIES = (
+    ("io_calls", "fakegpu_device_native_io_calls_total",
+     "Native memory copy and memset calls."),
+    ("io_bytes", "fakegpu_device_native_io_bytes_total",
+     "Bytes moved by native memory copy and memset calls."),
+    ("kernel_launches", "fakegpu_device_native_kernel_launches_total",
+     "Native kernel launches."),
+    ("gemm_calls", "fakegpu_device_native_gemm_calls_total",
+     "Native cuBLAS and cuBLASLt GEMM calls."),
+    ("gemm_flops", "fakegpu_device_native_gemm_flops_total",
+     "Floating-point operations of native GEMM calls."),
+    ("compatibility_events", "fakegpu_device_native_compatibility_events_total",
+     "Native compatibility events."),
+    ("unsupported_api_calls", "fakegpu_device_native_unsupported_api_calls_total",
+     "Calls to native APIs FakeGPU does not support."),
+)
+
+# Each family is (name, type, help, samples); samples(record) returns the
 # (extra labels, value) pairs of one device, process, or runtime record.
+# Names follow the Prometheus naming practices: one unit and quantity per
+# family, base units, and `_total` on accumulating counts. The families
+# marked deprecated keep the previous names for one release.
 DEVICE_FAMILIES = (
     (
         "fakegpu_device_memory_bytes",
+        GAUGE,
         "Current and peak device memory values from FakeGPU state.",
         lambda device: [
             ({"kind": kind}, device["memory"][f"{kind}_bytes"])
@@ -79,6 +110,7 @@ DEVICE_FAMILIES = (
     ),
     (
         "fakegpu_device_processes",
+        GAUGE,
         "Published process count by device and state.",
         lambda device: [
             ({"status": status}, device[key])
@@ -91,11 +123,13 @@ DEVICE_FAMILIES = (
     ),
     (
         "fakegpu_device_state_age_seconds",
+        GAUGE,
         "Maximum age of contributing process state for a device.",
         lambda device: [({}, device["age_seconds"])],
     ),
     (
         "fakegpu_device_health_severity",
+        GAUGE,
         "Modeled health severity rank from zero to four.",
         lambda device: [
             ({}, _severity_rank(device["health"]["max_severity"]))
@@ -103,6 +137,7 @@ DEVICE_FAMILIES = (
     ),
     (
         "fakegpu_device_health_events",
+        GAUGE,
         "Modeled health event occurrences and distinct event types.",
         lambda device: [
             ({"kind": "occurrences"}, device["health"]["event_count"]),
@@ -111,11 +146,13 @@ DEVICE_FAMILIES = (
     ),
     (
         "fakegpu_device_mig_instances",
+        GAUGE,
         "Number of modeled MIG compute instances.",
         lambda device: [({}, device["mig"]["instance_count"])],
     ),
     (
         "fakegpu_device_mig_memory_bytes",
+        GAUGE,
         "Modeled MIG memory capacity allocation.",
         lambda device: [
             ({"kind": "allocated"}, device["mig"]["allocated_memory_bytes"]),
@@ -126,8 +163,45 @@ DEVICE_FAMILIES = (
         ],
     ),
     (
+        "fakegpu_device_nvlink_active_links",
+        GAUGE,
+        "Modeled active NVLink links.",
+        lambda device: [({}, device["topology"]["nvlink"]["active_links"])],
+    ),
+    (
+        "fakegpu_device_nvlink_peers",
+        GAUGE,
+        "GPUs reachable over modeled NVLink.",
+        lambda device: [({}, device["topology"]["nvlink"]["peer_count"])],
+    ),
+    (
+        "fakegpu_device_nvlink_bandwidth_bytes_per_second",
+        GAUGE,
+        "Configured aggregate NVLink bandwidth per direction, not measured.",
+        lambda device: [
+            (
+                {},
+                device["topology"]["nvlink"]["aggregate_bandwidth_gbps"]
+                * 1e9,
+            )
+        ],
+    ),
+    *(
+        (
+            name,
+            COUNTER,
+            help_text,
+            lambda device, key=key: [({}, device["native_activity"][key])],
+        )
+        for key, name, help_text in NATIVE_COUNTER_FAMILIES
+    ),
+    (
         "fakegpu_device_nvlink",
-        "Modeled NVLink relationships and configured bandwidth.",
+        GAUGE,
+        _deprecated(
+            "fakegpu_device_nvlink_active_links, fakegpu_device_nvlink_peers "
+            "and fakegpu_device_nvlink_bandwidth_bytes_per_second"
+        ),
         lambda device: [
             ({"kind": kind}, device["topology"]["nvlink"][kind])
             for kind in (
@@ -139,7 +213,8 @@ DEVICE_FAMILIES = (
     ),
     (
         "fakegpu_device_native_activity",
-        "Aggregated native runtime activity; values may reset.",
+        GAUGE,
+        _deprecated("the fakegpu_device_native_*_total counters"),
         lambda device: [
             ({"kind": kind}, device["native_activity"][kind])
             for kind in NATIVE_ACTIVITY_COUNTERS
@@ -149,6 +224,7 @@ DEVICE_FAMILIES = (
 PROCESS_FAMILIES = (
     (
         "fakegpu_process_memory_bytes",
+        GAUGE,
         "Memory values for bounded retained process series.",
         lambda process: [
             ({"kind": kind}, process["memory"][f"{kind}_bytes"])
@@ -157,14 +233,58 @@ PROCESS_FAMILIES = (
     ),
     (
         "fakegpu_process_state_age_seconds",
+        GAUGE,
         "Age of the state file backing a retained process series.",
         lambda process: [({}, process["age_seconds"])],
     ),
 )
 RUNTIME_FAMILIES = (
     (
+        "fakegpu_publisher_writes_total",
+        COUNTER,
+        "State publisher writes by result; their sum is the attempts.",
+        lambda runtime: [
+            ({"result": result}, runtime["publisher"]["health"][key])
+            for result, key in (
+                ("successful", "successful_writes"),
+                ("failed", "failed_writes"),
+            )
+        ],
+    ),
+    (
+        "fakegpu_publisher_last_duration_seconds",
+        GAUGE,
+        "Duration of the state publisher's last write.",
+        lambda runtime: [
+            ({}, runtime["publisher"]["health"]["last_duration_us"] / 1e6)
+        ],
+    ),
+    (
+        "fakegpu_publisher_max_duration_seconds",
+        GAUGE,
+        "Longest state publisher write.",
+        lambda runtime: [
+            ({}, runtime["publisher"]["health"]["max_duration_us"] / 1e6)
+        ],
+    ),
+    (
+        "fakegpu_publisher_state_bytes",
+        GAUGE,
+        "Serialized byte size reported by the state publisher.",
+        lambda runtime: [
+            ({}, runtime["publisher"]["health"]["last_serialized_bytes"])
+        ],
+    ),
+    (
+        "fakegpu_runtime_state_age_seconds",
+        GAUGE,
+        "Age of a FakeGPU publisher runtime state.",
+        lambda runtime: [({}, runtime["age_seconds"])],
+    ),
+    (
         "fakegpu_publisher_writes",
-        "Publisher write attempts, successes, and failures.",
+        GAUGE,
+        _deprecated("fakegpu_publisher_writes_total"),
         lambda runtime: [
             ({"result": result}, runtime["publisher"]["health"][key])
             for result, key in (
@@ -176,7 +296,11 @@ RUNTIME_FAMILIES = (
     ),
     (
         "fakegpu_publisher_duration_microseconds",
-        "Last and maximum state publisher duration.",
+        GAUGE,
+        _deprecated(
+            "fakegpu_publisher_last_duration_seconds and "
+            "fakegpu_publisher_max_duration_seconds"
+        ),
         lambda runtime: [
             ({"kind": kind}, runtime["publisher"]["health"][key])
             for kind, key in (
@@ -184,18 +308,6 @@ RUNTIME_FAMILIES = (
                 ("maximum", "max_duration_us"),
             )
         ],
-    ),
-    (
-        "fakegpu_publisher_state_bytes",
-        "Serialized byte size reported by the state publisher.",
-        lambda runtime: [
-            ({}, runtime["publisher"]["health"]["last_serialized_bytes"])
-        ],
-    ),
-    (
-        "fakegpu_runtime_state_age_seconds",
-        "Age of a FakeGPU publisher runtime state.",
-        lambda runtime: [({}, runtime["age_seconds"])],
     ),
 )
 
@@ -994,11 +1106,12 @@ def _metric_family(
     name: str,
     help_text: str,
     samples: Sequence[
-        tuple[Mapping[str, Any], int | float]
+        tuple[Mapping[str, Any], int | float | None]
     ],
+    metric_type: str = GAUGE,
 ) -> None:
     output.append(f"# HELP {name} {help_text}")
-    output.append(f"# TYPE {name} gauge")
+    output.append(f"# TYPE {name} {metric_type}")
     for labels, value in samples:
         if value is None:
             # An unknown value is left out, not exported as 0: an age of 0
@@ -1010,11 +1123,11 @@ def _metric_family(
 
 def _entity_families(
     output: list[str],
-    families: Sequence[tuple[str, str, Any]],
+    families: Sequence[tuple[str, str, str, Any]],
     items: Sequence[Mapping[str, Any]],
     label_sets: Sequence[Mapping[str, str]],
 ) -> None:
-    for name, help_text, samples in families:
+    for name, metric_type, help_text, samples in families:
         _metric_family(
             output,
             name,
@@ -1024,6 +1137,7 @@ def _entity_families(
                 for item, labels in zip(items, label_sets)
                 for extra, value in samples(item)
             ],
+            metric_type=metric_type,
         )
 
 

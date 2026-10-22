@@ -152,6 +152,16 @@ curl http://127.0.0.1:9400/api/v1/history
 - 程序序列優先保留 GPU 記憶體用量最高的程序，預設 128 個、最多 256 個。
   `--max-process-series 0` 可關閉。歷史預設保留 300 個樣本，最多 1,440 個。
 - 資料只保存在記憶體中。長期保留請使用 Prometheus 或其他收集系統。
+- 指標名稱遵循 Prometheus 命名慣例：每個指標族只用一種單位，使用基本單位（bytes、
+  seconds、bytes per second），計數器以 `_total` 結尾。NVLink 數值為
+  `fakegpu_device_nvlink_active_links`、`fakegpu_device_nvlink_peers` 與
+  `fakegpu_device_nvlink_bandwidth_bytes_per_second`；原生活動是一組
+  `fakegpu_device_native_*_total` 計數器；發布器健康狀態為
+  `fakegpu_publisher_writes_total{result}` 與
+  `fakegpu_publisher_{last,max}_duration_seconds`。舊的 `fakegpu_device_nvlink`、
+  `fakegpu_device_native_activity`、`fakegpu_publisher_writes` 與
+  `fakegpu_publisher_duration_microseconds` 在本版本中保留，HELP 文字標註為已棄用。
+- FakeGPU 不知道的數值（如閒置機器 GPU 的狀態時長）不輸出樣本。
 - 服務只監聽 `127.0.0.1`，不提供身分驗證。對外開放前請放在帶身分驗證的 proxy
   後面。匯出資料沿用 FakeGPU-SMI 對建模值與觀測值的區分。
 
