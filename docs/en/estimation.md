@@ -109,7 +109,18 @@ How the diffusion estimator works:
   schedulers report `denoiser_evaluations: null`.
 - UNets, cross-attention transformers (DiT/PixArt), and SD3/Flux-style
   joint-attention transformers use different activation formulas. CFG doubles
-  the denoiser batch only where both branches exist.
+  the denoiser batch only where both branches exist. The text encoders run on
+  the prompt batch, as `encode_prompt` encodes prompts and negative prompts in
+  separate calls.
+- For SD3, `--text-tokens` is the T5 `max_sequence_length` (default 256). The
+  joint attention sequence also carries the 77-token CLIP prefix, reported as
+  `inputs.denoiser_text_tokens`. Without `text_encoder_3`, the T5 part is a
+  fixed 77-token placeholder.
+- Pipeline classes without recorded call defaults use the
+  `StableDiffusionPipeline` values (50 steps, guidance 7.5, 77 tokens).
+  `generation_defaults.assumed_inputs` and `assumptions` list each value that
+  was filled this way. Pass `--steps`, `--guidance-scale`, and `--text-tokens`
+  with the pipeline's own defaults.
 - `--weight-variant fp16|bf16|fp32` selects a checkpoint family. Built-in
   profiles include `pixart-sigma-xl-2-1024-ms` and two Stable Diffusion UNets.
 - `--offload model`, `--attention-slicing`, `--vae-slicing`, and

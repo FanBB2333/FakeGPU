@@ -228,6 +228,19 @@ def estimate_diffusion_generation(
                 "text-conditioning component"
             )
         selected_tokens = 0
+    # SD3 places a fixed CLIP prefix before the requested T5 tokens, so the
+    # denoiser sees prefix + text_tokens conditioning tokens.
+    denoiser_tokens = selected_tokens + (
+        int(conditioning.get("denoiser_prefix_tokens", 0)) if conditioning_enabled else 0
+    )
+    supplied = {"steps": steps, "guidance_scale": guidance_scale}
+    if conditioning_enabled:
+        supplied["text_tokens"] = text_tokens
+    assumed_inputs = (
+        [name for name, value in supplied.items() if value is None]
+        if defaults.get("source") == "assumed_stable_diffusion_pipeline_defaults"
+        else []
+    )
 
     element_bytes = SUPPORTED_DTYPES[selected_dtype]
     denoiser_profile = profile["denoiser"]
@@ -275,10 +288,12 @@ def estimate_diffusion_generation(
     )
     denoiser_latent_bytes = latent_bytes * (2 if classifier_free_guidance else 1)
     conditioning_output_bytes = (
-        denoiser_batch * selected_tokens * conditioning["width"] * element_bytes
+        denoiser_batch * denoiser_tokens * conditioning["width"] * element_bytes
     )
+    # encode_prompt runs the text encoders once for the prompts and once for
+    # the negative prompts; only the concatenated output has the CFG batch.
     text_activation = _text_encoder_activation(
-        batch_size=denoiser_batch,
+        batch_size=image_batch,
         tokens=selected_tokens,
         width=int(conditioning.get("encoder_width", conditioning["width"])),
         element_bytes=element_bytes,
@@ -288,7 +303,7 @@ def estimate_diffusion_generation(
         latent_height=latent_height,
         latent_width=latent_width,
         batch_size=denoiser_batch,
-        text_tokens=selected_tokens,
+        text_tokens=denoiser_tokens,
         element_bytes=element_bytes,
         attention_backend=attention_backend,
         attention_slicing=attention_slicing,
@@ -421,6 +436,7 @@ def estimate_diffusion_generation(
             "classifier_free_guidance": classifier_free_guidance,
             "denoiser_batch_size": denoiser_batch,
             "text_tokens": selected_tokens,
+            "denoiser_text_tokens": denoiser_tokens,
             "text_conditioning_enabled": conditioning_enabled,
             "dtype": selected_dtype,
             "element_bytes": element_bytes,
@@ -433,6 +449,28 @@ def estimate_diffusion_generation(
             "runtime_overhead_bytes": overhead_bytes,
             "target_profile": target_profile,
         },
+        "generation_defaults": {
+            "source": defaults.get("source", "reference_profile"),
+            "assumed_inputs": assumed_inputs,
+        },
+        "assumptions": (
+            [
+                f"{profile['pipeline_class']} has no recorded call defaults; "
+                + ", ".join(
+                    f"{name}={value}"
+                    for name, value in (
+                        ("steps", denoising_steps),
+                        ("guidance_scale", selected_guidance),
+                        ("text_tokens", selected_tokens),
+                    )
+                    if name in assumed_inputs
+                )
+                + " are StableDiffusionPipeline defaults. Pass the pipeline's own "
+                "values explicitly."
+            ]
+            if assumed_inputs
+            else []
+        ),
         "latent": {
             "scale_factor": latent_scale,
             "channels": latent_channels,
@@ -750,6 +788,8 @@ def _print_report(report: Mapping[str, Any]) -> None:
     print(f"  estimated peak: {_format_bytes(timeline['peak_bytes'])}")
     for phase in timeline["phases"]:
         print(f"  {phase['phase']}: {_format_bytes(phase['peak_bytes'])}")
+    for assumption in report["assumptions"]:
+        print(f"  assumption: {assumption}")
     fit = report.get("fit")
     if fit is not None:
         print(

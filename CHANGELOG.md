@@ -396,6 +396,13 @@
   Accelerate's `Accelerator().device` and transformers'
   `TrainingArguments.device` chose MPS before CUDA, so single-process
   training ran on MPS and bypassed the simulated GPUs.
+- SD3 diffusion estimates put the 77-token CLIP prefix in front of the T5
+  tokens in the joint attention sequence and the conditioning tensors
+  (`inputs.denoiser_text_tokens`), as `encode_prompt` concatenates them. Text
+  encoder activations use the prompt batch instead of the CFG-doubled batch.
+  Local pipelines whose class has no recorded call defaults list the
+  borrowed Stable Diffusion steps, guidance and text tokens in
+  `generation_defaults.assumed_inputs` and `assumptions`.
 
 ## v1.6.0 - 2026-10-17
 

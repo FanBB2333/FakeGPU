@@ -104,7 +104,15 @@ Diffusion 估算器的工作方式：
   决定 denoiser 调用次数。其他 scheduler 报告 `denoiser_evaluations: null`。
 - UNet、交叉注意力 Transformer（DiT/PixArt）和 SD3/Flux 类联合注意力
   Transformer 使用不同的 activation 公式。CFG 只在正负分支都存在时让 denoiser
-  batch 翻倍。
+  batch 翻倍。`encode_prompt` 分别编码 prompt 和 negative prompt，所以 text
+  encoder 按 prompt batch 计算。
+- 对 SD3，`--text-tokens` 是 T5 的 `max_sequence_length`（默认 256）。联合注意力
+  序列还包含 77 个 token 的 CLIP 前缀，报告为 `inputs.denoiser_text_tokens`。
+  没有 `text_encoder_3` 时，T5 部分固定为 77 个 token 的占位张量。
+- 没有记录调用默认值的 pipeline 类沿用 `StableDiffusionPipeline` 的默认值
+  （50 步、guidance 7.5、77 个 token）。`generation_defaults.assumed_inputs` 和
+  `assumptions` 会列出每个这样填入的值。请用该 pipeline 自己的默认值传入
+  `--steps`、`--guidance-scale` 和 `--text-tokens`。
 - `--weight-variant fp16|bf16|fp32` 指定 checkpoint 文件族。内置 profile 包含
   `pixart-sigma-xl-2-1024-ms` 和两个 Stable Diffusion UNet。
 - `--offload model`、`--attention-slicing`、`--vae-slicing` 和 `--vae-tiling`
