@@ -9,7 +9,12 @@ from ._cli import (
     emit_json_report,
     usage_error,
 )
-from .llm_estimator import VISION_ESTIMATE_WARNING, estimate_decoder_inference
+from .llm_estimator import (
+    DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
+    MLA_KV_CACHE_LAYOUTS,
+    VISION_ESTIMATE_WARNING,
+    estimate_decoder_inference,
+)
 from .performance_model import COMPUTE_PRECISIONS
 
 
@@ -54,7 +59,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--kv-cache-residual-tokens",
         type=int,
         default=128,
-        help="Recent full-precision tokens retained by a quantized cache.",
+        help=(
+            "Quantized-cache residual length: generated tokens stay in full "
+            "precision until this many accumulate, then the whole cache is "
+            "re-quantized."
+        ),
+    )
+    parser.add_argument(
+        "--kv-cache-group-size",
+        type=int,
+        default=DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
+        help=(
+            "Quantized-cache q_group_size; each group stores a scale and a "
+            "zero point in the compute dtype."
+        ),
     )
     parser.add_argument(
         "--kv-cache-block-tokens",
@@ -70,7 +88,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--kv-cache-window-tokens",
         type=int,
-        help="Optional sliding-window context limit.",
+        help=(
+            "Override: one attention window for every layer instead of the "
+            "model's configured sliding-window layers."
+        ),
+    )
+    parser.add_argument(
+        "--mla-kv-cache-layout",
+        choices=sorted(MLA_KV_CACHE_LAYOUTS),
+        default="auto",
+        help=(
+            "Cache layout for multi-head latent attention models: "
+            "decompressed per-head keys and values (Hugging Face "
+            "transformers) or the compressed latent plus rope key (vLLM). "
+            "auto picks latent for the paged strategy, decompressed "
+            "otherwise."
+        ),
     )
     parser.add_argument("--attention-implementation", choices=["eager", "sdpa"], default="eager")
     parser.add_argument("--runtime-overhead-bytes", type=int, default=0)
@@ -123,6 +156,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             kv_cache_block_tokens=args.kv_cache_block_tokens,
             kv_cache_max_tokens=args.kv_cache_max_tokens,
             kv_cache_window_tokens=args.kv_cache_window_tokens,
+            kv_cache_group_size=args.kv_cache_group_size,
+            mla_kv_cache_layout=args.mla_kv_cache_layout,
         )
     except (OSError, ValueError) as exc:
         usage_error(parser, exc)

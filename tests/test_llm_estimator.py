@@ -516,7 +516,7 @@ def test_decode_step_aggregation_preserves_flops_without_per_token_records(
     assert aggregated["inputs"]["include_decode_steps"] is False
 
 
-def test_mla_uses_compressed_latent_cache_and_architecture_flops(
+def test_mla_cache_layout_follows_runtime_and_architecture_flops(
     tmp_path: Path,
 ) -> None:
     mla_dir = tmp_path / "mla"
@@ -569,8 +569,26 @@ def test_mla_uses_compressed_latent_cache_and_architecture_flops(
     )
     assert mla["model"]["head_dim"] == 6
     assert mla["model"]["kv_cache_elements_per_token_per_layer"] == 8
-    assert mla["kv_cache"]["elements_per_token_per_layer"] == 8
-    assert mla["kv_cache"]["prefill"]["allocated_bytes"] == 256
+    # Transformers' DeepseekV3 attention caches decompressed per-head keys
+    # (qk_nope + qk_rope) and values (v_head_dim): 4 * (4 + 2 + 4).
+    assert mla["inputs"]["mla_kv_cache_layout"] == "decompressed"
+    assert mla["kv_cache"]["cache_layout"] == (
+        "decompressed_per_head_key_value"
+    )
+    assert mla["kv_cache"]["elements_per_token_per_layer"] == 40
+    assert mla["kv_cache"]["prefill"]["allocated_bytes"] == 2 * 40 * 8 * 2
+    latent = estimate_decoder_inference(
+        mla_dir,
+        batch_size=2,
+        prompt_tokens=4,
+        generated_tokens=2,
+        attention_implementation="sdpa",
+        mla_kv_cache_layout="latent",
+    )
+    assert latent["inputs"]["mla_kv_cache_layout"] == "latent"
+    assert latent["kv_cache"]["elements_per_token_per_layer"] == 8
+    assert latent["kv_cache"]["prefill"]["allocated_bytes"] == 256
+    assert standard["inputs"]["mla_kv_cache_layout"] is None
     assert standard["kv_cache"]["prefill"]["allocated_bytes"] == 1536
     assert mla["compute"]["prefill_flops"] > 0
     assert mla["compute"]["prefill_flops"] != standard["compute"][
@@ -728,13 +746,22 @@ def test_kv_cache_strategies_account_for_storage_and_reservation() -> None:
     assert static["generation"]["allocated_bytes"] == 512
     assert static["prefill"]["reservation_overhead_bytes"] == 384
     assert quantized["storage_bits_per_element"] == 4
-    assert quantized["prefill"]["allocated_bytes"] == 80
-    assert quantized["generation"]["allocated_bytes"] == 88
+    assert quantized["quantized_group_size"] == 64
+    # Transformers' QuantizedLayer quantizes the whole prefill: 2 layers *
+    # 8 elements * 4 tokens at 4 bits, plus one bfloat16 scale and zero
+    # point for the single 64-element group.
+    assert quantized["prefill"]["quantization_metadata_bytes"] == 4
+    assert quantized["prefill"]["allocated_bytes"] == 32 + 4
+    assert quantized["prefill"][
+        "full_precision_residual_tokens_per_sequence"
+    ] == 0
+    # The one decode step appends its token to the full-precision residual.
+    assert quantized["generation"]["allocated_bytes"] == 32 + 4 + 32
     assert quantized["generation"][
         "full_precision_residual_tokens_per_sequence"
-    ] == 2
-    assert quantized["generation"]["quantized_tokens_per_sequence"] == 3
-    assert quantized["generation"]["quantization_savings_bytes"] == 72
+    ] == 1
+    assert quantized["generation"]["quantized_tokens_per_sequence"] == 4
+    assert quantized["generation"]["quantization_savings_bytes"] == 92
     assert paged["prefill"]["allocated_bytes"] == 128
     assert paged["generation"]["allocated_bytes"] == 256
     assert paged["generation"]["reservation_overhead_bytes"] == 96

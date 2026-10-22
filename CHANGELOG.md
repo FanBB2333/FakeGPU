@@ -30,6 +30,9 @@
 - Execute nested device-side child launches through direct PTX and linked
   SASS modules; accept nvcc linked fatbin wrapper v2. Cubin globals share
   their CUDA address with host backing for CPU library interoperability.
+- `estimate-llm` takes `--mla-kv-cache-layout` (`auto`, `latent`,
+  `decompressed`) and `--kv-cache-group-size` (quantized caches, default
+  64).
 
 ### Changed
 
@@ -55,6 +58,18 @@
 - Mixed-precision training plans size Adam and momentum state in FP32 next
   to the master copy, as DeepSpeed and PyTorch AMP keep it: 4 more bytes per
   parameter than before.
+- KV caches count sliding-window layers from the model config
+  (`layer_types`, `sliding_window_pattern`, Qwen's `use_sliding_window`)
+  instead of keeping the whole context on every layer.
+  `--kv-cache-window-tokens` still applies one window to every layer.
+- MLA models cache decompressed per-head keys and values with the dynamic,
+  static, and quantized strategies, as Transformers does, and the latent plus
+  RoPE key with the paged strategy, as vLLM does. Non-paged MLA estimates
+  were previously the latent size and are now larger.
+- Quantized caches follow Transformers' `QuantizedCache`: the prompt is
+  quantized at prefill, at most `--kv-cache-residual-tokens` minus one
+  generated tokens stay unquantized, and each quantization group adds a
+  scale and a zero point at the compute dtype.
 
 ### Fixed
 

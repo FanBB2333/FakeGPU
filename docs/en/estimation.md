@@ -67,12 +67,29 @@ How the LLM estimator works:
 - `--kv-cache-strategy` accepts `dynamic`, `static`, `quantized`, or `paged`.
   The report separates logical storage, quantization savings, static
   reservation, paged overhead, and sliding-window limits.
-- Quantized caches keep the 128 most recent tokens at the compute dtype by
-  default. Change this with `--kv-cache-residual-tokens`.
+- Sliding-window layers are read from the config the way Transformers
+  resolves them: `layer_types`, Qwen-style `use_sliding_window` with
+  `max_window_layers`, or `sliding_window_pattern` (Gemma 3 makes every sixth
+  layer full attention by default). After prefill, a dynamic cache still
+  holds the whole prompt on those layers; after a decode step it holds the
+  last `sliding_window` tokens. A paged cache holds the window plus the
+  scheduled tokens. Full-attention layers keep the whole context.
+  `--kv-cache-window-tokens` instead applies one window to every layer.
+- A quantized cache (Transformers `QuantizedCache`) quantizes the prompt at
+  prefill. Generated tokens stay at the compute dtype until
+  `--kv-cache-residual-tokens` (default 128) of them accumulate, and then the
+  whole cache is re-quantized, so at most that number minus one stay
+  unquantized. Every `--kv-cache-group-size` (default 64) quantized elements
+  add a scale and a zero point at the compute dtype. Every layer keeps its
+  full history.
 - MHA, GQA, and MQA use separate key and value storage. Configs with
   `kv_lora_rank`, `qk_nope_head_dim`, `qk_rope_head_dim`, and `v_head_dim` are
-  treated as MLA (compressed latent plus decoupled RoPE). MLA backend
-  workspaces need calibration.
+  treated as MLA. `--mla-kv-cache-layout` selects what the runtime caches:
+  `decompressed` per-head keys (`qk_nope_head_dim + qk_rope_head_dim`) and
+  values (`v_head_dim`), as Transformers does, or the compressed `latent` plus
+  the RoPE key, as vLLM does. `auto`, the default, uses `latent` for the paged
+  strategy and `decompressed` otherwise. MLA backend workspaces need
+  calibration.
 - For models with a vision encoder, checkpoint weights are counted but
   vision and projector activations and FLOPs are not. The report flags this.
   Decoder token counts must already include the visual tokens.
