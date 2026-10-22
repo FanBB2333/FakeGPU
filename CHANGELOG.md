@@ -441,6 +441,8 @@
 - Native NVML lists the calling process in
   `nvmlDeviceGetComputeRunningProcesses` while it holds simulated device
   memory, and `nvmlErrorString` returns the driver's text for every code.
+- cuBLAS `axpy` and `copy` accept zero and negative increments, and `scal`
+  leaves the vector unchanged when `incx <= 0`, as cuBLAS does.
 
 ## v1.6.0 - 2026-10-17
 

@@ -743,6 +743,78 @@ int main() {
             check_cublas(cublasSscal_v2(handle, 0, &one, dX, 1), "cublasSscal_v2 n=0");
         }
 
+        // Zero and negative increments, as cuBLAS answers them on a real
+        // GPU: all return success; an increment of 0 reuses one element in
+        // order, and scal with incx <= 0 leaves x untouched.
+        {
+            struct IncCase {
+                int incx, incy;
+                float axpy[8];
+                float copy[8];
+            };
+            const IncCase cases[] = {
+                {0, 1, {12, 22, 32, 42, 50, 60, 70, 80}, {1, 1, 1, 1, 50, 60, 70, 80}},
+                {1, 0, {30, 20, 30, 40, 50, 60, 70, 80}, {4, 20, 30, 40, 50, 60, 70, 80}},
+                {0, 0, {18, 20, 30, 40, 50, 60, 70, 80}, {1, 20, 30, 40, 50, 60, 70, 80}},
+                {-1, 1, {18, 26, 34, 42, 50, 60, 70, 80}, {4, 3, 2, 1, 50, 60, 70, 80}},
+                {1, -1, {18, 26, 34, 42, 50, 60, 70, 80}, {4, 3, 2, 1, 50, 60, 70, 80}},
+                {-1, -1, {12, 24, 36, 48, 50, 60, 70, 80}, {1, 2, 3, 4, 50, 60, 70, 80}},
+                {2, -2, {24, 20, 40, 40, 56, 60, 72, 80}, {7, 20, 5, 40, 3, 60, 1, 80}},
+            };
+            const float x8[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+            const float y8[8] = {10, 20, 30, 40, 50, 60, 70, 80};
+            const float two = 2.0f;
+            float got[8];
+            auto reset = [&]() {
+                check_cuda(cudaMemcpy(dX, x8, sizeof(x8), cudaMemcpyHostToDevice), "H2D x8");
+                check_cuda(cudaMemcpy(dY, y8, sizeof(y8), cudaMemcpyHostToDevice), "H2D y8");
+            };
+            auto matches = [&](float* device, const float* expected, const char* what, int incx, int incy) {
+                check_cuda(cudaMemcpy(got, device, sizeof(got), cudaMemcpyDeviceToHost), "D2H inc case");
+                for (int i = 0; i < 8; ++i) {
+                    if (got[i] != expected[i]) {
+                        std::fprintf(stderr, "Test6 failed: %s incx=%d incy=%d element %d got %f expected %f\n",
+                                     what, incx, incy, i, got[i], expected[i]);
+                        return false;
+                    }
+                }
+                return true;
+            };
+            for (const IncCase& c : cases) {
+                reset();
+                check_cublas(cublasSaxpy_v2(handle, 4, &two, dX, c.incx, dY, c.incy), "cublasSaxpy_v2 inc case");
+                if (!matches(dY, c.axpy, "cublasSaxpy_v2", c.incx, c.incy)) return 1;
+                reset();
+                check_cublas(cublasScopy_v2(handle, 4, dX, c.incx, dY, c.incy), "cublasScopy_v2 inc case");
+                if (!matches(dY, c.copy, "cublasScopy_v2", c.incx, c.incy)) return 1;
+            }
+            const int scal_incs[] = {0, -1, -2};
+            for (int inc : scal_incs) {
+                reset();
+                check_cublas(cublasSscal_v2(handle, 4, &two, dX, inc), "cublasSscal_v2 inc<=0");
+                if (!matches(dX, x8, "cublasSscal_v2", inc, 0)) return 1;
+            }
+            reset();
+            const float scaled_inc2[8] = {2, 2, 6, 4, 10, 6, 14, 8};
+            check_cublas(cublasSscal_v2(handle, 4, &two, dX, 2), "cublasSscal_v2 inc=2");
+            if (!matches(dX, scaled_inc2, "cublasSscal_v2", 2, 0)) return 1;
+        }
+
+        // cublasSetWorkspace accepts any pointer, size and alignment.
+        {
+            char* base = reinterpret_cast<char*>(dX);
+            const size_t offsets[] = {0, 1, 4, 255, 256};
+            for (size_t offset : offsets) {
+                check_cublas(cublasSetWorkspace_v2(handle, base + offset, 16), "cublasSetWorkspace_v2 offset");
+            }
+            check_cublas(cublasSetWorkspace_v2(handle, nullptr, 0), "cublasSetWorkspace_v2 null");
+            check_cublas(cublasSetWorkspace_v2(handle, nullptr, 1024), "cublasSetWorkspace_v2 null size");
+            if (reinterpret_cast<uintptr_t>(dX) % 256 != 0 || reinterpret_cast<uintptr_t>(dY) % 256 != 0) {
+                std::fprintf(stderr, "Test6 failed: cudaMalloc pointers are not 256-byte aligned\n");
+                return 1;
+            }
+        }
+
         check_cublas(cublasDestroy_v2(handle), "cublasDestroy_v2");
         check_cuda(cudaFree(dX), "cudaFree X");
         check_cuda(cudaFree(dY), "cudaFree Y");
