@@ -90,6 +90,12 @@ def render() -> str:
         "which `torch.cuda.get_device_name()` and `nvidia-smi` print. Memory and laptop variants often share it; "
         "`canonical: true` marks the profile a name lookup such as `FAKEGPU_DEVICE_NAME` selects, "
         "and an exact-case match wins over a case-insensitive one.",
+        "- `supported_types` lists `fp32`, which every GPU computes, and the reduced-precision types the GPU accelerates "
+        "in hardware: native FP16 arithmetic, DP4A INT8 on some Pascal parts, and on GPUs with Tensor Cores the "
+        "Tensor Core input types of the CUDA Programming Guide table \"Input Data Types Supported by Tensor Core "
+        "Acceleration\" (`tf32`, `bf16`, `fp16`, `fp8`, `fp4`, `int8`, `int4`). INT4 is a Tensor Core input only on "
+        "compute capability 7.5–8.9, so Hopper and Blackwell profiles omit it. The cuBLAS stubs check GEMM data "
+        "types against this list.",
         "- `reference` means public specification or an explicitly documented derivation; it does not mean physical calibration. "
         "`measured` and `synthetic` retain their existing meanings. Catalog support does not imply a matching CUDA toolkit or framework still supports an old GPU.",
         "- `—` and a numeric zero in a reference specification mean unknown/unverified, not a hardware capacity of zero. "

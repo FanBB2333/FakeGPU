@@ -68,6 +68,12 @@
   GDDR6X, RTX 3050 6 GB, RTX 3080 Laptop 8 GB, RTX 2060 12 GB and GTX 1650
   GDDR6 profiles report the names the NVIDIA driver gives them, such as
   `NVIDIA GeForce RTX 2060` and `NVIDIA GeForce RTX 3080`.
+- Hopper and Blackwell profiles no longer list `int4` in `supported_types`.
+  The field's reduced-precision entries are Tensor Core input types, and the
+  CUDA Programming Guide gives INT4 Tensor Core inputs only to compute
+  capability 7.5–8.9. `doctor` and `fakegpu nvidia-smi` stop showing INT4 for
+  H100, B200 or RTX 50 GPUs, and strict cuBLAS dtype checks reject INT4
+  there. `profiles/README.md` documents the field.
 
 ### Fixed
 

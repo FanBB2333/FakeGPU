@@ -384,6 +384,15 @@ def validate_catalog(
             errors.append(
                 f"{prefix} fp4 is not valid for architecture {profile.architecture}"
             )
+        # CUDA Programming Guide, "Input Data Types Supported by Tensor Core
+        # Acceleration": INT4 only on compute capability 7.5 through 8.9.
+        if "int4" in profile.supported_types and not (
+            (7, 5) <= profile.compute_capability <= (8, 9)
+        ):
+            errors.append(
+                f"{prefix} int4 is not a Tensor Core input type on compute capability "
+                f"{profile.compute_capability_text}"
+            )
         if profile.shared_mem_per_block > profile.shared_mem_per_block_optin:
             errors.append(
                 f"{prefix} shared_mem_per_block exceeds shared_mem_per_block_optin"

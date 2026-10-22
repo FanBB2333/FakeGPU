@@ -146,6 +146,18 @@ def test_device_name_lookup_prefers_the_canonical_profile(device_name: str, prof
     assert profile_id_for_device_name(device_name) == profile_id
 
 
+def test_int4_is_listed_only_where_tensor_cores_accept_it() -> None:
+    # CUDA Programming Guide, "Input Data Types Supported by Tensor Core
+    # Acceleration": INT4 on compute capability 7.5-8.9, none on 9.0 and newer.
+    catalog = load_profiles()
+    for profile in catalog.values():
+        if profile.compute_capability >= (9, 0):
+            assert "int4" not in profile.supported_types, profile.id
+            assert "int8" in profile.supported_types, profile.id
+    h100 = replace(catalog["h100"], supported_types=catalog["h100"].supported_types + ("int4",))
+    assert any("int4 is not a Tensor Core input" in error for error in validate_catalog({"h100": h100}).errors)
+
+
 def test_shared_device_names_need_exactly_one_canonical_profile() -> None:
     catalog = load_profiles()
     assert validate_catalog(catalog).ok

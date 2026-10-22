@@ -65,8 +65,11 @@ AmpereProfile::AmpereProfile()
     : ArchProfile(GpuArch::Ampere, 8, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8, GpuDataType::INT4}) {
 }
 
+// Reduced-precision defaults are Tensor Core input types (CUDA Programming
+// Guide, "Input Data Types Supported by Tensor Core Acceleration"): INT4 is a
+// Tensor Core input on compute capability 7.5-8.9 only.
 HopperProfile::HopperProfile()
-    : ArchProfile(GpuArch::Hopper, 9, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8, GpuDataType::INT4, GpuDataType::FP8}) {
+    : ArchProfile(GpuArch::Hopper, 9, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8, GpuDataType::FP8}) {
 }
 
 AdaProfile::AdaProfile()
@@ -74,7 +77,7 @@ AdaProfile::AdaProfile()
 }
 
 BlackwellProfile::BlackwellProfile()
-    : ArchProfile(GpuArch::Blackwell, 10, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8, GpuDataType::INT4, GpuDataType::FP8, GpuDataType::FP4}) {
+    : ArchProfile(GpuArch::Blackwell, 10, {GpuDataType::FP32, GpuDataType::TF32, GpuDataType::FP16, GpuDataType::BF16, GpuDataType::INT8, GpuDataType::FP8, GpuDataType::FP4}) {
 }
 
 bool GpuProfile::supports(GpuDataType type) const {
