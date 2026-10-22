@@ -68,6 +68,7 @@ from ._ecosystem_compat import (
     _patch_accelerate_utils,
     _patch_fsdp_device_handling,
     _patch_fsdp_runtime_compat,
+    _patch_fsdp_simulated_gpu,
     _patch_upstream_all_gather_object,
     _patch_upstream_fakecuda_tensor_compat,
 )
@@ -2110,6 +2111,7 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
     _patch_nccl_surface(torch_mod)
     _patch_fsdp_device_handling()
     _patch_fsdp_runtime_compat(upstream.FakeCudaTensor)
+    _patch_fsdp_simulated_gpu(upstream, torch_mod)
     _patch_transformers_utils()
     _patch_accelerate_utils()
 

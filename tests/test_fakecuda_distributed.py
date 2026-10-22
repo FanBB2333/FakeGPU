@@ -1018,3 +1018,56 @@ def test_simulated_ddp_runs_communication_hooks_locally(tmp_path: Path) -> None:
     assert results["fp16"] == [[0, True, 10, "cuda:5"]]
     assert results["attributes"] == [True, "cuda:5", True]
 
+
+def test_fsdp_takes_a_cuda_device_id_for_a_cpu_module(tmp_path: Path) -> None:
+    # Oracle, one rank on a GPU: FSDP moves the CPU module to the device_id and computes there.
+    results = _single_rank(tmp_path, """
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+        dist.init_process_group("nccl", world_size=1, rank=0)
+        torch.cuda.set_device(0)
+        def wrapped(device_id, on_cuda=False):
+            def run():
+                module = torch.nn.Sequential(torch.nn.Linear(16, 16), torch.nn.Linear(16, 4))
+                model = FSDP(module.cuda() if on_cuda else module, device_id=device_id)
+                flat = next(iter(model.parameters()))
+                model(torch.randn(2, 16, device="cuda")).sum().backward()
+                return [str(model.compute_device), str(flat.device), str(flat.grad.device)]
+            return run
+        probe("cuda0", wrapped(torch.device("cuda", 0)))
+        probe("int", wrapped(0))
+        probe("cuda", wrapped(torch.device("cuda")))
+        probe("on_cuda", wrapped(torch.device("cuda", 0), on_cuda=True))
+        probe("on_cuda_no_device_id", wrapped(None, on_cuda=True))
+    """)
+    assert results == {name: ["cuda:0", "cuda:0", "cuda:0"]
+                       for name in ("cuda0", "int", "cuda", "on_cuda", "on_cuda_no_device_id")}
+
+
+def test_fully_shard_builds_its_default_mesh_on_cuda(tmp_path: Path) -> None:
+    # Oracle, one rank on a GPU: fully_shard without a mesh shards on CUDA, every parameter gets a
+    # Shard(0) DTensor gradient, and those gradients take memory after backward.
+    results = _single_rank(tmp_path, """
+        from torch.distributed.fsdp import fully_shard
+        dist.init_process_group("nccl", world_size=1, rank=0)
+        torch.cuda.set_device(0)
+        def run():
+            model = torch.nn.Sequential(*(torch.nn.Linear(1024, 1024, bias=False) for _ in range(4))).cuda()
+            for layer in model:
+                fully_shard(layer)
+            fully_shard(model)
+            parameter = next(iter(model.parameters()))
+            sharded = torch.cuda.memory_allocated()
+            model(torch.randn(64, 1024, device="cuda")).sum().backward()
+            grad = parameter.grad
+            return {"mesh": parameter.device_mesh.device_type, "type": type(parameter).__name__,
+                    "grad_none": [p.grad is None for p in model.parameters()],
+                    "grad": [type(grad).__name__, str(grad.placements), list(grad.shape)],
+                    "grad_bytes": torch.cuda.memory_allocated() - sharded}
+        probe("default_mesh", run)
+    """)
+    run = results["default_mesh"]
+    assert run["mesh"] == "cuda"
+    assert run["type"] == "DTensor"
+    assert run["grad_none"] == [False] * 4
+    assert run["grad"] == ["DTensor", "(Shard(dim=0),)", [1024, 1024]]
+    assert run["grad_bytes"] >= 4 * 1024 * 1024 * 4
