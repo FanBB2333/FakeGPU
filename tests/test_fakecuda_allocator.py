@@ -316,6 +316,9 @@ def test_fakecuda_memory_api_rejects_out_of_range_devices() -> None:
 
         import torch
 
+        # Before CUDA initializes, torch's memory_stats_as_nested_dict()
+        # returns {} without checking the device.
+        torch.cuda.init()
         result = {"device1": torch.cuda.memory_allocated("cuda:1")}
         for name in (
             "memory_allocated", "max_memory_allocated", "memory_reserved",

@@ -255,11 +255,12 @@ raises(lambda: torch.cuda.set_device(99), ordinal)
 
 assert len(torch.cuda.get_rng_state_all()) == 2
 assert torch.cuda.random.get_rng_state_all is torch.cuda.get_rng_state_all
-assert torch.cuda.random.fork_rng is torch.random.fork_rng
+# torch.cuda.random has no fork_rng of its own (torch/cuda/random.py __all__).
+assert not hasattr(torch.cuda.random, "fork_rng")
 state = torch.cuda.get_rng_state()
-first = torch.rand(3)
+first = torch.rand(3, device="cuda")
 torch.cuda.set_rng_state(state)
-assert torch.equal(first, torch.rand(3))
+assert torch.equal(first, torch.rand(3, device="cuda"))
 print("device checks passed")
 """
     _assert_ok(_run(code), "device checks")
