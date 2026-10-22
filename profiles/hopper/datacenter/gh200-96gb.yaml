@@ -7,7 +7,7 @@
 # Device name and reported memory: nvidia-smi shows GH200 120GB with 97871MiB (driver 535.129.03, Figure 9): https://docs.nvidia.com/gh200-superchip-mgx-system-quick-start-guide.pdf
 id: gh200-96gb
 name: Fake NVIDIA GH200 96GB (GPU HBM only)
-torch_name: NVIDIA GH200 96GB
+torch_name: NVIDIA GH200 120GB
 official_model: NVIDIA GH200
 architecture: hopper
 compute_major: 9
@@ -16,7 +16,7 @@ memory_kind: dedicated
 profile_status: reference
 compute_capability_source: https://developer.nvidia.com/cuda/gpus
 spec_source: https://www.nvidia.com/en-us/data-center/grace-hopper-superchip/
-notes: One Hopper GPU in a Grace Hopper Superchip. Memory is GPU-local HBM only; Grace LPDDR and multi-superchip aggregate memory are excluded. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for sm_count, memory_bus_width_bits, core_clock_mhz, memory_clock_mhz, l2_cache_bytes, max_power_limit_mw.
+notes: One Hopper GPU in a Grace Hopper Superchip. Memory is GPU-local HBM only; Grace LPDDR and multi-superchip aggregate memory are excluded. The driver names device 2342 GH200 120GB or GH200 480GB by subsystem ID; NVIDIA's MGX quick start guide shows a 96 GB GH200 reporting GH200 120GB, the name this profile uses. Nominal memory capacity is represented in GiB; usable memory may be lower with ECC or firmware reservations. Typical workload power is unknown (0). Unverified fields are 0 for sm_count, memory_bus_width_bits, core_clock_mhz, memory_clock_mhz, l2_cache_bytes, max_power_limit_mw.
 memory_bytes: 103079215104
 sm_count: 0
 memory_bus_width_bits: 0

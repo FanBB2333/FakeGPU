@@ -84,6 +84,9 @@ def test_researched_variants_keep_product_specific_resources(
         ("h800-pcie-80gb", 0x2322, "NVIDIA H800 PCIe"),
         ("h800-nvl-94gb", 0x233A, "NVIDIA H800 NVL"),
         ("gh200-144gb", 0x2348, "NVIDIA GH200 144G HBM3e"),
+        # 2342 is GH200 120GB or 480GB by subsystem; NVIDIA's GH200 MGX quick
+        # start guide shows a 96 GB GH200 reporting GH200 120GB.
+        ("gh200-96gb", 0x2342, "NVIDIA GH200 120GB"),
         ("l20-lc", 0x26BA, "NVIDIA L20"),
         ("l40s", 0x26B9, "NVIDIA L40S"),
         ("t4", 0x1EB8, "Tesla T4"),
@@ -122,6 +125,16 @@ def test_device_names_follow_the_driver_supported_chips_list(
     if device_id is not None:
         assert profile.pci_device_id >> 16 == device_id
     assert profile.torch_name == driver_name
+
+
+def test_jetson_thor_follows_the_developer_kit_device_query() -> None:
+    # deviceQuery on the Jetson AGX Thor Developer Kit (CUDA 13.0), NVIDIA's
+    # setup guide: Device 0 "NVIDIA Thor", L2 Cache Size 33554432 bytes,
+    # 131881811968 bytes of global memory.
+    profile = get_profile("jetson-t5000")
+    assert profile.torch_name == "NVIDIA Thor"
+    assert profile.l2_cache_bytes == 33554432
+    assert profile.device_memory_bytes == 131881811968
 
 
 @pytest.mark.parametrize(

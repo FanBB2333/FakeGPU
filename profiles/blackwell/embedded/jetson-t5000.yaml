@@ -2,7 +2,7 @@
 # Device name, L2, reported memory, copy engines and ECC: deviceQuery on the Jetson AGX Thor Developer Kit (T5000 module) shows NVIDIA Thor, a 33554432-byte L2, 131881811968 bytes, 1 copy engine and ECC disabled (CUDA 13.0): https://docs.nvidia.com/jetson/agx-thor-devkit/user-guide/latest/setup_cuda.html
 id: jetson-t5000
 name: Fake NVIDIA Jetson T5000
-torch_name: NVIDIA Jetson T5000
+torch_name: NVIDIA Thor
 official_model: Jetson T5000
 architecture: blackwell
 compute_major: 11
@@ -17,7 +17,7 @@ sm_count: 20
 memory_bus_width_bits: 256
 core_clock_mhz: 1575
 memory_clock_mhz: 4266
-l2_cache_bytes: 16777216
+l2_cache_bytes: 33554432
 shared_mem_per_sm: 233472
 shared_mem_per_block: 49152
 shared_mem_per_block_optin: 232448

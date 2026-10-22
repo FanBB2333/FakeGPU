@@ -107,6 +107,10 @@
   MIG, and `nvmlDeviceGetMaxMigDeviceCount` returns the profile's maximum
   (7 on A100) while a MIG layout is configured and 0 otherwise, as nvml.h
   documents. It returned the configured instance count before.
+- The GH200 96GB profile reports `NVIDIA GH200 120GB`, the name NVIDIA's
+  GH200 MGX quick start guide shows, and the Jetson T5000 profile reports
+  `NVIDIA Thor` with a 32 MiB L2, as deviceQuery on the Jetson AGX Thor
+  Developer Kit does.
 
 ### Fixed
 
