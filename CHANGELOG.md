@@ -61,6 +61,10 @@
   after the first cuBLAS call; other GPUs and drivers hold different amounts.
   `FAKEGPU_CUDA_CONTEXT_BYTES` sets another value, and `0` restores the
   previous numbers. Allocations can still use the whole profile memory.
+- With `FAKEGPU_MEMORY_TRACKING=0` the FakeCUDA memory API reports an empty
+  allocator on the profiled devices, with PyTorch's statistics keys and
+  `mem_get_info()` from the profile, instead of 80 GiB and an empty
+  `memory_stats()`.
 
 ### Fixed
 
@@ -89,12 +93,29 @@
   returns its segment and block layout.
 - The FakeCUDA memory API raises PyTorch's errors for a device index beyond
   the device count instead of reporting zero memory.
+- FakeCUDA reads `PYTORCH_CUDA_ALLOC_CONF`, and from torch 2.10
+  `PYTORCH_ALLOC_CONF`, with the installed torch's rules.
+  `max_split_size_mb`, `max_non_split_rounding_mb`,
+  `roundup_power2_divisions` (one value or a per-interval list),
+  `garbage_collection_threshold`, `expandable_segments`,
+  `large_segment_size_mb` (torch 2.11+) and `per_process_memory_fraction`
+  (torch 2.10+) change the modeled reserved memory. A malformed setting
+  raises torch's error at `torch.cuda.init()` and on allocation.
 - The FakeCUDA caching allocator models expandable segments, separate cached
   blocks per stream, `Tensor.record_stream()`, garbage collection under a
   memory fraction, and the release of oversize cached blocks before a retry.
   Fraction rounding, out-of-memory wording and statistics keys follow the
   installed torch. Allocation traces match a real GPU's allocated and
   reserved bytes, segments and counters.
+- `torch.cuda.memory._record_memory_history()`, `_snapshot()` and
+  `_dump_snapshot()` work under FakeCUDA: the history records allocation,
+  free and segment events with Python frames, and
+  `torch._C._cuda_memorySnapshot()` returns PyTorch's dictionary.
+- FakeCUDA runs torch's own `torch.cuda.memory` functions over the modeled
+  allocator. `memory_summary()` prints PyTorch's table, `memory_cached()` and
+  the other deprecated names warn, a CPU device raises `ValueError`, and
+  `caching_allocator_alloc()`, `caching_allocator_delete()` and
+  `host_memory_stats()` work.
 - The console no longer fails with `NoMatches` when its periodic refresh
   fires while the app is shutting down.
 - FakeCUDA autocast now defaults to float16 like CUDA instead of the CPU

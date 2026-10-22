@@ -11,11 +11,19 @@ oldest and newest version; elsewhere each version gets its own expectation.
 from __future__ import annotations
 
 import itertools
+import json
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
 import pytest
 
 from fakegpu._allocator import _DeviceMemoryTracker
 
 
+ROOT = Path(__file__).resolve().parents[1]
 MIB = 1024**2
 GIB = 1024**3
 SHARED_VERSIONS = [(2, 9), (2, 14)]
@@ -828,3 +836,174 @@ def test_set_allocator_settings_at_runtime() -> None:
         tracker.set_allocator_settings("bogus:1")
     with pytest.raises(RuntimeError, match="Allocator backend parsed at runtime"):
         tracker.set_allocator_settings("backend:cudaMallocAsync")
+
+
+def _run_fakecuda(code: str, **env_overrides: str) -> dict:
+    env = dict(os.environ)
+    for name in ("PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_ALLOC_CONF", "FAKEGPU_CUDA_CONTEXT_BYTES"):
+        env.pop(name, None)
+    env.update(env_overrides)
+    env["PYTHONPATH"] = str(ROOT)
+    env["FAKEGPU_TERMINAL_REPORT"] = "0"
+    completed = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(code)],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout.strip().splitlines()[-1])
+
+
+def test_fakecuda_runs_torch_memory_functions_over_the_model() -> None:
+    payload = _run_fakecuda(
+        """
+        import gc, json, os, pickle, tempfile, warnings
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", profile="a100", device_count=1)
+        import torch
+
+        result = {}
+        a = torch.empty(4, dtype=torch.uint8, device="cuda")
+        b = torch.empty(600 * 1024, dtype=torch.uint8, device="cuda")
+        c = torch.empty(25 * 1024**2 + 3, dtype=torch.uint8, device="cuda")
+        del b
+        gc.collect()
+        summary = torch.cuda.memory_summary()
+        result["summary_head"] = summary.splitlines()[1].strip()
+        result["summary_has_rows"] = all(
+            row in summary
+            for row in ("Allocated memory", "Non-releasable memory", "GPU reserved segments")
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            torch.cuda.memory_cached()
+            torch.cuda.max_memory_cached()
+            torch.cuda.reset_max_memory_allocated()
+        result["warnings"] = [[w.category.__name__, str(w.message)] for w in caught]
+        for name in ("memory_allocated", "mem_get_info"):
+            try:
+                getattr(torch.cuda, name)(torch.device("cpu"))
+            except ValueError as exc:
+                result[name] = str(exc)
+        free, total = torch.cuda.mem_get_info()
+        result["context"] = total - free - torch.cuda.memory_reserved()
+
+        torch.cuda.memory._record_memory_history(max_entries=100)
+        d = torch.empty(4000, dtype=torch.uint8, device="cuda")
+        snapshot = torch.cuda.memory._snapshot()
+        result["actions"] = [e["action"] for e in snapshot["device_traces"][0]]
+        path = os.path.join(tempfile.mkdtemp(), "snap.pickle")
+        torch.cuda.memory._dump_snapshot(path)
+        with open(path, "rb") as handle:
+            result["dumped_segments"] = len(pickle.load(handle)["segments"])
+        torch.cuda.memory._record_memory_history(enabled=None)
+        result["segments"] = len(torch.cuda.memory_snapshot())
+
+        side = torch.cuda.Stream()
+        pointer = torch.cuda.caching_allocator_alloc(2 * 1024**2, stream=side)
+        result["raw_stream"] = [
+            s["stream"] == side.cuda_stream
+            for s in torch.cuda.memory_snapshot()
+            if s["total_size"] == 20 * 1024**2
+        ]
+        torch.cuda.caching_allocator_delete(pointer)
+
+        e = torch.empty(30 * 1024**2, dtype=torch.uint8, device="cuda")
+        e.record_stream(side)
+        del e
+        gc.collect()
+        result["pending"] = torch.cuda.memory_stats()["active_bytes.all.current"] - torch.cuda.memory_allocated()
+        result["host_stats"] = torch.cuda.memory.host_memory_stats()
+        print(json.dumps(result))
+        """
+    )
+    assert payload["summary_head"] == "|                  PyTorch CUDA memory summary, device ID 0                 |"
+    assert payload["summary_has_rows"]
+    assert payload["warnings"] == [
+        [
+            "FutureWarning",
+            "`torch.cuda.memory_cached` has been renamed to `torch.cuda.memory_reserved`",
+        ],
+        [
+            "FutureWarning",
+            "`torch.cuda.max_memory_cached` has been renamed to `torch.cuda.max_memory_reserved`",
+        ],
+        [
+            "FutureWarning",
+            "torch.cuda.reset_max_memory_allocated now calls "
+            "torch.cuda.reset_peak_memory_stats, which resets /all/ peak memory stats.",
+        ],
+    ]
+    assert payload["memory_allocated"] == "Expected a cuda device, but got: cpu"
+    assert payload["mem_get_info"] == "Expected a cuda device, but got: cpu"
+    assert payload["context"] == 630_718_464
+    assert payload["actions"] == ["alloc"]
+    assert payload["dumped_segments"] >= 2
+    assert payload["segments"] >= 2
+    assert payload["raw_stream"] == [True]
+    assert payload["pending"] == 30 * MIB
+    # No pinned host allocator is modeled; its stats exist and stay zero.
+    assert payload["host_stats"]["num_host_alloc"] == 0
+    assert set(payload["host_stats"].values()) == {0}
+
+
+def test_fakecuda_rejects_a_malformed_alloc_conf_at_cuda_init() -> None:
+    payload = _run_fakecuda(
+        """
+        import json
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", profile="a100", device_count=1)
+        import torch
+
+        result = {}
+        for stage, call in (
+            ("init", torch.cuda.init),
+            ("alloc", lambda: torch.empty(4, device="cuda")),
+        ):
+            try:
+                call()
+                result[stage] = "ok"
+            except Exception as exc:
+                result[stage] = [type(exc).__name__, str(exc)]
+        print(json.dumps(result))
+        """,
+        PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:1",
+    )
+    import torch
+
+    major, minor = (int(part) for part in torch.__version__.split(".")[:2])
+    if (major, minor) >= (2, 10):
+        expected = ["ValueError", "CachingAllocator option max_split_size_mb too small, must be >= 20"]
+    else:
+        expected = ["RuntimeError", "CachingAllocator option max_split_size_mb too small, must be > 20"]
+    assert payload == {"init": expected, "alloc": expected}
+
+
+def test_fakecuda_memory_api_without_tracking_reports_the_profile() -> None:
+    payload = _run_fakecuda(
+        """
+        import json
+        import fakegpu
+        fakegpu.init(runtime="fakecuda", profile="a100", device_count=1)
+        import torch
+
+        torch.empty(1000, device="cuda")
+        stats = torch.cuda.memory_stats()
+        print(json.dumps({
+            "info": list(torch.cuda.mem_get_info()),
+            "total": torch.cuda.get_device_properties(0).total_memory,
+            "allocated": torch.cuda.memory_allocated(),
+            "keys": len(stats),
+            "segments": stats["segment.all.current"],
+        }))
+        """,
+        FAKEGPU_MEMORY_TRACKING="0",
+        FAKEGPU_CUDA_CONTEXT_BYTES="0",
+    )
+    assert payload["info"] == [payload["total"], payload["total"]]
+    assert payload["allocated"] == 0
+    assert payload["keys"] > 100
+    assert payload["segments"] == 0
