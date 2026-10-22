@@ -30,6 +30,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -69,6 +70,16 @@ enum class GroupOperationKind {
     PointToPoint,
 };
 
+// A reduction operator as NCCL resolves it when the operation is enqueued.
+// NCCL copies the operator into the task because the handle may be destroyed
+// before ncclGroupEnd (enqueue.cc, taskAppend and hostToDevRedOp).
+struct ResolvedReduction {
+    fake_gpu::distributed::CollectiveReduceOp reduce_op =
+        fake_gpu::distributed::CollectiveReduceOp::None;
+    bool premul_sum = false;
+    std::array<unsigned char, 8> scalar_bytes {};
+};
+
 struct GroupOperation {
     GroupOperationKind kind = GroupOperationKind::Collective;
     fake_gpu::distributed::CollectiveType type = fake_gpu::distributed::CollectiveType::AllReduce;
@@ -79,7 +90,7 @@ struct GroupOperation {
     std::size_t count = 0;
     ncclDataType_t datatype = ncclFloat32;
     ncclRedOp_t red_op = ncclSum;
-    fake_gpu::distributed::CollectiveReduceOp reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
+    ResolvedReduction reduction;
     int root = -1;
     int peer = -1;
     cudaStream_t stream = nullptr;
@@ -216,8 +227,14 @@ const CollectiveFaultInjectionConfig& collective_fault_injection_config() {
     return config;
 }
 
+// A ncclRedOpCreatePreMulSum operator. Like NCCL (enqueue.cc), a host scalar
+// is copied when the operator is created and a device scalar is kept as a
+// pointer. Operators belong to the communicator that created them.
 struct PreMulSumOpInfo {
+    ncclComm_t owner = nullptr;
     ncclDataType_t datatype = ncclFloat32;
+    bool device_scalar = false;
+    const void* scalar_pointer = nullptr;
     std::array<unsigned char, 8> scalar_bytes {};
     std::size_t scalar_size = 0;
 };
@@ -252,7 +269,11 @@ ncclResult_t fail_with(ncclComm_t comm, ncclResult_t result, std::string message
     g_last_error = message;
     if (comm) {
         comm->last_error = std::move(message);
-        if (result != ncclSuccess && result != ncclInProgress) {
+        // Argument and usage errors are returned to the caller and leave a
+        // blocking communicator usable (NCCL 2.27.5 on a GPU reports no async
+        // error after rejecting them and runs the next collective).
+        if (result != ncclSuccess && result != ncclInProgress &&
+            result != ncclInvalidArgument && result != ncclInvalidUsage) {
             comm->async_error = result;
         }
     }
@@ -414,8 +435,21 @@ bool map_dtype(
     return false;
 }
 
+bool lookup_premul_sum_op(ncclRedOp_t op, ncclComm_t comm, PreMulSumOpInfo& out) {
+    std::lock_guard<std::mutex> lock(g_premul_sum_ops_mutex);
+    const auto it = g_premul_sum_ops.find(static_cast<int>(op));
+    if (it == g_premul_sum_ops.end() || it->second.owner != comm) {
+        return false;
+    }
+    out = it->second;
+    return true;
+}
+
+// Checks that the operator is a builtin or a PreMulSum operator of this
+// communicator, as NCCL's ArgsCheck does (argcheck.cc).
 bool map_reduce_op(
     ncclRedOp_t op,
+    ncclComm_t comm,
     fake_gpu::distributed::CollectiveReduceOp& out) {
     switch (op) {
         case ncclSum:
@@ -437,32 +471,60 @@ bool map_reduce_op(
             break;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(g_premul_sum_ops_mutex);
-        const auto it = g_premul_sum_ops.find(static_cast<int>(op));
-        if (it != g_premul_sum_ops.end()) {
-            out = fake_gpu::distributed::CollectiveReduceOp::Sum;
-            return true;
-        }
+    PreMulSumOpInfo info;
+    if (lookup_premul_sum_op(op, comm, info)) {
+        out = fake_gpu::distributed::CollectiveReduceOp::Sum;
+        return true;
     }
     return false;
 }
 
-bool lookup_premul_sum_op(ncclRedOp_t op, PreMulSumOpInfo& out) {
-    std::lock_guard<std::mutex> lock(g_premul_sum_ops_mutex);
-    const auto it = g_premul_sum_ops.find(static_cast<int>(op));
-    if (it == g_premul_sum_ops.end()) {
-        return false;
+// Element size of an NCCL datatype (ncclTypeSize), or 0 when invalid.
+std::size_t nccl_type_size(ncclDataType_t datatype) {
+    switch (datatype) {
+        case ncclInt8:
+        case ncclUint8:
+            return 1;
+        case ncclFloat16:
+        case ncclBfloat16:
+            return 2;
+        case ncclInt32:
+        case ncclUint32:
+        case ncclFloat32:
+            return 4;
+        case ncclInt64:
+        case ncclUint64:
+        case ncclFloat64:
+            return 8;
+        default:
+            return 0;
     }
-    out = it->second;
-    return true;
 }
 
 template <typename T>
-void scale_elements_inplace(void* data, std::size_t count, T scalar) {
-    T* values = static_cast<T*>(data);
+T multiply_wrapping(T lhs, T rhs) {
+    if constexpr (std::is_integral_v<T>) {
+        using Unsigned = std::make_unsigned_t<T>;
+        return static_cast<T>(static_cast<Unsigned>(
+            static_cast<Unsigned>(lhs) * static_cast<Unsigned>(rhs)));
+    } else {
+        return static_cast<T>(lhs * rhs);
+    }
+}
+
+// NCCL's PreOp of FuncPreMulSum multiplies in the element type
+// (reduce_kernel.h): integers wrap, and float16 and bfloat16 products are
+// rounded back to 16 bits.
+template <typename T>
+void scale_elements_inplace(void* data, std::size_t count, const unsigned char* scalar_bytes) {
+    T scalar {};
+    std::memcpy(&scalar, scalar_bytes, sizeof(T));
+    char* bytes = static_cast<char*>(data);
     for (std::size_t index = 0; index < count; ++index) {
-        values[index] = static_cast<T>(values[index] * scalar);
+        T value {};
+        std::memcpy(&value, bytes + index * sizeof(T), sizeof(T));
+        value = multiply_wrapping(value, scalar);
+        std::memcpy(bytes + index * sizeof(T), &value, sizeof(T));
     }
 }
 
@@ -470,9 +532,11 @@ template <typename Decode, typename Encode>
 void scale_16bit_elements_inplace(
     void* data,
     std::size_t count,
-    std::uint16_t scalar_bits,
+    const unsigned char* scalar_bytes,
     Decode decode,
     Encode encode) {
+    std::uint16_t scalar_bits = 0;
+    std::memcpy(&scalar_bits, scalar_bytes, sizeof(scalar_bits));
     char* bytes = static_cast<char*>(data);
     const float scalar = decode(scalar_bits);
     for (std::size_t index = 0; index < count; ++index) {
@@ -493,33 +557,32 @@ bool apply_premul_sum_inplace(
     void* data,
     std::size_t element_count,
     ncclDataType_t datatype,
-    ncclRedOp_t op,
+    const ResolvedReduction& reduction,
     std::string& error) {
-    PreMulSumOpInfo info;
-    if (!lookup_premul_sum_op(op, info)) {
+    if (!reduction.premul_sum) {
         return true;
     }
-    if (datatype != info.datatype) {
-        error = "preMulSum datatype does not match collective datatype";
-        return false;
-    }
-
+    const unsigned char* scalar = reduction.scalar_bytes.data();
     switch (datatype) {
-        case ncclInt32: {
-            std::int32_t scalar = 0;
-            std::memcpy(&scalar, info.scalar_bytes.data(), sizeof(scalar));
+        case ncclInt8:
+            scale_elements_inplace<std::int8_t>(data, element_count, scalar);
+            return true;
+        case ncclUint8:
+            scale_elements_inplace<std::uint8_t>(data, element_count, scalar);
+            return true;
+        case ncclInt32:
             scale_elements_inplace<std::int32_t>(data, element_count, scalar);
             return true;
-        }
-        case ncclInt64: {
-            std::int64_t scalar = 0;
-            std::memcpy(&scalar, info.scalar_bytes.data(), sizeof(scalar));
+        case ncclUint32:
+            scale_elements_inplace<std::uint32_t>(data, element_count, scalar);
+            return true;
+        case ncclInt64:
             scale_elements_inplace<std::int64_t>(data, element_count, scalar);
             return true;
-        }
-        case ncclFloat16: {
-            std::uint16_t scalar = 0;
-            std::memcpy(&scalar, info.scalar_bytes.data(), sizeof(scalar));
+        case ncclUint64:
+            scale_elements_inplace<std::uint64_t>(data, element_count, scalar);
+            return true;
+        case ncclFloat16:
             scale_16bit_elements_inplace(
                 data,
                 element_count,
@@ -527,10 +590,7 @@ bool apply_premul_sum_inplace(
                 fake_gpu::distributed::float16_bits_to_float,
                 fake_gpu::distributed::float_to_float16_bits);
             return true;
-        }
-        case ncclBfloat16: {
-            std::uint16_t scalar = 0;
-            std::memcpy(&scalar, info.scalar_bytes.data(), sizeof(scalar));
+        case ncclBfloat16:
             scale_16bit_elements_inplace(
                 data,
                 element_count,
@@ -538,23 +598,61 @@ bool apply_premul_sum_inplace(
                 fake_gpu::distributed::bfloat16_bits_to_float,
                 fake_gpu::distributed::float_to_bfloat16_bits);
             return true;
-        }
-        case ncclFloat32: {
-            float scalar = 0.0f;
-            std::memcpy(&scalar, info.scalar_bytes.data(), sizeof(scalar));
+        case ncclFloat32:
             scale_elements_inplace<float>(data, element_count, scalar);
             return true;
-        }
-        case ncclFloat64: {
-            double scalar = 0.0;
-            std::memcpy(&scalar, info.scalar_bytes.data(), sizeof(scalar));
+        case ncclFloat64:
             scale_elements_inplace<double>(data, element_count, scalar);
             return true;
-        }
         default:
             error = "unsupported datatype for preMulSum";
             return false;
     }
+}
+
+// Resolves a reduction operator when its operation is enqueued, as NCCL's
+// taskAppend does with hostToDevRedOp: a PreMulSum operator must match the
+// datatype, and the operation keeps its own copy of the factor, so the
+// operator may be destroyed before ncclGroupEnd. NCCL's kernel reads a device
+// factor when it runs; FakeGPU reads it here because simulated device memory
+// is host memory and earlier stream work has already completed.
+ncclResult_t resolve_reduction(
+    ncclComm_t comm,
+    ncclRedOp_t op,
+    ncclDataType_t datatype,
+    cudaStream_t stream,
+    ResolvedReduction& out) {
+    out = ResolvedReduction{};
+    if (!map_reduce_op(op, comm, out.reduce_op)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported reduce op");
+    }
+    PreMulSumOpInfo info;
+    if (!lookup_premul_sum_op(op, comm, info)) {
+        return ncclSuccess;
+    }
+    if (datatype != info.datatype) {
+        return fail_with(
+            comm,
+            ncclInvalidArgument,
+            "Data type supplied to user-created ncclRedOp_t does not match type "
+            "given to reduction operation");
+    }
+    out.premul_sum = true;
+    if (!info.device_scalar) {
+        out.scalar_bytes = info.scalar_bytes;
+        return ncclSuccess;
+    }
+    std::vector<char> scalar;
+    std::string error;
+    if (!fake_gpu::nccl::copy_buffer_to_host(
+            info.scalar_pointer, info.scalar_size, scalar, error, stream)) {
+        return fail_with(
+            comm,
+            ncclUnhandledCudaError,
+            "failed to read the preMulSum device scalar: " + error);
+    }
+    std::memcpy(out.scalar_bytes.data(), scalar.data(), info.scalar_size);
+    return ncclSuccess;
 }
 
 bool uses_real_nccl(fake_gpu::distributed::DistributedMode mode) {
@@ -1137,7 +1235,7 @@ ncclResult_t complete_empty_collective(
         collective_type == fake_gpu::distributed::CollectiveType::Reduce ||
         collective_type == fake_gpu::distributed::CollectiveType::ReduceScatter) {
         fake_gpu::distributed::CollectiveReduceOp reduce_op;
-        if (!map_reduce_op(op, reduce_op)) {
+        if (!map_reduce_op(op, comm, reduce_op)) {
             return fail_with(comm, ncclInvalidArgument, "unsupported reduce op");
         }
     }
@@ -1247,7 +1345,7 @@ ncclResult_t prepare_group_batch(
             item.dtype = mapped_dtype;
             item.count = chunk.element_count;
             item.root = operation.root;
-            item.reduce_op = operation.reduce_op;
+            item.reduce_op = operation.reduction.reduce_op;
             item.bytes = chunk.staging_bytes;
             prepared_operations.push_back(item);
         }
@@ -1308,13 +1406,15 @@ ncclResult_t buffer_group_allreduce(
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
     }
 
-    fake_gpu::distributed::CollectiveReduceOp reduce_op;
-    if (!map_reduce_op(op, reduce_op)) {
-        return fail_with(comm, ncclInvalidArgument, "unsupported reduce op");
-    }
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+    ResolvedReduction reduction;
+    const ncclResult_t reduction_result =
+        resolve_reduction(comm, op, datatype, stream, reduction);
+    if (reduction_result != ncclSuccess) {
+        return reduction_result;
     }
 
     GroupOperation call;
@@ -1325,7 +1425,7 @@ ncclResult_t buffer_group_allreduce(
     call.count = count;
     call.datatype = datatype;
     call.red_op = op;
-    call.reduce_op = reduce_op;
+    call.reduction = reduction;
     call.root = -1;
     call.stream = stream;
     call.comm = comm;
@@ -1361,13 +1461,15 @@ ncclResult_t buffer_group_reduce(
         return fail_with(comm, ncclInvalidArgument, "reduce root must be within [0, world_size)");
     }
 
-    fake_gpu::distributed::CollectiveReduceOp reduce_op;
-    if (!map_reduce_op(op, reduce_op)) {
-        return fail_with(comm, ncclInvalidArgument, "unsupported reduce op");
-    }
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+    ResolvedReduction reduction;
+    const ncclResult_t reduction_result =
+        resolve_reduction(comm, op, datatype, stream, reduction);
+    if (reduction_result != ncclSuccess) {
+        return reduction_result;
     }
 
     GroupOperation call;
@@ -1378,7 +1480,7 @@ ncclResult_t buffer_group_reduce(
     call.count = count;
     call.datatype = datatype;
     call.red_op = op;
-    call.reduce_op = reduce_op;
+    call.reduction = reduction;
     call.root = root;
     call.stream = stream;
     call.comm = comm;
@@ -1430,7 +1532,6 @@ ncclResult_t buffer_group_broadcast(
     call.recvbuff = recvbuff;
     call.count = count;
     call.datatype = datatype;
-    call.reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
     call.root = root;
     call.stream = stream;
     call.comm = comm;
@@ -1473,7 +1574,6 @@ ncclResult_t buffer_group_allgather(
     call.recvbuff = recvbuff;
     call.count = count;
     call.datatype = datatype;
-    call.reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
     call.root = -1;
     call.stream = stream;
     call.comm = comm;
@@ -1505,13 +1605,15 @@ ncclResult_t buffer_group_reducescatter(
         return fail_with(comm, ncclInvalidArgument, "count must be > 0");
     }
 
-    fake_gpu::distributed::CollectiveReduceOp reduce_op;
-    if (!map_reduce_op(op, reduce_op)) {
-        return fail_with(comm, ncclInvalidArgument, "unsupported reduce op");
-    }
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+    ResolvedReduction reduction;
+    const ncclResult_t reduction_result =
+        resolve_reduction(comm, op, datatype, stream, reduction);
+    if (reduction_result != ncclSuccess) {
+        return reduction_result;
     }
 
     GroupOperation call;
@@ -1522,7 +1624,7 @@ ncclResult_t buffer_group_reducescatter(
     call.count = recvcount;
     call.datatype = datatype;
     call.red_op = op;
-    call.reduce_op = reduce_op;
+    call.reduction = reduction;
     call.root = -1;
     call.stream = stream;
     call.comm = comm;
@@ -1565,7 +1667,6 @@ ncclResult_t buffer_group_alltoall(
     call.recvbuff = recvbuff;
     call.count = count;
     call.datatype = datatype;
-    call.reduce_op = fake_gpu::distributed::CollectiveReduceOp::None;
     call.root = -1;
     call.stream = stream;
     call.comm = comm;
@@ -1783,7 +1884,7 @@ ncclResult_t submit_collective(
     void* recvbuff,
     std::size_t count,
     ncclDataType_t datatype,
-    fake_gpu::distributed::CollectiveReduceOp reduce_op,
+    const ResolvedReduction& reduction,
     int root,
     ncclComm_t comm,
     ncclRedOp_t real_reduce_op,
@@ -1815,8 +1916,8 @@ ncclResult_t submit_collective(
         return ncclInvalidUsage;
     }
 
-    PreMulSumOpInfo premul_info;
-    const bool has_premul_sum = lookup_premul_sum_op(real_reduce_op, premul_info);
+    const fake_gpu::distributed::CollectiveReduceOp reduce_op = reduction.reduce_op;
+    const bool has_premul_sum = reduction.premul_sum;
     if (has_premul_sum && comm->dist_mode != fake_gpu::distributed::DistributedMode::Simulate) {
         return fail_with(
             comm,
@@ -1932,7 +2033,7 @@ ncclResult_t submit_collective(
                 chunk_input.data(),
                 chunk.input_bytes / dtype_size,
                 datatype,
-                real_reduce_op,
+                reduction,
                 error)) {
             return fail_with(comm, ncclInvalidArgument, error);
         }
@@ -2496,7 +2597,7 @@ ncclResult_t flush_grouped_operations() {
                 operation.recv_scratch.empty() ? operation.recvbuff : operation.recv_scratch.data(),
                 operation.count,
                 operation.datatype,
-                operation.reduce_op,
+                operation.reduction,
                 operation.root,
                 operation.comm,
                 operation.red_op,
@@ -3309,6 +3410,10 @@ ncclResult_t ncclRedOpCreatePreMulSum(
     ncclDataType_t datatype,
     ncclScalarResidence_t residence,
     ncclComm_t comm) {
+    // NCCL checks the communicator first (CommCheck in enqueue.cc).
+    if (!comm) {
+        return fail_with(nullptr, ncclInvalidArgument, "communicator must not be null");
+    }
     if (!op || !scalar) {
         return fail_with(comm, ncclInvalidArgument, "op and scalar must not be null");
     }
@@ -3321,37 +3426,22 @@ ncclResult_t ncclRedOpCreatePreMulSum(
             ncclInvalidUsage,
             "preMulSum custom reduction is currently only implemented for FAKEGPU_DIST_MODE=simulate");
     }
-    if (residence != ncclScalarHostImmediate) {
-        return fail_with(
-            comm,
-            ncclInvalidUsage,
-            "preMulSum currently only supports ncclScalarHostImmediate");
-    }
 
     PreMulSumOpInfo info;
+    info.owner = comm;
     info.datatype = datatype;
-    switch (datatype) {
-        case ncclInt32:
-            info.scalar_size = sizeof(std::int32_t);
-            break;
-        case ncclInt64:
-            info.scalar_size = sizeof(std::int64_t);
-            break;
-        case ncclFloat16:
-        case ncclBfloat16:
-            info.scalar_size = sizeof(std::uint16_t);
-            break;
-        case ncclFloat32:
-            info.scalar_size = sizeof(float);
-            break;
-        case ncclFloat64:
-            info.scalar_size = sizeof(double);
-            break;
-        default:
-            return fail_with(comm, ncclInvalidArgument, "unsupported datatype for preMulSum");
+    info.scalar_size = nccl_type_size(datatype);
+    if (info.scalar_size == 0) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported datatype for preMulSum");
     }
-
-    std::memcpy(info.scalar_bytes.data(), scalar, info.scalar_size);
+    // As in NCCL, a host scalar is copied now and any other residence keeps
+    // the pointer to a device scalar (ncclScalarDevice).
+    if (residence == ncclScalarHostImmediate) {
+        std::memcpy(info.scalar_bytes.data(), scalar, info.scalar_size);
+    } else {
+        info.device_scalar = true;
+        info.scalar_pointer = scalar;
+    }
 
     const int op_value = g_next_premul_sum_op.fetch_add(1);
     {
@@ -3376,9 +3466,11 @@ ncclResult_t ncclRedOpDestroy(ncclRedOp_t op, ncclComm_t comm) {
     }
     {
         std::lock_guard<std::mutex> lock(g_premul_sum_ops_mutex);
-        if (g_premul_sum_ops.erase(static_cast<int>(op)) == 0) {
+        const auto it = g_premul_sum_ops.find(static_cast<int>(op));
+        if (it == g_premul_sum_ops.end() || it->second.owner != comm) {
             return fail_with(comm, ncclInvalidArgument, "ncclRedOpDestroy: operator unknown to this communicator");
         }
+        g_premul_sum_ops.erase(it);
     }
     clear_last_error(comm);
     return ncclSuccess;
@@ -3422,13 +3514,15 @@ ncclResult_t ncclReduce(
         return fail_with(comm, ncclInvalidArgument, "reduce root must be within [0, world_size)");
     }
 
-    fake_gpu::distributed::CollectiveReduceOp reduce_op;
-    if (!map_reduce_op(op, reduce_op)) {
-        return fail_with(comm, ncclInvalidArgument, "unsupported reduce op");
-    }
     fake_gpu::distributed::CollectiveDataType mapped_dtype;
     if (!map_dtype(datatype, mapped_dtype)) {
         return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+    ResolvedReduction reduction;
+    const ncclResult_t reduction_result =
+        resolve_reduction(comm, op, datatype, stream, reduction);
+    if (reduction_result != ncclSuccess) {
+        return reduction_result;
     }
 
     fake_gpu::distributed::DistributedConfig config;
@@ -3444,7 +3538,7 @@ ncclResult_t ncclReduce(
             fake_gpu::distributed::CollectiveType::Reduce,
             count,
             datatype,
-            reduce_op,
+            reduction.reduce_op,
             root,
             comm);
         if (result != ncclSuccess) {
@@ -3491,7 +3585,7 @@ ncclResult_t ncclReduce(
         output,
         count,
         datatype,
-        reduce_op,
+        reduction,
         root,
         comm,
         op,
@@ -3546,7 +3640,7 @@ ncclResult_t ncclBroadcast(
         recvbuff,
         count,
         datatype,
-        fake_gpu::distributed::CollectiveReduceOp::None,
+        ResolvedReduction{},
         root,
         comm,
         ncclSum,
@@ -3579,9 +3673,15 @@ ncclResult_t ncclAllReduce(
     if (g_group_depth > 0) {
         return buffer_group_allreduce(sendbuff, recvbuff, count, datatype, op, comm, stream);
     }
-    fake_gpu::distributed::CollectiveReduceOp reduce_op;
-    if (!map_reduce_op(op, reduce_op)) {
-        return fail_with(comm, ncclInvalidArgument, "unsupported reduce op");
+    fake_gpu::distributed::CollectiveDataType mapped_dtype;
+    if (!map_dtype(datatype, mapped_dtype)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+    ResolvedReduction reduction;
+    const ncclResult_t reduction_result =
+        resolve_reduction(comm, op, datatype, stream, reduction);
+    if (reduction_result != ncclSuccess) {
+        return reduction_result;
     }
     return submit_collective(
         "ALLREDUCE",
@@ -3590,7 +3690,7 @@ ncclResult_t ncclAllReduce(
         recvbuff,
         count,
         datatype,
-        reduce_op,
+        reduction,
         -1,
         comm,
         op,
@@ -3623,9 +3723,15 @@ ncclResult_t ncclReduceScatter(
     if (g_group_depth > 0) {
         return buffer_group_reducescatter(sendbuff, recvbuff, recvcount, datatype, op, comm, stream);
     }
-    fake_gpu::distributed::CollectiveReduceOp reduce_op;
-    if (!map_reduce_op(op, reduce_op)) {
-        return fail_with(comm, ncclInvalidArgument, "unsupported reduce op");
+    fake_gpu::distributed::CollectiveDataType mapped_dtype;
+    if (!map_dtype(datatype, mapped_dtype)) {
+        return fail_with(comm, ncclInvalidArgument, "unsupported dtype for this collective");
+    }
+    ResolvedReduction reduction;
+    const ncclResult_t reduction_result =
+        resolve_reduction(comm, op, datatype, stream, reduction);
+    if (reduction_result != ncclSuccess) {
+        return reduction_result;
     }
     return submit_collective(
         "REDUCESCATTER",
@@ -3634,7 +3740,7 @@ ncclResult_t ncclReduceScatter(
         recvbuff,
         recvcount,
         datatype,
-        reduce_op,
+        reduction,
         -1,
         comm,
         op,
@@ -3673,7 +3779,7 @@ ncclResult_t ncclAllGather(
         recvbuff,
         sendcount,
         datatype,
-        fake_gpu::distributed::CollectiveReduceOp::None,
+        ResolvedReduction{},
         -1,
         comm,
         ncclSum,
@@ -3712,7 +3818,7 @@ ncclResult_t ncclAlltoAll(
         recvbuff,
         count,
         datatype,
-        fake_gpu::distributed::CollectiveReduceOp::None,
+        ResolvedReduction{},
         -1,
         comm,
         ncclSum,

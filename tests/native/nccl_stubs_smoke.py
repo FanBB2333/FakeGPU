@@ -21,8 +21,10 @@ NCCL_SUCCESS = 0
 NCCL_SYSTEM_ERROR = 2
 NCCL_INVALID_ARGUMENT = 4
 NCCL_INVALID_USAGE = 5
+NCCL_FLOAT16 = 6
 NCCL_FLOAT32 = 7
 NCCL_SUM = 0
+NCCL_SCALAR_DEVICE = 0
 NCCL_SCALAR_HOST_IMMEDIATE = 1
 # NCCL_SIM_INFO_INITIALIZER magic from nccl.h.
 NCCL_SIM_INFO_MAGIC = 0x74685283
@@ -212,6 +214,62 @@ def child_empty_p2p_rank(rank: int) -> int:
     return 0
 
 
+def child_premul_rank(rank: int) -> int:
+    """PreMulSum operators behave as in NCCL's enqueue.cc.
+
+    A device scalar (ncclScalarDevice, which torch passes for a tensor factor)
+    is read like a host one, the operator is copied into a grouped operation
+    so it may be destroyed before ncclGroupEnd, and an operator only works with
+    its own datatype and communicator.
+    """
+
+    lib = load_nccl()
+    lib.ncclCommInitRank.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int, UniqueId, ctypes.c_int]
+    comm = ctypes.c_void_p()
+    unique_id = UniqueId(internal=os.environ["NCCL_SMOKE_UNIQUE_ID"].encode())
+    expect_rc(lib.ncclCommInitRank(ctypes.byref(comm), REDUCE_WORLD, unique_id, rank), NCCL_SUCCESS, "ncclCommInitRank")
+    send = (ctypes.c_float * 2)(rank + 1.0, 10.0 * (rank + 1))
+    recv = (ctypes.c_float * 2)()
+
+    factor = ctypes.c_float(0.5)
+    op = ctypes.c_int(-1)
+    expect_rc(
+        lib.ncclRedOpCreatePreMulSum(ctypes.byref(op), ctypes.byref(factor), NCCL_FLOAT32, NCCL_SCALAR_DEVICE, comm),
+        NCCL_SUCCESS,
+        "ncclRedOpCreatePreMulSum with a device scalar",
+    )
+    expect_rc(lib.ncclAllReduce(send, recv, ctypes.c_size_t(2), NCCL_FLOAT32, op.value, comm, None), NCCL_SUCCESS, "device-scalar preMulSum")
+    if list(recv) != [1.5, 15.0]:
+        raise AssertionError(f"rank {rank}: device-scalar preMulSum produced {list(recv)}")
+    half = (ctypes.c_uint16 * 2)()
+    expect_rc(lib.ncclAllReduce(half, half, ctypes.c_size_t(2), NCCL_FLOAT16, op.value, comm, None), NCCL_INVALID_ARGUMENT, "preMulSum with another datatype")
+    expect_rc(lib.ncclRedOpDestroy(op.value, comm), NCCL_SUCCESS, "ncclRedOpDestroy")
+
+    factor = ctypes.c_float(2.0)
+    expect_rc(
+        lib.ncclRedOpCreatePreMulSum(ctypes.byref(op), ctypes.byref(factor), NCCL_FLOAT32, NCCL_SCALAR_HOST_IMMEDIATE, comm),
+        NCCL_SUCCESS,
+        "ncclRedOpCreatePreMulSum",
+    )
+    lib.ncclGroupStart()
+    expect_rc(lib.ncclAllReduce(send, recv, ctypes.c_size_t(2), NCCL_FLOAT32, op.value, comm, None), NCCL_SUCCESS, "grouped preMulSum")
+    expect_rc(lib.ncclRedOpDestroy(op.value, comm), NCCL_SUCCESS, "ncclRedOpDestroy inside the group")
+    expect_rc(lib.ncclGroupEnd(), NCCL_SUCCESS, "ncclGroupEnd")
+    if list(recv) != [6.0, 60.0]:
+        raise AssertionError(f"rank {rank}: grouped preMulSum produced {list(recv)}")
+
+    child = ctypes.c_void_p()
+    expect_rc(lib.ncclCommSplit(comm, 0, rank, ctypes.byref(child), None), NCCL_SUCCESS, "ncclCommSplit")
+    expect_rc(
+        lib.ncclRedOpCreatePreMulSum(ctypes.byref(op), ctypes.byref(factor), NCCL_FLOAT32, NCCL_SCALAR_HOST_IMMEDIATE, comm),
+        NCCL_SUCCESS,
+        "ncclRedOpCreatePreMulSum",
+    )
+    expect_rc(lib.ncclAllReduce(send, recv, ctypes.c_size_t(2), NCCL_FLOAT32, op.value, child, None), NCCL_INVALID_ARGUMENT, "preMulSum on another communicator")
+    expect_rc(lib.ncclRedOpDestroy(op.value, child), NCCL_INVALID_ARGUMENT, "ncclRedOpDestroy on another communicator")
+    return 0
+
+
 def child_init_all(_rank: int) -> int:
     """ncclCommInitAll validates its device list like init.cc does."""
 
@@ -283,6 +341,11 @@ def check_empty_point_to_point() -> None:
         raise AssertionError("zero-count ncclSend/ncclRecv were not accepted")
 
 
+def check_premul_sum_operators() -> None:
+    if not run_ranks("--premul-rank", REDUCE_WORLD, 3000):
+        raise AssertionError("PreMulSum operators do not behave as in NCCL")
+
+
 def check_init_all_device_list() -> None:
     if not run_ranks("--init-all", 1, 3000):
         raise AssertionError("ncclCommInitAll did not validate its device list")
@@ -307,6 +370,8 @@ def main() -> int:
         return child_empty_p2p_rank(int(sys.argv[2]))
     if sys.argv[1:2] == ["--init-all"]:
         return child_init_all(int(sys.argv[2]))
+    if sys.argv[1:2] == ["--premul-rank"]:
+        return child_premul_rank(int(sys.argv[2]))
     if not LIBNCCL.exists():
         print(f"missing NCCL library: {LIBNCCL}", file=sys.stderr)
         return 2
@@ -314,6 +379,7 @@ def main() -> int:
     check_lifecycle_contracts()
     check_empty_point_to_point()
     check_init_all_device_list()
+    check_premul_sum_operators()
     check_split_timeout()
     check_reduce_over_socket_payloads()
     print("nccl stubs smoke test passed")

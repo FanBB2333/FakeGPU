@@ -400,6 +400,13 @@
   by 1/n in the element type and then sums, as NCCL's PreMulSum does,
   instead of dividing the sum. Results can change in the last bit, and a
   halved float16 or bfloat16 subnormal can round to zero.
+- Native NCCL `ncclRedOpCreatePreMulSum` accepts a device scalar
+  (`ncclScalarDevice`, which PyTorch passes for a tensor factor) and every
+  NCCL datatype. A grouped reduction keeps its operator when the operator is
+  destroyed before `ncclGroupEnd`, instead of silently summing without the
+  factor. An operator used with another datatype or communicator is
+  `ncclInvalidArgument`, and argument or usage errors no longer leave an
+  async error on the communicator.
 
 ## v1.6.0 - 2026-10-17
 
