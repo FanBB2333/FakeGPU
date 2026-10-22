@@ -30,6 +30,11 @@
 - Execute nested device-side child launches through direct PTX and linked
   SASS modules; accept nvcc linked fatbin wrapper v2. Cubin globals share
   their CUDA address with host backing for CPU library interoperability.
+- FakeCUDA `DistributedDataParallel` runs communication hooks from
+  `register_comm_hook`, such as the fp16, bf16 and PowerSGD hooks, on buckets
+  laid out as DDP's reducer lays them out, and supports `model.join()` and
+  `Join([model])` for uneven inputs, with `join_hook`, `join_device` and
+  `join_process_group`.
 
 ### Changed
 
@@ -55,6 +60,12 @@
 - Mixed-precision training plans size Adam and momentum state in FP32 next
   to the master copy, as DeepSpeed and PyTorch AMP keep it: 4 more bytes per
   parameter than before.
+- Under FakeCUDA, `torch.distributed.get_rank()`, `get_world_size()` and
+  `get_backend()` raise torch's "Default process group has not been
+  initialized" `ValueError` before `init_process_group` and after
+  `destroy_process_group`, and so does building `DistributedDataParallel`;
+  they used to return 0, 1 and `None`. With no backend named,
+  `get_backend()` reports `undefined`, as torch does, instead of `nccl`.
 
 ### Fixed
 
@@ -396,6 +407,18 @@
   Accelerate's `Accelerator().device` and transformers'
   `TrainingArguments.device` chose MPS before CUDA, so single-process
   training ran on MPS and bypassed the simulated GPUs.
+- FakeCUDA `torch.distributed` raises torch's "No backend type associated
+  with device type cpu" for CPU tensors in an `nccl` group, and its
+  `ValueError` for `monitored_barrier` outside a gloo group (from torch 2.14,
+  a group without a CPU backend). `PREMUL_SUM` from `_make_nccl_premul_sum`
+  multiplies by its factor before summing, as NCCL does. A simulated
+  `gather` fills every slot and `scatter` hands each rank its own entry, and
+  `new_group` takes positional arguments like the installed torch.
+- `fully_shard` without a mesh no longer fails on Apple Silicon, every
+  parameter gets its gradient and gradients count toward memory.
+  `FullyShardedDataParallel(module, device_id=torch.device("cuda", 0))` no
+  longer fails with "Inconsistent compute device" for a CPU module, and
+  moves it onto the simulated GPU.
 
 ## v1.6.0 - 2026-10-17
 
