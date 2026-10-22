@@ -97,7 +97,8 @@ jobs:
             native = fakegpu.library_dir();
             assert len(load_profiles()) >= 80;
             assert (native / 'libcuda.so.1').is_file();
-            assert (native / 'libcudart.so.12').is_file()"
+            assert (native / 'libcudart.so.12').is_file();
+            assert (native / 'libcudart.so').is_file()"
 
       - name: Check distribution privacy
         run: |
