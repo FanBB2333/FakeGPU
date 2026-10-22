@@ -292,7 +292,7 @@ def audit_native_exports(
         library_id = _library_id(library_path.name)
         command = (
             [nm, "-gU", str(library_path)]
-            if library_path.suffix == ".dylib"
+            if _is_mach_o(library_path)
             else [nm, "-D", "--defined-only", str(library_path)]
         )
         completed = subprocess.run(
@@ -510,6 +510,18 @@ def _allowed_export_libraries(declared_library: str) -> set[str]:
         # it can service internal Runtime calls without another dependency.
         return {"cuda_driver", "cudart"}
     return {declared_library}
+
+
+def _is_mach_o(path: Path) -> bool:
+    # By content, not suffix: the macOS build also provides
+    # libnvidia-ml.so.1 for pynvml, which is a Mach-O dylib.
+    with path.open("rb") as handle:
+        magic = handle.read(4)
+    return magic in (
+        b"\xcf\xfa\xed\xfe",  # MH_MAGIC_64, little-endian
+        b"\xce\xfa\xed\xfe",  # MH_MAGIC, little-endian
+        b"\xca\xfe\xba\xbe",  # FAT_MAGIC
+    )
 
 
 def _native_library_paths(root: Path) -> list[Path]:
