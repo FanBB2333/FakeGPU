@@ -113,6 +113,14 @@ jobs:
           python -m pip wheel --no-deps --wheel-dir build/macos-wheel .
           python -m pip install --no-deps build/macos-wheel/fakegpu-*.whl
 
+      - name: Name the runner localhost
+        # The runner's .local name takes 35 s to resolve over mDNS, and
+        # /etc/hosts entries do not change that. torchrun and gloo resolve
+        # the host name several times per launch, so a plain two-rank gloo
+        # job outlived 120 s. Named localhost, the job takes about 110 s
+        # (reverse lookups still take 35 s), inside the tests' timeouts.
+        run: sudo scutil --set HostName localhost
+
       - name: Test
         env:
           FAKEGPU_TERMINAL_REPORT: "0"
