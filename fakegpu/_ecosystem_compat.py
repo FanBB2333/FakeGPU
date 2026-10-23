@@ -179,7 +179,9 @@ def _patch_upstream_all_gather_object(upstream: Any, torch_mod: Any) -> None:
         return None
 
     upstream._dist_all_gather_object = _patched_all_gather_object
-    torch_mod.distributed.all_gather_object = _patched_all_gather_object
+    torch_mod.distributed.all_gather_object = upstream._as_installed_signature(
+        "all_gather_object", _patched_all_gather_object
+    )
 
 
 def _patch_fsdp_device_handling() -> None:

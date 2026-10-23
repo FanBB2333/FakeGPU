@@ -61,6 +61,35 @@ def _simulate(tmp_path: Path, body: str) -> dict:
     return json.loads(line[len("RESULTS "):])
 
 
+def _keyword_result(name: str, keyword: str) -> list[str] | None:
+    """A probe's result for ``torch.distributed.<name>(..., keyword=...)`` under the installed torch.
+
+    None when it takes the keyword; otherwise the TypeError Python raises, as
+    PyTorch 2.9 does for barrier's ``timeout`` and the ``weights_only`` of
+    the object collectives.
+    """
+    import inspect
+
+    import torch.distributed as dist
+
+    if keyword in inspect.signature(getattr(dist.distributed_c10d, name)).parameters:
+        return None
+    return ["TypeError", f"{name}() got an unexpected keyword argument '{keyword}'"]
+
+
+def _ddp_takes(keyword: str) -> bool:
+    """Whether the installed torch's DistributedDataParallel takes ``keyword``."""
+    import inspect
+
+    from torch.nn.parallel import distributed
+
+    ddp = next(
+        cls for cls in distributed.DistributedDataParallel.__mro__
+        if cls.__module__ == distributed.__name__
+    )
+    return keyword in inspect.signature(ddp.__init__).parameters
+
+
 def test_patched_functions_accept_every_argument_of_the_installed_torch(tmp_path: Path) -> None:
     results = _simulate(tmp_path, """
         import inspect
@@ -83,9 +112,9 @@ def test_patched_functions_accept_every_argument_of_the_installed_torch(tmp_path
              "all_gather_object", "reduce", "gather", "scatter", "reduce_scatter", "reduce_scatter_tensor",
              "all_to_all", "all_to_all_single", "broadcast_object_list", "get_rank", "get_world_size", "new_group")
     assert {name: results[name] for name in names} == {name: [] for name in names}
-    assert results["call_barrier"] is None
-    assert results["call_all_gather_object"] is None
-    assert results["call_broadcast_object_list"] is None
+    assert results["call_barrier"] == _keyword_result("barrier", "timeout")
+    assert results["call_all_gather_object"] == _keyword_result("all_gather_object", "weights_only")
+    assert results["call_broadcast_object_list"] == _keyword_result("broadcast_object_list", "weights_only")
     assert results["init_typo"][0] == "TypeError"
 
 
@@ -215,14 +244,23 @@ def test_launched_ranks_match_gloo(tmp_path: Path) -> None:
             for name, options in {"default": {}, "broadcast_buffers": {"broadcast_buffers": False},
                                   "init_sync": {"init_sync": False},
                                   "forward_sync_buffers": {"forward_sync_buffers": False}}.items():
-                model = counter(**options)
+                try:
+                    model = counter(**options)
+                except TypeError as exc:
+                    built[name] = ["TypeError", str(exc)]
+                    continue
                 built[name] = [model.module.count.item(), model.module.fc.weight.item()]
             return built
         probe("initial_state", initial_state)
     """)
+    gathered = (
+        _keyword_result("all_gather_object", "weights_only")
+        or _keyword_result("broadcast_object_list", "weights_only")
+        or [[{"r": 0}, {"r": 1}, {"r": 2}], [{"r": 1}]]
+    )
     for rank in range(3):
-        assert ranks[rank]["barrier_timeout"] is None
-        assert ranks[rank]["weights_only"] == [[{"r": 0}, {"r": 1}, {"r": 2}], [{"r": 1}]]
+        assert ranks[rank]["barrier_timeout"] == _keyword_result("barrier", "timeout")
+        assert ranks[rank]["weights_only"] == gathered
     # gloo without FakeGPU: members exchange values, rank 2 keeps its tensor and gets None.
     assert ranks[0]["pair/reduce_scatter_tensor"] == [[3.0], None]
     assert ranks[1]["pair/reduce_scatter_tensor"] == [[30.0], None]
@@ -253,7 +291,13 @@ def test_launched_ranks_match_gloo(tmp_path: Path) -> None:
         built = ranks[rank]["initial_state"]
         assert built["default"] == [0.0, weights["default"]]
         assert built["broadcast_buffers"] == [10.0 * rank, weights["broadcast_buffers"]]
-        assert built["forward_sync_buffers"] == [0.0, weights["forward_sync_buffers"]]
+        if _ddp_takes("forward_sync_buffers"):
+            assert built["forward_sync_buffers"] == [0.0, weights["forward_sync_buffers"]]
+        else:  # PyTorch 2.10 and older
+            assert built["forward_sync_buffers"] == [
+                "TypeError",
+                "DistributedDataParallel.__init__() got an unexpected keyword argument 'forward_sync_buffers'",
+            ]
         assert built["init_sync"][0] == 10.0 * rank
         assert (built["init_sync"][1] == weights["init_sync"]) == (rank == 0)
 

@@ -820,6 +820,15 @@
   `FullyShardedDataParallel(module, device_id=torch.device("cuda", 0))` no
   longer fails with "Inconsistent compute device" for a CPU module, and
   moves it onto the simulated GPU.
+- On an older torch, FakeCUDA `torch.distributed` rejects the keywords the
+  installed torch lacks, as that torch does: torch 2.9 raises `TypeError`
+  for `barrier(timeout=...)` and for `weights_only` in `all_gather_object`
+  and `broadcast_object_list`. A DDP keyword the installed torch lacks
+  raises its `DistributedDataParallel.__init__()` error.
+  `torch.cuda.get_device_properties()` keeps only the fields the installed
+  CUDA build of torch binds, so torch 2.9.1 has no `clock_rate`,
+  `memory_clock_rate`, `memory_bus_width`, `max_threads_per_block` or
+  `regs_per_block`.
 
 ## v1.6.0 - 2026-10-17
 

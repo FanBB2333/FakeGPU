@@ -323,7 +323,11 @@ def _ddp_arguments(module: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -
 
     if _ORIG_DDP is None:
         return {**dict(zip(("device_ids", "output_device", "dim"), args)), **kwargs}
-    return dict(inspect.signature(_ORIG_DDP.__init__).bind(None, module, *args, **kwargs).arguments)
+    try:
+        bound = inspect.signature(_ORIG_DDP.__init__).bind(None, module, *args, **kwargs)
+    except TypeError as exc:
+        raise TypeError(f"DistributedDataParallel.__init__() {exc}") from None
+    return dict(bound.arguments)
 
 
 try:
@@ -1191,6 +1195,49 @@ def _torch_at_least(major: int, minor: int) -> bool:
         return torch.torch_version.TorchVersion(torch.__version__) >= (major, minor)
     except Exception:
         return True
+
+
+_NAMED_PARAMETER_KINDS = (
+    inspect.Parameter.POSITIONAL_ONLY,
+    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    inspect.Parameter.KEYWORD_ONLY,
+)
+
+
+def _as_installed_signature(name: str, patched: Any) -> Any:
+    """Make ``patched`` reject the arguments the installed ``torch.distributed.<name>`` lacks.
+
+    The patched functions take the newest PyTorch arguments, such as
+    barrier's ``timeout`` and all_gather_object's ``weights_only``. PyTorch
+    2.9 has neither, and passing one raises TypeError there.
+    """
+    original = _ORIG_DIST.get(name)
+    if original is None:
+        return patched
+    try:
+        signature = inspect.signature(original)
+        named = {
+            parameter.name
+            for parameter in inspect.signature(patched).parameters.values()
+            if parameter.kind in _NAMED_PARAMETER_KINDS
+        }
+    except (TypeError, ValueError):
+        return patched
+    if any(p.kind is p.VAR_KEYWORD for p in signature.parameters.values()):
+        return patched
+    if not named - set(signature.parameters):
+        return patched
+
+    @functools.wraps(patched)
+    def checked(*args: Any, **kwargs: Any) -> Any:
+        try:
+            signature.bind(*args, **kwargs)
+        except TypeError as exc:
+            raise TypeError(f"{name}() {exc}") from None
+        return patched(*args, **kwargs)
+
+    checked.__signature__ = signature  # type: ignore[attr-defined]
+    return checked
 
 
 def _premul_scalar_dtype(dtype: torch.dtype) -> torch.dtype:
@@ -2645,6 +2692,10 @@ def enable() -> None:
         torch.distributed.new_group = _dist_new_group
     if "monitored_barrier" in _ORIG_DIST:
         torch.distributed.monitored_barrier = _dist_monitored_barrier
+    for name in _ORIG_DIST:
+        patched = getattr(torch.distributed, name, None)
+        if patched is not None and patched is not _ORIG_DIST[name]:
+            setattr(torch.distributed, name, _as_installed_signature(name, patched))
     if "_make_nccl_premul_sum" in _ORIG_DIST:
         torch.distributed._make_nccl_premul_sum = _dist_make_nccl_premul_sum
         _remember_premul_factors_of_calls()

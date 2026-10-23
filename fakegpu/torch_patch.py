@@ -1154,15 +1154,37 @@ class _FakeDeviceProperties:
         self.memory_clock_rate = prof["memory_clock_mhz"] * 1000
         # CUDA builds of PyTorch bind gcnArchName to the device name.
         self.gcnArchName = self.name
+        # Keep only the fields the installed torch binds: PyTorch 2.9 has no
+        # clock_rate or memory_bus_width, and 2.7 has no pci_bus_id.
+        bound = _installed_device_property_names()
+        if bound is not None:
+            for field in [field for field in vars(self) if field not in bound]:
+                delattr(self, field)
 
     def __repr__(self) -> str:
-        return (
-            f"_FakeDeviceProperties(name='{self.name}', major={self.major}, "
-            f"minor={self.minor}, total_memory={self.total_memory // (1024**2)}MB, "
-            f"multi_processor_count={self.multi_processor_count}, uuid={self.uuid}, "
-            f"pci_bus_id={self.pci_bus_id}, pci_device_id={self.pci_device_id}, "
-            f"pci_domain_id={self.pci_domain_id}, L2_cache_size={self.L2_cache_size // (1024**2)}MB)"
-        )
+        fields = [
+            f"name='{self.name}'", f"major={self.major}", f"minor={self.minor}",
+            f"total_memory={self.total_memory // (1024**2)}MB",
+            f"multi_processor_count={self.multi_processor_count}",
+        ]
+        fields += [
+            f"{field}={getattr(self, field)}"
+            for field in ("uuid", "pci_bus_id", "pci_device_id", "pci_domain_id")
+            if hasattr(self, field)
+        ]
+        if hasattr(self, "L2_cache_size"):
+            fields.append(f"L2_cache_size={self.L2_cache_size // (1024**2)}MB")
+        return f"_FakeDeviceProperties({', '.join(fields)})"
+
+
+def _installed_device_property_names() -> frozenset[str] | None:
+    """The fields of the installed ``torch._C._CudaDeviceProperties``; None for CPU-only torch."""
+    import torch
+
+    bound = getattr(torch._C, "_CudaDeviceProperties", None)
+    if bound is None:
+        return None
+    return frozenset(name for name in dir(bound) if not name.startswith("_"))
 
 
 # ---------------------------------------------------------------------------

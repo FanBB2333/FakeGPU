@@ -200,6 +200,8 @@ fakegpu.init(runtime="fakecuda", devices="h100,v100")
 
 import torch
 
+# CUDA builds of PyTorch 2.9.1 and 2.10.0 bind no regs_per_block.
+bound = getattr(torch._C, "_CudaDeviceProperties", None)
 for index, profile_id in enumerate(("h100", "v100")):
     expected = get_profile(profile_id)
     properties = torch.cuda.get_device_properties(index)
@@ -208,7 +210,10 @@ for index, profile_id in enumerate(("h100", "v100")):
         properties.max_threads_per_multi_processor
         == expected.max_threads_per_multiprocessor
     )
-    assert properties.regs_per_block == expected.regs_per_block
+    if bound is None or hasattr(bound, "regs_per_block"):
+        assert properties.regs_per_block == expected.regs_per_block
+    else:
+        assert not hasattr(properties, "regs_per_block")
     assert properties.regs_per_multiprocessor == expected.regs_per_multiprocessor
 print("device properties passed")
 """

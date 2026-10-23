@@ -250,29 +250,48 @@ print("device selection passed")
 def test_device_properties_expose_torch_fields_from_the_profile() -> None:
     # torch/csrc/cuda/Module.cpp (v2.14.1) binds these cudaDeviceProp fields;
     # clock_rate and memory_clock_rate are in kHz, and CUDA builds bind
-    # gcnArchName to the device name. torch.cuda._device_limits consumes them.
+    # gcnArchName to the device name. torch.cuda._device_limits (PyTorch
+    # 2.10+) consumes them. Older CUDA builds bind fewer fields: 2.9.1 has no
+    # clock_rate, memory_clock_rate, memory_bus_width, max_threads_per_block
+    # or regs_per_block, so reading one raises AttributeError there.
     _run(
         """
 fakegpu.init(runtime="fakecuda", devices="a100,h100")
+import importlib.util
 import torch
-from torch.cuda._device_limits import GPULimits
 
 from fakegpu.profile_catalog import get_profile
+
+bound = getattr(torch._C, "_CudaDeviceProperties", None)
+fields = None if bound is None else {name for name in dir(bound) if not name.startswith("_")}
 
 for index, profile_id in enumerate(("a100", "h100")):
     profile = get_profile(profile_id)
     properties = torch.cuda.get_device_properties(index)
-    assert properties.shared_memory_per_block == profile.shared_mem_per_block
-    assert properties.shared_memory_per_block_optin == profile.shared_mem_per_block_optin
-    assert properties.shared_memory_per_multiprocessor == profile.shared_mem_per_sm
-    assert properties.L2_cache_size == profile.l2_cache_bytes
-    assert properties.memory_bus_width == profile.memory_bus_width_bits
-    assert properties.clock_rate == profile.core_clock_mhz * 1000
-    assert properties.memory_clock_rate == profile.memory_clock_mhz * 1000
-    assert properties.gcnArchName == properties.name == profile.torch_name
-    # DDR transfers twice per clock: bus bytes x 2 x memory clock.
-    bandwidth = GPULimits(torch.device("cuda", index)).get_memory_bandwidth_Bps()
-    assert abs(bandwidth / 1e9 - profile.memory_bandwidth_gbps) < 1, (profile_id, bandwidth)
+    expected = {
+        "shared_memory_per_block": profile.shared_mem_per_block,
+        "shared_memory_per_block_optin": profile.shared_mem_per_block_optin,
+        "shared_memory_per_multiprocessor": profile.shared_mem_per_sm,
+        "L2_cache_size": profile.l2_cache_bytes,
+        "memory_bus_width": profile.memory_bus_width_bits,
+        "clock_rate": profile.core_clock_mhz * 1000,
+        "memory_clock_rate": profile.memory_clock_mhz * 1000,
+        "gcnArchName": profile.torch_name,
+    }
+    for name, value in expected.items():
+        if fields is None or name in fields:
+            assert getattr(properties, name) == value, (profile_id, name)
+        else:
+            assert not hasattr(properties, name), (profile_id, name)
+    if fields is not None:
+        assert set(vars(properties)) <= fields, sorted(set(vars(properties)) - fields)
+    assert properties.name == profile.torch_name
+    if importlib.util.find_spec("torch.cuda._device_limits") is not None:
+        from torch.cuda._device_limits import GPULimits
+
+        # DDR transfers twice per clock: bus bytes x 2 x memory clock.
+        bandwidth = GPULimits(torch.device("cuda", index)).get_memory_bandwidth_Bps()
+        assert abs(bandwidth / 1e9 - profile.memory_bandwidth_gbps) < 1, (profile_id, bandwidth)
 print("device properties passed")
 """
     )
