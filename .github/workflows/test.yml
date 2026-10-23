@@ -83,7 +83,6 @@ jobs:
       - name: Validate framework numerics and adapter semantics
         env:
           PYTHONPATH: .
-          CUDA_VISIBLE_DEVICES: ""
           FAKEGPU_TERMINAL_REPORT: "0"
         run: |
           python -m pytest -q tests/test_framework_compatibility.py
