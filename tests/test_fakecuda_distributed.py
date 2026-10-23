@@ -146,7 +146,10 @@ def _torchrun(tmp_path: Path, body: str, nproc: int = 3) -> dict[int, dict]:
         def t(*values):
             return torch.tensor(values, dtype=torch.float32, device="cuda")
     """) + textwrap.dedent(body) + textwrap.dedent("""
-        os.write(1, ("RESULTS " + json.dumps([rank, results], sort_keys=True) + "\\n").encode())
+        # One file per rank: lines longer than PIPE_BUF (512 bytes on macOS)
+        # from ranks sharing stdout can interleave.
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), f"rank{rank}.json"), "w") as out:
+            json.dump(results, out, sort_keys=True)
         dist.destroy_process_group()
     """), encoding="utf-8")
     completed = subprocess.run(
@@ -156,8 +159,7 @@ def _torchrun(tmp_path: Path, body: str, nproc: int = 3) -> dict[int, dict]:
         cwd=tmp_path, env=_environment(tmp_path), text=True, capture_output=True, timeout=300,
     )
     assert completed.returncode == 0, completed.stderr[-3000:]
-    ranks = [json.loads(line[len("RESULTS "):]) for line in completed.stdout.splitlines() if line.startswith("RESULTS ")]
-    return {rank: results for rank, results in ranks}
+    return {rank: json.loads((tmp_path / f"rank{rank}.json").read_text()) for rank in range(nproc)}
 
 
 def test_launched_ranks_match_gloo(tmp_path: Path) -> None:
