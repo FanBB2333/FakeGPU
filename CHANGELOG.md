@@ -829,6 +829,10 @@
   CUDA build of torch binds, so torch 2.9.1 has no `clock_rate`,
   `memory_clock_rate`, `memory_bus_width`, `max_threads_per_block` or
   `regs_per_block`.
+- With a CPU-only torch on Linux, `FullyShardedDataParallel` accepts an
+  integer `device_id` or `torch.device("cuda")` without an index, as on a
+  GPU machine, instead of failing with "Cannot access accelerator device
+  when none is available".
 
 ## v1.6.0 - 2026-10-17
 

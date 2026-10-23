@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import functools
+import inspect
 import re
 from typing import Any
 
@@ -232,7 +233,18 @@ def _patch_fsdp_device_handling() -> None:
 
         @functools.wraps(_orig_get_device)
         def _patched_get_device(device_id, rank, device_handle):
-            result = _orig_get_device(device_id, rank, device_handle)
+            import torch as _torch
+
+            try:
+                result = _orig_get_device(device_id, rank, device_handle)
+            except RuntimeError:
+                # FSDP warns about a device without an index, then takes
+                # torch.device(current_device()). A CPU-only torch has no
+                # accelerator for that ("Cannot access accelerator device
+                # when none is available").
+                if not (isinstance(device_id, _torch.device) and device_id.type == "cuda" and device_id.index is None):
+                    raise
+                result = _torch.device("cuda", device_handle.current_device())
             if result is not None and result.type not in ("cuda", "cpu", "meta"):
                 import torch as _torch
 
@@ -267,6 +279,25 @@ def _patch_fsdp_device_handling() -> None:
             return compute_device
 
         _fsdp_init._get_compute_device = _patched_get_compute_device
+
+    # FSDP reads an integer device_id as torch.device(N), the accelerator's
+    # device N: cuda:N on a GPU machine, mps:N on Apple Silicon, and an error
+    # on a CPU-only torch. Under FakeCUDA it is cuda:N.
+    fsdp_class = _fsdp_mod.FullyShardedDataParallel
+    _orig_fsdp_init = fsdp_class.__init__
+    fsdp_signature = inspect.signature(_orig_fsdp_init)
+
+    @functools.wraps(_orig_fsdp_init)
+    def _patched_fsdp_init(self, *args, **kwargs):
+        import torch as _torch
+
+        bound = fsdp_signature.bind(self, *args, **kwargs)
+        device_id = bound.arguments.get("device_id")
+        if isinstance(device_id, int) and not isinstance(device_id, bool):
+            bound.arguments["device_id"] = _torch.device("cuda", device_id)
+        _orig_fsdp_init(*bound.args, **bound.kwargs)
+
+    fsdp_class.__init__ = _patched_fsdp_init
 
 
 def _patch_default_accelerator(torch_mod: Any) -> None:
