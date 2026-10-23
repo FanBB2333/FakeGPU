@@ -13,6 +13,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import signal
 import subprocess
 import sys
 import textwrap
@@ -838,7 +839,7 @@ def test_set_allocator_settings_at_runtime() -> None:
         tracker.set_allocator_settings("backend:cudaMallocAsync")
 
 
-def _run_fakecuda(code: str, **env_overrides: str) -> dict:
+def _run_fakecuda(code: str, *, may_abort_at_exit: bool = False, **env_overrides: str) -> dict:
     env = dict(os.environ)
     for name in ("PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_ALLOC_CONF", "FAKEGPU_CUDA_CONTEXT_BYTES"):
         env.pop(name, None)
@@ -853,7 +854,16 @@ def _run_fakecuda(code: str, **env_overrides: str) -> dict:
         capture_output=True,
         timeout=120,
     )
-    assert completed.returncode == 0, completed.stderr
+    if may_abort_at_exit and completed.returncode == -signal.SIGABRT:
+        # A CUDA build of PyTorch 2.9.1 parses PYTORCH_CUDA_ALLOC_CONF again
+        # in libtorch_cuda at exit and aborts on a malformed value; it does
+        # the same on an Ampere GPU (sm_80) after the caught init error.
+        import torch
+
+        assert torch.version.cuda, completed.stderr
+        assert "terminate called after throwing an instance of 'c10::Error'" in completed.stderr
+    else:
+        assert completed.returncode == 0, completed.stderr
     return json.loads(completed.stdout.strip().splitlines()[-1])
 
 
@@ -968,9 +978,10 @@ def test_fakecuda_rejects_a_malformed_alloc_conf_at_cuda_init() -> None:
                 result[stage] = "ok"
             except Exception as exc:
                 result[stage] = [type(exc).__name__, str(exc)]
-        print(json.dumps(result))
+        print(json.dumps(result), flush=True)
         """,
         PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:1",
+        may_abort_at_exit=True,
     )
     import torch
 

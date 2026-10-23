@@ -358,7 +358,7 @@ def test_fakecuda_memory_api_rejects_out_of_range_devices() -> None:
 def test_allocator_memory_stats_follow_cuda_caching_allocator() -> None:
     # Expected values follow DeviceStats updates in CUDACachingAllocator.cpp
     # and the key layout of torch.cuda.memory_stats() (PyTorch v2.14.1).
-    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True, torch_version=(2, 14))
     tracker.allocate(1, 4, 0)
     tracker.allocate(2, 19 * MIB + MIB // 2, 0)
 
@@ -457,6 +457,7 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
     code = textwrap.dedent(
         """
         import gc
+        import inspect
         import json
         import os
 
@@ -476,6 +477,12 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
         ):
             assert getattr(torch.cuda, name) is getattr(torch.cuda.memory, name), name
 
+        # PyTorch 2.11 added include_traces.
+        snapshot_options = (
+            {"include_traces": False}
+            if "include_traces" in inspect.signature(torch.cuda.memory_snapshot).parameters
+            else {}
+        )
         baseline_allocated = torch.cuda.memory_allocated()
         baseline_reserved = torch.cuda.memory_reserved()
         tensor = torch.empty(1000, device="cuda", dtype=torch.float32)
@@ -487,7 +494,7 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
             "nested_allocated": torch.cuda.memory_stats_as_nested_dict()[
                 "allocated_bytes"
             ]["all"]["current"],
-            "snapshot": torch.cuda.memory_snapshot(include_traces=False),
+            "snapshot": torch.cuda.memory_snapshot(**snapshot_options),
             "default_pool_segments": len(torch.cuda.memory_snapshot(None)),
         }
         del tensor
