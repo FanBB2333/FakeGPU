@@ -142,6 +142,7 @@ def test_bf16_probe_follows_torch_cuda_is_bf16_supported() -> None:
     # is_tf32_supported() is is_bf16_supported(including_emulation=False).
     _run(
         """
+import importlib.util
 import inspect
 
 import torch
@@ -168,9 +169,10 @@ for spelling in (torch.autocast, torch.amp.autocast):
     with spelling("cuda", dtype=torch.bfloat16, enabled=False):
         pass
 
-import accelerate.utils
+if importlib.util.find_spec("accelerate") is not None:
+    import accelerate.utils
 
-assert accelerate.utils.is_bf16_available(True) is True
+    assert accelerate.utils.is_bf16_available(True) is True
 print("bf16 probe passed")
 """
     )
