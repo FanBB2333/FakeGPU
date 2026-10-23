@@ -833,6 +833,11 @@
   integer `device_id` or `torch.device("cuda")` without an index, as on a
   GPU machine, instead of failing with "Cannot access accelerator device
   when none is available".
+- FakeCUDA keeps tensor data in host memory. On a host with less memory
+  than a requested tensor, `torch.empty(..., device="cuda")` and the other
+  factories now raise CUDA's `OutOfMemoryError` when the tensor does not fit
+  the simulated GPU, instead of the host allocator's error. A tensor that
+  fits the GPU but not the host raises an error that names this limit.
 
 ## v1.6.0 - 2026-10-17
 

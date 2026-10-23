@@ -2523,6 +2523,25 @@ def _install_wrap_tensor_tracking(upstream: Any) -> None:
 
     upstream.wrap_tensor = _hooked_wrap_tensor
 
+    def _host_allocation_failed(planned, device_index, error):
+        # A real GPU raises OutOfMemoryError when the tensor does not fit;
+        # the tracker raises the same error and records the failed request.
+        import torch
+
+        tracker = _memory_tracker
+        if tracker is None or not isinstance(planned, torch.Tensor):
+            return
+        nbytes = planned.numel() * planned.element_size()
+        placeholder = -id(planned)
+        if tracker.allocate(placeholder, nbytes, device_index):
+            tracker.release(placeholder)
+        raise RuntimeError(
+            f"FakeGPU: GPU {device_index} has room for this {nbytes / 2**30:.2f} GiB tensor, "
+            "but FakeCUDA keeps tensor data in host memory and the host could not allocate it."
+        ) from error
+
+    upstream._HOST_ALLOCATION_FAILED = _host_allocation_failed
+
 
 def _install_dynamo_friendly_tree_map(upstream: Any, torch_mod: Any) -> None:
     def _dynamo_friendly_tree_map(fn, obj):

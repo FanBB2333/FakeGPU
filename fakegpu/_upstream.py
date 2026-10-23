@@ -57,6 +57,10 @@ _ORIG_DDP: Any = None
 # multi-process launch; see _real_launch().
 _DIST_REAL = False
 _ORIG_DIST: dict[str, Any] = {}
+# Set by torch_patch while it tracks memory. Called with the meta tensor a
+# factory would have made, its device and the host allocation error, when
+# the host cannot back a new simulated tensor.
+_HOST_ALLOCATION_FAILED: Any = None
 # Backends that new_group() was asked for, by group.
 _GROUP_BACKENDS: dict[Any, str] = {}
 _REAL_COLLECTIVES = (
@@ -1983,7 +1987,17 @@ def _factory_wrapper(fn):
         cpu_kwargs = _tree_map(unwrap_tensor, kwargs)
         kwargs = dict(kwargs)
         cpu_kwargs["device"] = torch.device("cpu")
-        result = fn(*cpu_args, **cpu_kwargs)
+        try:
+            result = fn(*cpu_args, **cpu_kwargs)
+        except RuntimeError as exc:
+            # FakeCUDA keeps tensor data in host memory. A host with less
+            # memory than the request fails here, before the simulated GPU
+            # could raise the OutOfMemoryError a real GPU raises.
+            if _HOST_ALLOCATION_FAILED is None or "can't allocate memory" not in str(exc):
+                raise
+            planned = fn(*cpu_args, **dict(cpu_kwargs, device=torch.device("meta")))
+            _HOST_ALLOCATION_FAILED(planned, normalized.index or 0, exc)
+            raise
         return _tree_map(lambda obj: _wrap_function_result(obj, normalized.index or 0), result)
 
     return wrapper

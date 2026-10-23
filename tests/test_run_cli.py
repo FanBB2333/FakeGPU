@@ -268,6 +268,39 @@ def test_run_keeps_the_exit_status_and_reports_out_of_memory(tmp_path: Path) -> 
 
 
 @needs_torch
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="RLIMIT_AS caps allocations on Linux only")
+def test_run_reports_out_of_memory_on_a_host_with_less_memory(tmp_path: Path) -> None:
+    # FakeCUDA keeps tensor data in host memory. On a host smaller than the
+    # request (a 16 GB CI runner), a 20 GiB tensor on a T4 still raises the
+    # OutOfMemoryError a real T4 raises; a 12 GiB tensor fits the T4 but not
+    # the host, and the error says so.
+    import resource
+
+    def limit_address_space() -> None:
+        resource.setrlimit(resource.RLIMIT_AS, (10 * 2**30, 10 * 2**30))
+
+    results = {}
+    for name, gib in (("big", 20), ("fits", 12)):
+        script = _script(tmp_path, f"{name}.py", f"""
+            import torch
+            torch.empty({gib} * 2**30, dtype=torch.uint8, device="cuda")
+        """)
+        results[name] = subprocess.run(
+            [sys.executable, "-m", "fakegpu", "run", "--gpu", "t4", "--", sys.executable, script],
+            cwd=tmp_path, env=_environment(tmp_path), text=True, capture_output=True,
+            timeout=240, preexec_fn=limit_address_space,
+        )
+    big = results["big"]
+    assert big.returncode == 1
+    assert "OutOfMemoryError: CUDA out of memory. Tried to allocate 20.00 GiB" in big.stderr
+    assert "Does not fit. GPU 0 ran out of memory: tried to allocate 20.00 GiB" in " ".join(big.stderr.split())
+    fits = results["fits"]
+    assert fits.returncode == 1
+    assert "GPU 0 has room for this 12.00 GiB tensor" in fits.stderr
+    assert "OutOfMemoryError" not in fits.stderr
+
+
+@needs_torch
 def test_run_rejects_unknown_gpus_and_missing_commands(tmp_path: Path) -> None:
     completed = _run(tmp_path, "--gpu", "a100-80g", "--", "true")
     assert completed.returncode == 2 and "Did you mean" in completed.stderr
