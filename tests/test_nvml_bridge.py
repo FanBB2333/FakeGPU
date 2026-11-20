@@ -190,6 +190,8 @@ def test_nvitop_state_selection_and_machine_telemetry(tmp_path, monkeypatch, sel
 
     monkeypatch.setattr(nvitop_cli, "NvmlStateBridge", Bridge)
     monkeypatch.setitem(sys.modules, "nvitop.cli", SimpleNamespace(main=lambda: 0))
+    # Reference telemetry relabels nvitop's driver version on this stand-in.
+    monkeypatch.setitem(sys.modules, "nvitop.api.device", SimpleNamespace(Device=type("Device", (), {})))
     arguments = []
     if selection in {"argument", "disabled"}:
         arguments += ["--state-dir", str(paths.state_dir)]

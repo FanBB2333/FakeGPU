@@ -45,8 +45,9 @@ def test_accelerate_fsdp_version_and_reshard_setting(version, reshard, framework
         parameter_shapes=SHAPES if framework == "fsdp2" and reshard else None,
     )
     assert plan["rank_local_storage"]["parameter_bytes"] == (
-        640 if strategy == "full_shard" else 1176
+        640 if strategy == "full_shard" else 588
     )
+    assert plan["sharding"]["parameters_resharded_after_forward"] is (strategy == "full_shard")
 
 
 def test_fsdp2_uneven_parameter_shapes_budget_largest_rank():

@@ -3,6 +3,7 @@
 id: t500-mobile
 name: Fake NVIDIA T500 Laptop GPU
 torch_name: NVIDIA T500
+canonical: true
 official_model: NVIDIA T500
 architecture: turing
 compute_major: 7

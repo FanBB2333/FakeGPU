@@ -120,7 +120,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     except PlatformError as exc:
         parser.error(str(exc))
-    os.execvpe(cmd[0], cmd, child_env)
+    try:
+        os.execvpe(cmd[0], cmd, child_env)
+    except OSError as exc:
+        # Match env(1): 127 when the command is not found, 126 when it is
+        # found but cannot be invoked.
+        print(f"fakegpu: {cmd[0]}: {exc.strerror or exc}", file=sys.stderr)
+        return 127 if isinstance(exc, (FileNotFoundError, NotADirectoryError)) else 126
     return 0
 
 

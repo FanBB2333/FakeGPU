@@ -27,9 +27,11 @@ def _validate_batch(profile_matrix: tuple[str, ...]) -> None:
         assert torch.cuda.get_device_name(index) == expected.torch_name
         assert torch.cuda.get_device_capability(index) == expected.compute_capability
         properties = torch.cuda.get_device_properties(index)
-        assert int(properties.total_memory) == expected.memory_bytes
+        assert int(properties.total_memory) == expected.device_memory_bytes
         assert int(properties.major) == expected.compute_major
         assert int(properties.minor) == expected.compute_minor
+        assert int(properties.multi_processor_count) == (expected.sm_count or 108)
+        assert int(properties.regs_per_multiprocessor) == expected.regs_per_multiprocessor
 
         tensor = torch.arange(4, device=f"cuda:{index}", dtype=torch.float32)
         result = tensor.square().add(1)

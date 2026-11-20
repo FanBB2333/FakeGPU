@@ -15,6 +15,9 @@ struct CommunicatorRegistrationResult {
     std::uint64_t seqno = 0;
     std::string error_code;
     std::string error_detail;
+    // Lowest compute capability (major * 10 + minor) the ranks reported, like
+    // NCCL's comm->minCompCap; 0 when no rank reported one.
+    int min_compute_capability = 0;
 };
 
 struct CommunicatorDestroyResult {
@@ -41,6 +44,7 @@ struct CommunicatorSplitResult {
     int new_world_size = 0;
     std::string error_code;
     std::string error_detail;
+    int new_min_compute_capability = 0;
 };
 
 struct CommunicatorFailureRequest {
@@ -76,6 +80,7 @@ struct CommunicatorShrinkResult {
     int new_world_size = 0;
     std::string error_code;
     std::string error_detail;
+    int new_min_compute_capability = 0;
 };
 
 enum class PointToPointType {
@@ -83,6 +88,41 @@ enum class PointToPointType {
     Recv,
 };
 
+// One send or receive of a point-to-point batch. Sends and receives pair up
+// by (sender, receiver, sequence): the k-th send a rank posts to a peer meets
+// the k-th receive that peer posts from it, as NCCL queues them per peer
+// (enqueue.cc, taskAppend). Ranks that do not take part are not involved.
+struct PointToPointOperation {
+    PointToPointType type = PointToPointType::Send;
+    int peer = -1;
+    std::uint64_t sequence = 0;
+    CollectiveDataType dtype = CollectiveDataType::Float32;
+    std::size_t count = 0;
+    std::size_t bytes = 0;
+};
+
+// One rank's sends and receives from a group, or a single ungrouped call.
+// With shared memory, one staging buffer holds every operation's bytes in
+// order. With socket payloads, the request carries the send bytes in order
+// and the response the receive bytes in order.
+struct PointToPointBatchRequest {
+    int comm_id = -1;
+    int rank = -1;
+    BufferTransport transport = BufferTransport::SharedMemory;
+    std::string staging_name;
+    std::vector<char> payload;
+    std::vector<PointToPointOperation> operations;
+    int timeout_ms = 0;
+};
+
+struct PointToPointBatchResult {
+    bool ok = false;
+    std::string error_code;
+    std::string error_detail;
+    std::vector<char> output_payload;
+};
+
+// A single SEND or RECV request; seqno is the pair sequence.
 struct PointToPointSubmitRequest {
     int comm_id = -1;
     int rank = -1;
@@ -312,7 +352,8 @@ public:
         const std::string& unique_id,
         int world_size,
         int rank,
-        int timeout_ms);
+        int timeout_ms,
+        int compute_capability = 0);
 
     CommunicatorDestroyResult destroy_communicator(int comm_id, int rank);
     CommunicatorSplitResult split_communicator(const CommunicatorSplitRequest& request);
@@ -321,6 +362,7 @@ public:
     CommunicatorShrinkResult shrink_communicator(
         const CommunicatorShrinkRequest& request);
     PointToPointSubmitResult submit_point_to_point(const PointToPointSubmitRequest& request);
+    PointToPointBatchResult submit_point_to_point_batch(PointToPointBatchRequest request);
     CollectiveSubmitResult submit_collective(const CollectiveSubmitRequest& request);
     BarrierSubmitResult submit_barrier(const BarrierSubmitRequest& request);
     CollectiveBatchPrepareResult prepare_collective_batch(const CollectiveBatchPrepareRequest& request);

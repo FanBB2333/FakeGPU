@@ -7,6 +7,7 @@
 id: a800-pcie-40gb
 name: Fake NVIDIA A800 PCIe 40GB
 torch_name: NVIDIA A800 40GB Active
+canonical: true
 official_model: NVIDIA A800
 architecture: ampere
 compute_major: 8

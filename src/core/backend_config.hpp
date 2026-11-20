@@ -52,11 +52,8 @@ public:
     OomPolicy oom_policy() const { return oom_policy_; }
     const distributed::DistributedConfig& distributed_config() const { return distributed_config_; }
     bool distributed_enabled() const { return distributed_config_.enabled(); }
-    bool has_configuration_error() const { return !configuration_error_.empty(); }
-    const std::string& configuration_error() const { return configuration_error_; }
 
     // Real library paths (can be overridden via env vars)
-    const std::string& real_cuda_lib_dir() const { return real_cuda_lib_dir_; }
     const std::string& real_cudart_path() const { return real_cudart_path_; }
     const std::string& real_cuda_driver_path() const { return real_cuda_driver_path_; }
     const std::string& real_cublas_path() const { return real_cublas_path_; }
@@ -72,22 +69,10 @@ public:
         return mode_ == FakeGpuMode::Simulate || mode_ == FakeGpuMode::Hybrid;
     }
 
-    // Check if compute should use real GPU
-    bool use_real_compute() const {
-        return mode_ == FakeGpuMode::Passthrough || mode_ == FakeGpuMode::Hybrid;
-    }
-
     bool strict_compat() const { return strict_compat_; }
     UnsupportedApiPolicy unsupported_api_policy() const {
         return unsupported_api_policy_;
     }
-    bool reject_unsupported_api() const {
-        return unsupported_api_policy_ == UnsupportedApiPolicy::Error;
-    }
-
-    // For testing: allow mode override
-    void set_mode(FakeGpuMode mode) { mode_ = mode; }
-    void set_oom_policy(OomPolicy policy) { oom_policy_ = policy; }
 
 private:
     BackendConfig() {
@@ -125,9 +110,6 @@ private:
         }
 
         distributed_config_ = distributed::parse_distributed_config_from_env();
-        if (!distributed_config_.valid()) {
-            configuration_error_ = distributed_config_.validation_error;
-        }
 
         if (const char* strict_env = std::getenv("FAKEGPU_STRICT_COMPAT")) {
             strict_compat_ = std::string(strict_env) != "0";
@@ -206,9 +188,6 @@ private:
                 std::string cudart = pick_first_existing(dir, cudart_candidates);
                 if (!cudart.empty()) {
                     real_cudart_path_ = cudart;
-                    if (real_cuda_lib_dir_.empty()) {
-                        real_cuda_lib_dir_ = dir;
-                    }
                 }
             }
 
@@ -236,15 +215,6 @@ private:
                 }
             }
         }
-
-        // Also check /usr/lib for nvidia-ml (often installed separately)
-#ifndef __APPLE__
-        if (real_nvml_path_.empty()) {
-            if (file_exists("/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1")) {
-                real_nvml_path_ = "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1";
-            }
-        }
-#endif
     }
 
     static bool file_exists(const std::string& path) {
@@ -264,7 +234,6 @@ private:
     std::string real_cublas_path_;
     std::string real_nvml_path_;
     distributed::DistributedConfig distributed_config_;
-    std::string configuration_error_;
     bool strict_compat_ = true;
     UnsupportedApiPolicy unsupported_api_policy_ = UnsupportedApiPolicy::Warn;
 };

@@ -134,6 +134,10 @@ def test_peer_access_follows_links_sockets_and_documented_policy():
     assert not resolve("rtx4090:2").topology.can_access_peer(0, 1)
     bridged = resolve("rtx3090:2", nvlink_bridges="0-1").topology
     assert bridged.relation(0, 1) == "NV4" and bridged.peer_bandwidth_gbps(0, 1) == 56.25
+    # GA102 boards: four x4 NVLink 3 links at 14.0625 GB/s per direction (GA102 whitepaper).
+    for workstation in ("rtx-a4500", "rtx-a5000", "rtx-a5500", "rtx-a6000"):
+        pair = resolve(f"{workstation}:2", nvlink_bridges="0-1").topology
+        assert pair.relation(0, 1) == "NV4" and pair.peer_bandwidth_gbps(0, 1) == 56.25
     assert not resolve("gb300-dgx-station,rtx-pro-6000-blackwell").topology.can_access_peer(0, 1)
     nvl = resolve("h200-nvl:4", nvlink_bridges="0-1-2-3").topology
     assert nvl.relation(0, 3) == "NV6" and len(nvl.ports(0)) == 18
@@ -252,7 +256,12 @@ def test_smi_shows_the_platform_matrix_slots_and_links(tmp_path: Path, monkeypat
     assert smi_main(["topo", "-m", "--state", str(path)]) == 0
     matrix = capsys.readouterr().out
     assert "Platform: PCIe server, 8 slots (pcie-server)" in matrix
-    assert "GPU0  X     PIX   NODE  NODE  SYS" in matrix
+    assert "\nGPU0\t X \tPIX\tNODE\tNODE\tSYS\t" in matrix
+    # CPU Affinity, NUMA Affinity, an empty cell and GPU NUMA ID, as nvidia-smi
+    # prints them; GPU 5 sits on NUMA node 1 (see the query below).
+    rows = {line.split("\t")[0]: line for line in matrix.splitlines()}
+    assert rows["GPU0"].endswith("\tN/A\t0\t\tN/A")
+    assert rows["GPU5"].endswith("\tN/A\t1\t\tN/A")
     assert "NUMA Affinity" in matrix and "PXB  = Connection traversing multiple PCIe bridges" in matrix
 
     assert smi_main([
@@ -287,6 +296,18 @@ def test_platform_command_lists_shows_and_exports(tmp_path, monkeypatch, capsys)
     assert "export FAKEGPU_NVLINK_FABRIC=mesh:0,1:6:25" in capsys.readouterr().out
     assert platform_main(["show", "--devices", "a100,h100"]) == 2
     assert "holds one GPU model" in capsys.readouterr().err
+
+
+def test_platform_command_reports_an_invalid_machine_config(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FAKEGPU_HOME", str(tmp_path))
+    (tmp_path / "machine").mkdir()
+    (tmp_path / "machine" / "config.json").write_text(
+        json.dumps({"devices": "rtx4090:2", "platform": "desktop", "bogus_key": 1}), encoding="utf-8"
+    )
+    assert platform_main(["show"]) == 2
+    captured = capsys.readouterr()
+    assert "fakegpu platform:" in captured.err
+    assert "HGX A100" not in captured.out
 
 
 def test_nvlink_group_encoding_accepts_ranges():

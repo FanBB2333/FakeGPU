@@ -3,6 +3,7 @@
 id: quadro-t1000-mobile
 name: Fake NVIDIA Quadro T1000 Mobile
 torch_name: Quadro T1000
+canonical: true
 official_model: Quadro T1000
 architecture: turing
 compute_major: 7

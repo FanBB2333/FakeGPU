@@ -47,7 +47,7 @@ def aggregate_reports(
 
     for path, report in reports:
         _validate_report(path, report)
-        gpu = dict(report.get("gpu") or {})
+        gpu = report["gpu"]
         software = dict(report.get("software") or {})
         backend_calibration = dict(report.get("backend_calibration") or {})
         gpu_key = (str(gpu.get("name") or ""), str(gpu.get("compute_capability") or ""))
@@ -77,11 +77,12 @@ def aggregate_reports(
                     "observations": [],
                 },
             )
-            static = dict(item.get("static_estimate") or {})
+            static = item["static_estimate"]
             graph = dict(static.get("graph") or {})
             workspace = dict(static.get("workspace_estimate") or {})
             workspace_coverage = dict(workspace.get("coverage") or {})
-            comparison = dict(item.get("comparison") or {})
+            comparison = item["comparison"]
+            real = item["real_cuda"]
             observation = {
                 "source_report": str(path),
                 "gpu": gpu,
@@ -117,13 +118,9 @@ def aggregate_reports(
                 "graph_fingerprint": str(graph.get("graph_fingerprint") or ""),
                 "graph_node_count": int(graph.get("node_count", 0) or 0),
                 "graph_alias_node_count": int(graph.get("alias_node_count", 0) or 0),
-                "real_peak_allocated_bytes": int(
-                    (item.get("real_cuda") or {}).get("peak_allocated_bytes", 0) or 0
-                ),
-                "real_peak_stage": (item.get("real_cuda") or {}).get("peak_stage"),
-                "real_requested_peak_stage": (item.get("real_cuda") or {}).get(
-                    "peak_requested_stage"
-                ),
+                "real_peak_allocated_bytes": int(real.get("peak_allocated_bytes", 0) or 0),
+                "real_peak_stage": real.get("peak_stage"),
+                "real_requested_peak_stage": real.get("peak_requested_stage"),
                 "estimated_peak_phase": static.get("peak_phase"),
                 "comparison": comparison,
             }
@@ -134,14 +131,11 @@ def aggregate_reports(
     for workload in grouped.values():
         observations = workload["observations"]
         present_in_all_reports = len(observations) == len(source_reports)
-        static_peaks = {
-            int(item.get("static_estimated_peak_bytes", 0) or 0)
-            for item in observations
-        }
+        static_peaks = {item["static_estimated_peak_bytes"] for item in observations}
         fingerprints = {
-            str(item.get("graph_fingerprint") or "")
+            item["graph_fingerprint"]
             for item in observations
-            if item.get("graph_fingerprint")
+            if item["graph_fingerprint"]
         }
         workload["present_in_all_reports"] = present_in_all_reports
         workload["static_peak_consistent"] = (
@@ -152,11 +146,11 @@ def aggregate_reports(
         )
         workload["gpu_observation_count"] = len(observations)
         workload["max_underestimate_percent"] = max(
-            float((item.get("comparison") or {}).get("underestimate_percent", 0.0) or 0.0)
+            float(item["comparison"].get("underestimate_percent", 0.0) or 0.0)
             for item in observations
         )
         workload["max_absolute_error_percent"] = max(
-            float((item.get("comparison") or {}).get("absolute_error_percent", 0.0) or 0.0)
+            float(item["comparison"].get("absolute_error_percent", 0.0) or 0.0)
             for item in observations
         )
         workloads.append(workload)
@@ -190,9 +184,9 @@ def aggregate_reports(
         for observation in workload["observations"]
     ]
     workspace_coverages = [
-        dict(observation["workspace_coverage"])
+        observation["workspace_coverage"]
         for observation in observations
-        if isinstance(observation.get("workspace_coverage"), dict)
+        if observation["workspace_coverage"] is not None
     ]
     modeled_workspace_fractions = [
         float(coverage.get("modeled_fraction", 0.0) or 0.0)
@@ -212,29 +206,19 @@ def aggregate_reports(
             "workload_count": len(workloads),
             "observation_count": len(all_comparisons),
             "all_static_peaks_consistent": all(
-                bool(item["static_peak_consistent"]) for item in workloads
+                item["static_peak_consistent"] for item in workloads
             ),
             "all_graph_fingerprints_consistent": all(
-                bool(item["graph_fingerprint_consistent"]) for item in workloads
+                item["graph_fingerprint_consistent"] for item in workloads
             ),
             "underestimated_observation_count": sum(value > 0 for value in underestimates),
             "unprofiled_attention_observation_count": sum(
-                int(observation.get("unprofiled_attention_operator_count", 0) or 0)
-                > 0
-                for workload in workloads
-                for observation in workload["observations"]
+                observation["unprofiled_attention_operator_count"] > 0
+                for observation in observations
             ),
             "extrapolated_workspace_profile_observation_count": sum(
-                int(
-                    observation.get(
-                        "extrapolated_workspace_profile_count",
-                        0,
-                    )
-                    or 0
-                )
-                > 0
-                for workload in workloads
-                for observation in workload["observations"]
+                observation["extrapolated_workspace_profile_count"] > 0
+                for observation in observations
             ),
             "workspace_coverage_observation_count": len(workspace_coverages),
             "missing_workspace_coverage_observation_count": (

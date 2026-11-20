@@ -3,6 +3,7 @@
 id: gtx960
 name: Fake NVIDIA GeForce GTX 960
 torch_name: NVIDIA GeForce GTX 960
+canonical: true
 official_model: GeForce GTX 960
 architecture: maxwell
 compute_major: 5

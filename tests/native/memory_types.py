@@ -611,7 +611,9 @@ def _validate_modeled_mig_nvml() -> None:
                 )
             )
             != NVML_SUCCESS
-            or int(count.value) != 2
+            # nvml.h: the maximum number of MIG devices the parent can hold,
+            # the default a100 profile's 7, not the 2 configured instances.
+            or int(count.value) != 7
         ):
             _die(
                 "NVML modeled MIG device count mismatch: "
@@ -767,7 +769,7 @@ def main() -> int:
     dptr = ctypes.c_ulonglong()
     _cu_check(int(libcuda.cuMemAlloc(ctypes.byref(dptr), ctypes.c_size_t(4096))), what="cuMemAlloc")
     mptr = ctypes.c_ulonglong()
-    _cu_check(int(libcuda.cuMemAllocManaged(ctypes.byref(mptr), ctypes.c_size_t(4096), ctypes.c_uint(0))), what="cuMemAllocManaged")
+    _cu_check(int(libcuda.cuMemAllocManaged(ctypes.byref(mptr), ctypes.c_size_t(4096), ctypes.c_uint(1))), what="cuMemAllocManaged")
     hptr = ctypes.c_void_p()
     _cu_check(int(libcuda.cuMemAllocHost(ctypes.byref(hptr), ctypes.c_size_t(4096))), what="cuMemAllocHost")
 

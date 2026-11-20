@@ -4,6 +4,7 @@
 id: gtx965m
 name: Fake NVIDIA GeForce GTX 965M 2 GB
 torch_name: NVIDIA GeForce GTX 965M
+canonical: true
 official_model: GeForce GTX 965M
 architecture: maxwell
 compute_major: 5

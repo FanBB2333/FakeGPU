@@ -1,6 +1,6 @@
 id: rtx2060-12gb
 name: Fake NVIDIA GeForce RTX 2060 12 GB
-torch_name: NVIDIA GeForce RTX 2060 12 GB
+torch_name: NVIDIA GeForce RTX 2060
 official_model: GeForce RTX 2060
 architecture: turing
 compute_major: 7

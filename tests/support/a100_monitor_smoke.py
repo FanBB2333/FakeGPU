@@ -95,6 +95,8 @@ def main():
                                           stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True)
                 reader.start()
                 eventually(lambda: b"\x1b[?1049h" in output)
+                # The header tells viewers that the sensor readings are modeled.
+                eventually(lambda: "Driver Version: FakeGPU (modeled)" in "\n".join(screen.display))
                 saw_activity = False
                 observed = []
                 for phase in ("allocated", "grown", "released_extra", "released_all"):

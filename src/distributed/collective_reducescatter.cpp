@@ -34,23 +34,14 @@ CollectiveExecutionResult execute_reducescatter(
         if (participant.bytes != request.bytes) {
             return collective_error(
                 "staging_size_mismatch",
-                "participant rank " + std::to_string(participant.rank) +
-                    " reported bytes=" + std::to_string(participant.bytes) +
-                    ", expected " + std::to_string(request.bytes));
+                participant_size_mismatch(participant, request));
         }
 
         std::vector<char> buffer;
-        if (!load_participant_buffer(
-                participant.transport,
-                participant.staging_name,
-                request.dtype,
-                participant.transport == BufferTransport::SocketPayload
-                    ? participant.payload_bytes
-                    : request.bytes,
+        if (!load_participant_input(
+                request,
+                participant,
                 {plan.total_elements},
-                participant.rank,
-                request.seqno,
-                participant.payload,
                 buffer,
                 error)) {
             return collective_error("staging_open_failed", error);
@@ -65,16 +56,13 @@ CollectiveExecutionResult execute_reducescatter(
     result.ok = true;
     for (std::size_t index = 0; index < participants.size(); ++index) {
         const CollectiveExecutionParticipant& participant = participants[index];
-        if (!store_participant_buffer(
-                participant.transport,
-                participant.staging_name,
-                request.dtype,
+        if (!store_participant_output(
+                request,
+                participant,
                 {plan.chunk_elements},
-                participant.rank,
-                request.seqno,
                 reduced.data() + index * plan.chunk_bytes,
                 plan.chunk_bytes,
-                result.output_payloads[participant.rank],
+                result,
                 error)) {
             return collective_error("staging_open_failed", error);
         }

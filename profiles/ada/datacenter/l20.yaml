@@ -5,6 +5,7 @@
 id: l20
 name: Fake NVIDIA L20
 torch_name: NVIDIA L20
+canonical: true
 official_model: NVIDIA L20
 architecture: ada
 compute_major: 8

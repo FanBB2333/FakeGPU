@@ -29,8 +29,6 @@ def render_terminal_summary(
     tracker: Any,
     device_profiles: list[dict[str, Any]],
     *,
-    arch_name: Any = _arch_name,
-    fmt_bytes: Any = _fmt_bytes,
     transfers: dict[int, dict[str, Any]] | None = None,
 ) -> None:
     """Write the torch-layer memory summary to stderr.
@@ -50,10 +48,10 @@ def render_terminal_summary(
     for i, prof in enumerate(device_profiles):
         if i >= len(tracker._total):
             break
-        name = prof.get("name", "NVIDIA A100-SXM4-80GB")
-        cc_major = prof.get("compute_major", 8)
-        cc_minor = prof.get("compute_minor", 0)
-        arch = arch_name(cc_major, cc_minor)
+        name = prof["name"]
+        cc_major = prof["compute_major"]
+        cc_minor = prof["compute_minor"]
+        arch = _arch_name(cc_major, cc_minor)
 
         total = tracker._total[i]
         peak = tracker._peak[i]
@@ -65,21 +63,21 @@ def render_terminal_summary(
 
         lines.append(f" Device {i}: {name} ({arch}, cc {cc_major}.{cc_minor})")
         lines.append(
-            f"   Memory: {fmt_bytes(peak)} allocated | "
-            f"{fmt_bytes(reserved_peak)} reserved / {fmt_bytes(total)} "
+            f"   Memory: {_fmt_bytes(peak)} allocated | "
+            f"{_fmt_bytes(reserved_peak)} reserved / {_fmt_bytes(total)} "
             f"({peak_pct:.1f}%)"
         )
         lines.append(f"   Alloc: {alloc} calls | Free: {free} calls")
         record = (transfers or {}).get(i)
         if record and any(entry["bytes"] for entry in record["copies"].values()):
-            lines.append(f"   Copies (modeled): {copies_summary(record, fmt_bytes)}")
+            lines.append(f"   Copies (modeled): {copies_summary(record, _fmt_bytes)}")
         lines.append("------------------------------------------------------")
 
     lines.append(" Peak VRAM by GPU:")
     for i, peak in enumerate(tracker._peak[: len(device_profiles)]):
         lines.append(
-            f"   GPU {i}: {fmt_bytes(peak)} allocated | "
-            f"{fmt_bytes(tracker._reserved_peak[i])} reserved"
+            f"   GPU {i}: {_fmt_bytes(peak)} allocated | "
+            f"{_fmt_bytes(tracker._reserved_peak[i])} reserved"
         )
     lines.append("------------------------------------------------------")
 

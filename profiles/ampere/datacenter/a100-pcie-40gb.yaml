@@ -4,6 +4,7 @@
 # Additional source: https://www.nvidia.com/en-us/data-center/a100/
 # Additional source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet.pdf
 # Additional source: https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html
+# Reported memory and copy engines: deviceQuery shows NVIDIA A100-PCIE-40GB with 42405855232 bytes, 3 copy engines and ECC enabled (CUDA 13.0): https://docs.nvidia.com/base-command-manager/manuals/11/installation-manual.pdf
 id: a100-pcie-40gb
 name: Fake NVIDIA A100-PCIE-40GB
 torch_name: NVIDIA A100-PCIE-40GB
@@ -35,6 +36,7 @@ pci_device_id: 552669406
 base_clock_mhz: 765
 memory_type: HBM2
 memory_bandwidth_gbps: 1555
+reported_memory_bytes: 42405855232
 ecc: supported
 form_factor: pcie
 pcie_generation: 4
@@ -42,6 +44,7 @@ pcie_lanes: 16
 nvlink_generation: 3
 nvlink_bandwidth_gbps: 600
 mig_max_instances: 7
+async_engine_count: 3
 fp64_tflops: 9.7
 fp32_tflops: 19.5
 fp16_tflops: 77.97

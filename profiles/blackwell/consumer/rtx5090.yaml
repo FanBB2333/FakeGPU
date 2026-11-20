@@ -54,7 +54,6 @@ supported_types:
   - fp8
   - fp4
   - int8
-  - int4
 throughput_published:
   - fp32_tflops
   - fp16_tflops

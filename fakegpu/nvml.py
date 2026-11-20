@@ -136,10 +136,9 @@ class NvmlStateBridge:
         paths = [Path(path).expanduser() for path in state_paths]
         if not paths and self.state_dir is None:
             fallback = os.environ.get("FAKEGPU_SMI_STATE_PATH")
-            if fallback:
-                paths.append(Path(fallback).expanduser())
-        if not paths and self.state_dir is None:
-            raise ValueError("provide --state-dir, --state, or FAKEGPU_SMI_STATE_DIR")
+            if not fallback:
+                raise ValueError("provide --state-dir, --state, or FAKEGPU_SMI_STATE_DIR")
+            paths.append(Path(fallback).expanduser())
         self.state_paths = paths
         self.refresh_interval = refresh_interval
         self.stale_after_seconds = stale_after_seconds
@@ -235,12 +234,12 @@ class NvmlStateBridge:
         sensors, activity = self._reference.sample(inventory) if self._reference is not None else ({}, {})
         device_rows = (_DeviceV3 * len(devices))()
         for i, device in enumerate(devices):
-            values = sensors.get(device.uuid.decode())
+            values = sensors.get(inventory["devices"][i]["uuid"])
             sample = _Telemetry(valid=1, **values) if values else _Telemetry()
             device_rows[i] = _DeviceV3(device, sample, self._links(inventory["devices"][i]))
         process_rows = (_ProcessV2 * len(processes))()
         for i, process in enumerate(processes):
-            key = (devices[process.device_index].uuid.decode(), process.pid)
+            key = (inventory["devices"][process.device_index]["uuid"], process.pid)
             values = activity.get(key, {"timestamp_us": 0, "gpu": 0, "memory": 0})
             process_rows[i] = _ProcessV2(process, **values)
         return device_rows, process_rows

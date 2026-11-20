@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from fakegpu._finetune_allocator import ALLOCATOR_VARIABLES
-from fakegpu._finetune_workflow_store import _digest
+from fakegpu.structured_io import canonical_sha256 as _digest
 from fakegpu.phase_memory import (
     SAMPLE_SCHEMA,
     estimate_phase_memory,

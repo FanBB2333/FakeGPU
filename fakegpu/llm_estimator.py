@@ -22,24 +22,57 @@ VISION_ESTIMATE_WARNING = (
 KV_CACHE_STRATEGIES = frozenset(
     {"dynamic", "static", "quantized", "paged"}
 )
-
-_DTYPE_BYTES = {
-    "BOOL": 1,
-    "U8": 1,
-    "I8": 1,
-    "F8_E4M3": 1,
-    "F8_E5M2": 1,
-    "I16": 2,
-    "U16": 2,
-    "F16": 2,
-    "BF16": 2,
-    "I32": 4,
-    "U32": 4,
-    "F32": 4,
-    "I64": 8,
-    "U64": 8,
-    "F64": 8,
+# Transformers QuantizedCache default q_group_size (cache_utils.py, 4.57).
+DEFAULT_KV_QUANTIZATION_GROUP_SIZE = 64
+MLA_KV_CACHE_LAYOUTS = frozenset({"auto", "latent", "decompressed"})
+# Transformers config classes that derive layer_types from a fixed pattern
+# when a checkpoint config omits it: a layer is full attention when
+# (index + 1) is a multiple of the pattern (gemma3, cohere2, olmo3 every
+# 6th/4th/4th layer; gemma2 and gpt_oss alternate).
+_SLIDING_WINDOW_PATTERN_DEFAULTS = {
+    "gemma3_text": 6,
+    "gemma3": 6,
+    "cohere2": 4,
+    "olmo3": 4,
+    "gemma2": 2,
+    "gpt_oss": 2,
 }
+
+# Bits per element for every dtype a safetensors 0.8 header accepts. F4 and
+# the F6 types are packed: the header shape counts logical elements, and the
+# payload is numel * bits / 8 bytes, which must end on a byte boundary.
+_DTYPE_BITS = {
+    "BOOL": 8,
+    "U8": 8,
+    "I8": 8,
+    "F8_E4M3": 8,
+    "F8_E5M2": 8,
+    "F8_E4M3FNUZ": 8,
+    "F8_E5M2FNUZ": 8,
+    "F8_E8M0": 8,
+    "F4": 4,
+    "F6_E2M3": 6,
+    "F6_E3M2": 6,
+    "I16": 16,
+    "U16": 16,
+    "F16": 16,
+    "BF16": 16,
+    "I32": 32,
+    "U32": 32,
+    "F32": 32,
+    "C64": 64,
+    "I64": 64,
+    "U64": 64,
+    "F64": 64,
+}
+# Byte width of the whole-byte dtypes; packed dtypes have no per-element width.
+_DTYPE_BYTES = {
+    dtype: bits // 8 for dtype, bits in _DTYPE_BITS.items() if bits % 8 == 0
+}
+# Low-precision storage that marks a checkpoint as quantized.
+_LOW_PRECISION_STORAGE_DTYPES = frozenset(
+    dtype for dtype, bits in _DTYPE_BITS.items() if bits <= 8 and dtype != "BOOL"
+)
 
 _TORCH_DTYPE_TO_BYTES = {
     "float16": 2,
@@ -76,8 +109,18 @@ def estimate_kv_cache_memory(
     use_cache: bool = True,
     elements_per_token_per_layer: int | None = None,
     cache_layout: str = "separate_key_value",
+    sliding_window_layers: int = 0,
+    sliding_window_tokens: int | None = None,
+    prefill_chunk_tokens: int | None = None,
+    quantized_group_size: int = DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
 ) -> dict[str, Any]:
-    """Estimate allocated KV-cache storage for common serving strategies."""
+    """Estimate allocated KV-cache storage for common serving strategies.
+
+    ``sliding_window_layers`` of the ``num_hidden_layers`` layers attend over
+    ``sliding_window_tokens`` (from the model config); the rest keep their
+    whole context. ``window_tokens`` is an explicit override that caps every
+    layer instead, as before per-layer accounting existed.
+    """
 
     positive_integers = {
         "num_hidden_layers": num_hidden_layers,
@@ -88,6 +131,7 @@ def estimate_kv_cache_memory(
         "generated_tokens": generated_tokens,
         "element_bytes": element_bytes,
         "block_tokens": block_tokens,
+        "quantized_group_size": quantized_group_size,
     }
     for name, value in positive_integers.items():
         if (
@@ -131,6 +175,8 @@ def estimate_kv_cache_memory(
     for name, value in (
         ("max_cache_tokens", max_cache_tokens),
         ("window_tokens", window_tokens),
+        ("sliding_window_tokens", sliding_window_tokens),
+        ("prefill_chunk_tokens", prefill_chunk_tokens),
     ):
         if value is not None and (
             not isinstance(value, int)
@@ -138,12 +184,50 @@ def estimate_kv_cache_memory(
             or value <= 0
         ):
             raise ValueError(f"{name} must be a positive integer")
+    if (
+        not isinstance(sliding_window_layers, int)
+        or isinstance(sliding_window_layers, bool)
+        or not 0 <= sliding_window_layers <= num_hidden_layers
+    ):
+        raise ValueError(
+            "sliding_window_layers must be between zero and "
+            "num_hidden_layers"
+        )
+    if sliding_window_layers and sliding_window_tokens is None:
+        raise ValueError(
+            "sliding_window_layers require sliding_window_tokens"
+        )
     if strategy != "static" and max_cache_tokens is not None:
         raise ValueError(
             "max_cache_tokens is only valid for the static KV-cache strategy"
         )
 
-    final_logical_tokens = prompt_tokens + max(0, generated_tokens - 1)
+    # The explicit window caps every layer (the pre-existing override); a
+    # quantized Transformers cache builds one QuantizedLayer per layer and
+    # keeps the whole history even on sliding-window layers.
+    if not sliding_window_layers:
+        sliding_reason = "no_sliding_window_layers"
+    elif (
+        strategy == "paged"
+        and sliding_window_layers == num_hidden_layers
+        and window_tokens is not None
+        and window_tokens == sliding_window_tokens
+    ):
+        sliding_reason = "paged_sliding_window_override"
+    elif window_tokens is not None:
+        sliding_reason = "window_tokens_override_applies_to_every_layer"
+    elif strategy == "quantized":
+        sliding_reason = "quantized_cache_keeps_full_history_per_layer"
+    else:
+        sliding_reason = "config_layer_types"
+    sliding_layers = (
+        sliding_window_layers
+        if sliding_reason in {"config_layer_types", "paged_sliding_window_override"}
+        else 0
+    )
+    full_layers = num_hidden_layers - sliding_layers
+
+    final_logical_tokens = prompt_tokens + generated_tokens - 1
     storage_bits = (
         quantized_bits if strategy == "quantized" else element_bytes * 8
     )
@@ -159,7 +243,7 @@ def estimate_kv_cache_memory(
             final_logical_tokens,
             window_tokens=window_tokens,
         )
-        if static_capacity_tokens < final_effective_tokens:
+        if full_layers and static_capacity_tokens < final_effective_tokens:
             raise ValueError(
                 "max_cache_tokens must cover the requested generation "
                 "after applying window_tokens"
@@ -174,73 +258,139 @@ def estimate_kv_cache_memory(
         num_hidden_layers * resolved_elements_per_token_per_layer
     )
 
-    def phase_allocation(logical_tokens: int) -> dict[str, Any]:
-        effective_tokens = (
-            _effective_context_tokens(
-                logical_tokens,
-                window_tokens=window_tokens,
-            )
-            if use_cache
-            else 0
+    def full_tokens(logical_tokens: int) -> tuple[int, int]:
+        effective = _effective_context_tokens(
+            logical_tokens,
+            window_tokens=window_tokens,
         )
-        if not use_cache:
-            allocated_tokens = 0
-        elif strategy == "static":
-            allocated_tokens = int(static_capacity_tokens or 0)
+        if strategy == "static":
+            allocated = static_capacity_tokens
         elif strategy == "paged":
-            allocated_tokens = (
-                math.ceil(effective_tokens / block_tokens) * block_tokens
-            )
+            allocated = math.ceil(effective / block_tokens) * block_tokens
         else:
-            allocated_tokens = effective_tokens
+            allocated = effective
+        return effective, allocated
 
-        base_dtype_bytes = _kv_storage_bytes(
-            elements_per_token_per_sequence,
-            batch_size=batch_size,
-            tokens=effective_tokens,
-            storage_bits=element_bytes * 8,
+    def sliding_tokens(logical_tokens: int, *, prefill: bool) -> tuple[int, int]:
+        window = int(sliding_window_tokens)
+        if strategy == "dynamic":
+            # Transformers 4.57 DynamicSlidingWindowLayer keeps a view of the
+            # last window-1 tokens of the concatenated states, so the
+            # prefill keeps the whole prompt's storage; each decode step
+            # re-concatenates and leaves min(tokens, window) behind.
+            if prefill or generated_tokens == 1:
+                effective = logical_tokens
+            else:
+                effective = min(logical_tokens, window)
+            return effective, effective
+        if strategy == "static":
+            # StaticSlidingWindowLayer preallocates min(window, capacity).
+            capacity = min(window, int(static_capacity_tokens))
+            return min(logical_tokens, capacity), capacity
+        # Paged: vLLM frees blocks that fall wholly outside the window, so a
+        # sequence holds the last window-1 computed tokens plus the
+        # scheduled ones, and one extra block when the window does not
+        # start on a block boundary.
+        scheduled = (
+            min(prefill_chunk_tokens or logical_tokens, logical_tokens)
+            if prefill
+            else 1
         )
-        full_precision_tokens = (
-            min(effective_tokens, quantized_residual_tokens)
-            if strategy == "quantized"
-            else effective_tokens
-        )
-        quantized_tokens = (
-            effective_tokens - full_precision_tokens
-            if strategy == "quantized"
-            else 0
-        )
-        storage_bytes = _kv_storage_bytes(
-            elements_per_token_per_sequence,
-            batch_size=batch_size,
-            tokens=full_precision_tokens,
-            storage_bits=element_bytes * 8,
-        ) + _kv_storage_bytes(
-            elements_per_token_per_sequence,
-            batch_size=batch_size,
-            tokens=quantized_tokens,
-            storage_bits=quantized_bits,
-        )
-        if strategy == "quantized":
-            allocated_bytes = storage_bytes
+        effective = min(logical_tokens, window - 1 + scheduled)
+        all_blocks = math.ceil(logical_tokens / block_tokens)
+        if effective >= logical_tokens:
+            blocks = all_blocks
         else:
-            allocated_bytes = _kv_storage_bytes(
-                elements_per_token_per_sequence,
-                batch_size=batch_size,
-                tokens=allocated_tokens,
-                storage_bits=storage_bits,
+            blocks = min(
+                all_blocks,
+                math.ceil(effective / block_tokens) + 1,
             )
+        return effective, blocks * block_tokens
+
+    def layer_bytes(layers: int, tokens: int, bits: int) -> int:
+        return _kv_storage_bytes(
+            layers * resolved_elements_per_token_per_layer,
+            batch_size=batch_size,
+            tokens=tokens,
+            storage_bits=bits,
+        )
+
+    def phase_allocation(logical_tokens: int, *, prefill: bool) -> dict[str, Any]:
+        compute_bits = element_bytes * 8
+        if not use_cache:
+            full_effective = full_allocated = 0
+            sliding_effective = sliding_allocated = 0
+        else:
+            full_effective, full_allocated = full_tokens(logical_tokens)
+            sliding_effective, sliding_allocated = (
+                sliding_tokens(logical_tokens, prefill=prefill)
+                if sliding_layers
+                else (0, 0)
+            )
+        base_dtype_bytes = layer_bytes(
+            full_layers, full_effective, compute_bits
+        ) + layer_bytes(sliding_layers, sliding_effective, compute_bits)
+        metadata_bytes = 0
+        if strategy == "quantized":
+            # Transformers 4.57 QuantizedLayer quantizes the whole prefill
+            # at the first update and then appends generated tokens to a
+            # full-precision residual, requantizing everything once it
+            # reaches residual_length-1 tokens (at least one token sits in
+            # the residual right after each requantization).
+            decode_steps = 0 if prefill else generated_tokens - 1
+            full_precision_tokens = min(
+                full_effective,
+                decode_steps,
+                max(1, quantized_residual_tokens - 1),
+            )
+            quantized_tokens = full_effective - full_precision_tokens
+            quantized_elements = (
+                full_layers
+                * resolved_elements_per_token_per_layer
+                * batch_size
+                * quantized_tokens
+            )
+            # optimum-quanto and HQQ keep one scale and one zero-point per
+            # q_group_size elements in the compute dtype.
+            metadata_bytes = (
+                2
+                * element_bytes
+                * math.ceil(quantized_elements / quantized_group_size)
+            )
+            storage_bytes = (
+                layer_bytes(full_layers, full_precision_tokens, compute_bits)
+                + layer_bytes(full_layers, quantized_tokens, quantized_bits)
+                + metadata_bytes
+            )
+            allocated_bytes = storage_bytes
+            full_allocated_bytes = allocated_bytes
+            sliding_allocated_bytes = 0
+            sliding_storage_bytes = 0
+        else:
+            full_precision_tokens = quantized_tokens = None
+            sliding_storage_bytes = layer_bytes(
+                sliding_layers, sliding_effective, storage_bits
+            )
+            storage_bytes = base_dtype_bytes
+            full_allocated_bytes = layer_bytes(
+                full_layers, full_allocated, storage_bits
+            )
+            sliding_allocated_bytes = layer_bytes(
+                sliding_layers, sliding_allocated, storage_bits
+            )
+            allocated_bytes = full_allocated_bytes + sliding_allocated_bytes
+        primary_effective = full_effective if full_layers else sliding_effective
+        primary_allocated = full_allocated if full_layers else sliding_allocated
         return {
             "logical_tokens_per_sequence": logical_tokens,
-            "effective_tokens_per_sequence": effective_tokens,
-            "allocated_tokens_per_sequence": allocated_tokens,
+            "effective_tokens_per_sequence": primary_effective,
+            "allocated_tokens_per_sequence": primary_allocated,
             "full_precision_residual_tokens_per_sequence": (
                 full_precision_tokens
-                if strategy == "quantized"
-                else None
             ),
-            "quantized_tokens_per_sequence": (
-                quantized_tokens if strategy == "quantized" else None
+            "quantized_tokens_per_sequence": quantized_tokens,
+            "quantization_metadata_bytes": (
+                metadata_bytes if strategy == "quantized" else None
             ),
             "base_dtype_logical_bytes": base_dtype_bytes,
             "storage_logical_bytes": storage_bytes,
@@ -256,6 +406,24 @@ def estimate_kv_cache_memory(
                 if allocated_bytes
                 else None
             ),
+            "full_attention": {
+                "layers": full_layers,
+                "effective_tokens_per_sequence": full_effective,
+                "allocated_tokens_per_sequence": full_allocated,
+                "allocated_bytes": full_allocated_bytes,
+            },
+            "sliding_attention": (
+                {
+                    "layers": sliding_layers,
+                    "window_tokens": sliding_window_tokens,
+                    "effective_tokens_per_sequence": sliding_effective,
+                    "allocated_tokens_per_sequence": sliding_allocated,
+                    "storage_logical_bytes": sliding_storage_bytes,
+                    "allocated_bytes": sliding_allocated_bytes,
+                }
+                if sliding_layers
+                else None
+            ),
         }
 
     return {
@@ -266,6 +434,9 @@ def estimate_kv_cache_memory(
             quantized_residual_tokens
             if strategy == "quantized"
             else None
+        ),
+        "quantized_group_size": (
+            quantized_group_size if strategy == "quantized" else None
         ),
         "compute_element_bytes": element_bytes,
         "batch_size": batch_size,
@@ -279,29 +450,44 @@ def estimate_kv_cache_memory(
         "bytes_per_token_per_sequence_at_compute_dtype": (
             elements_per_token_per_sequence * element_bytes
         ),
+        "full_attention_bytes_per_token_per_sequence": (
+            full_layers * resolved_elements_per_token_per_layer * element_bytes
+        ),
+        "attention_layers": {
+            "full": full_layers,
+            "sliding": sliding_layers,
+            "configured_sliding": sliding_window_layers,
+            "sliding_window_tokens": sliding_window_tokens,
+            "sliding_window_accounting": sliding_reason,
+        },
         "block_tokens": block_tokens if strategy == "paged" else None,
         "max_cache_tokens": (
             static_capacity_tokens if strategy == "static" else None
         ),
         "window_tokens": window_tokens,
-        "prefill": phase_allocation(prompt_tokens),
-        "generation": phase_allocation(final_logical_tokens),
+        "prefill": phase_allocation(prompt_tokens, prefill=True),
+        "generation": phase_allocation(final_logical_tokens, prefill=False),
         "formula": (
-            "full_precision_residual_bytes + quantized_history_bytes"
+            "full_precision_residual_bytes + quantized_history_bytes + "
+            "group_scale_and_zero_point_bytes"
             if strategy == "quantized"
             else (
                 "ceil(layers * batch * tokens * cache_elements_per_layer "
-                "* storage_bits / 8)"
+                "* storage_bits / 8), with sliding-window layers holding "
+                "their window"
+                if sliding_layers
+                else (
+                    "ceil(layers * batch * tokens * cache_elements_per_layer "
+                    "* storage_bits / 8)"
+                )
             )
         ),
         "modeled_overheads": [
-            "static_reservation"
-            if strategy == "static"
-            else "paged_block_rounding"
-            if strategy == "paged"
-            else "quantized_storage"
-            if strategy == "quantized"
-            else "exact_dynamic_growth"
+            {
+                "static": "static_reservation",
+                "paged": "paged_block_rounding",
+                "quantized": "quantized_storage",
+            }.get(strategy, "exact_dynamic_growth")
         ],
     }
 
@@ -336,11 +522,19 @@ def inspect_safetensors_checkpoint(
         indexed_total = 0
     elif index_path.is_file():
         index = json.loads(index_path.read_text(encoding="utf-8"))
-        weight_map = index.get("weight_map")
+        weight_map = index.get("weight_map") if isinstance(index, dict) else None
         if not isinstance(weight_map, dict) or not weight_map:
             raise ValueError(f"invalid safetensors weight map: {index_path}")
         shard_names = sorted({str(value) for value in weight_map.values()})
-        indexed_total = int((index.get("metadata") or {}).get("total_size", 0) or 0)
+        metadata = index.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            raise ValueError(f"invalid safetensors index metadata: {index_path}")
+        try:
+            indexed_total = int(metadata.get("total_size", 0) or 0)
+        except (TypeError, OverflowError) as exc:
+            raise ValueError(
+                f"invalid safetensors index total_size: {index_path}"
+            ) from exc
     else:
         shard_names = [path.name for path in sorted(root.glob("*.safetensors"))]
         indexed_total = 0
@@ -362,7 +556,7 @@ def inspect_safetensors_checkpoint(
                 raise ValueError(f"invalid tensor metadata for {tensor_name!r} in {shard_path}")
             dtype = str(metadata.get("dtype", ""))
             shape = metadata.get("shape")
-            if dtype not in _DTYPE_BYTES:
+            if dtype not in _DTYPE_BITS:
                 raise ValueError(f"unsupported safetensors dtype {dtype!r} in {shard_path}")
             if not isinstance(shape, list) or any(
                 not isinstance(dimension, int) or dimension < 0
@@ -370,7 +564,13 @@ def inspect_safetensors_checkpoint(
             ):
                 raise ValueError(f"invalid shape for {tensor_name!r} in {shard_path}")
             numel = math.prod(shape)
-            nbytes = numel * _DTYPE_BYTES[dtype]
+            nbits = numel * _DTYPE_BITS[dtype]
+            if nbits % 8:
+                raise ValueError(
+                    f"packed {dtype} tensor {tensor_name!r} in {shard_path} "
+                    "does not end on a byte boundary"
+                )
+            nbytes = nbits // 8
             offsets = metadata.get("data_offsets")
             if (
                 not isinstance(offsets, list)
@@ -423,6 +623,8 @@ def estimate_decoder_inference(
     kv_cache_window_tokens: int | None = None,
     include_decode_steps: bool = True,
     logits_to_keep: int = 0,
+    mla_kv_cache_layout: str = "auto",
+    kv_cache_group_size: int = DEFAULT_KV_QUANTIZATION_GROUP_SIZE,
 ) -> dict[str, Any]:
     """Estimate decoder-only inference memory, communication, and FLOPs.
 
@@ -430,6 +632,11 @@ def estimate_decoder_inference(
     tensors are materialized and no CUDA context is created.
     logits_to_keep=0 projects every query token; a positive value projects
     only that many trailing tokens, as in last-token-only generation.
+    Sliding-window layers from the model config keep only their window;
+    kv_cache_window_tokens overrides that and caps every layer.
+    mla_kv_cache_layout picks the MLA cache: decompressed per-head keys and
+    values as Transformers caches them, or the latent plus RoPE key of paged
+    backends; auto chooses latent only for the paged strategy.
     """
 
     if batch_size <= 0:
@@ -473,6 +680,23 @@ def estimate_decoder_inference(
     _require_attention_only_decoder(decoder_config)
     checkpoint = inspect_safetensors_checkpoint(root)
     dimensions = _decoder_dimensions(decoder_config)
+    sliding_layout = _sliding_window_layout(
+        decoder_config
+        if "model_type" in decoder_config
+        else {**decoder_config, "model_type": config.get("model_type")}
+    )
+    if sliding_layout["sliding_attention_layers"]:
+        dimensions["sliding_attention_layers"] = int(
+            sliding_layout["sliding_attention_layers"]
+        )
+        dimensions["sliding_window_tokens"] = int(
+            sliding_layout["sliding_window_tokens"]
+        )
+    cache_layout = _kv_cache_layout(
+        dimensions,
+        mla_layout=mla_kv_cache_layout,
+        kv_cache_strategy=kv_cache_strategy,
+    )
     has_vision_encoder = any(
         config.get(key) is not None
         for key in ("vision_config", "vision_tower", "mm_vision_tower")
@@ -484,7 +708,17 @@ def estimate_decoder_inference(
         if any(decoder_config.get(key) is not None for key in ("dtype", "torch_dtype"))
         else config
     )
-    selected_dtype = _normalize_dtype(dtype, config=dtype_config)
+    auto_fallback = "float32"
+    if dtype == "auto" and not any(
+        dtype_config.get(key) for key in ("dtype", "torch_dtype")
+    ):
+        # transformers' dtype="auto" falls back to the checkpoint's weights.
+        auto_fallback = _first_floating_checkpoint_dtype(root) or auto_fallback
+    selected_dtype = _normalize_dtype(
+        dtype,
+        config=dtype_config,
+        auto_fallback=auto_fallback,
+    )
     element_bytes = _TORCH_DTYPE_TO_BYTES[selected_dtype]
     quantization = _quantization_summary(config, checkpoint)
     base_parameter_bytes = (
@@ -532,9 +766,14 @@ def estimate_decoder_inference(
         window_tokens=kv_cache_window_tokens,
         use_cache=use_cache,
         elements_per_token_per_layer=int(
-            dimensions["kv_cache_elements_per_token_per_layer"]
+            cache_layout["elements_per_token_per_layer"]
         ),
-        cache_layout=str(dimensions["kv_cache_layout"]),
+        cache_layout=str(cache_layout["layout"]),
+        sliding_window_layers=int(
+            dimensions.get("sliding_attention_layers", 0)
+        ),
+        sliding_window_tokens=dimensions.get("sliding_window_tokens"),
+        quantized_group_size=kv_cache_group_size,
     )
     prefill_key_tokens = _effective_context_tokens(
         prompt_tokens,
@@ -547,36 +786,37 @@ def estimate_decoder_inference(
         key_tokens=prefill_key_tokens,
         logits_to_keep=logits_to_keep,
     )
-    decode_step_count = max(0, generated_tokens - 1)
+    decode_step_count = generated_tokens - 1
     decode_steps: list[dict[str, int]] = []
     decode_step_specs: list[tuple[int, int, int, int]] = []
-    for step in range(decode_step_count if include_decode_steps or not use_cache else 0):
-        logical_key_tokens = prompt_tokens + step + 1
-        key_tokens = _effective_context_tokens(
-            logical_key_tokens,
-            window_tokens=kv_cache_window_tokens,
-        )
-        query_tokens = key_tokens if not use_cache else 1
-        flops = _forward_matmul_flops(
-            dimensions,
-            batch_size=batch_size,
-            query_tokens=query_tokens,
-            key_tokens=key_tokens,
-            logits_to_keep=logits_to_keep,
-        )
-        decode_step_specs.append(
-            (logical_key_tokens, key_tokens, query_tokens, flops)
-        )
-        if include_decode_steps:
-            decode_step = {
-                "step": step + 1,
-                "query_tokens": query_tokens,
-                "key_tokens": key_tokens,
-                "matmul_flops": flops,
-            }
-            if logical_key_tokens != key_tokens:
-                decode_step["logical_key_tokens"] = logical_key_tokens
-            decode_steps.append(decode_step)
+    if include_decode_steps or not use_cache:
+        for step in range(decode_step_count):
+            logical_key_tokens = prompt_tokens + step + 1
+            key_tokens = _effective_context_tokens(
+                logical_key_tokens,
+                window_tokens=kv_cache_window_tokens,
+            )
+            query_tokens = key_tokens if not use_cache else 1
+            flops = _forward_matmul_flops(
+                dimensions,
+                batch_size=batch_size,
+                query_tokens=query_tokens,
+                key_tokens=key_tokens,
+                logits_to_keep=logits_to_keep,
+            )
+            decode_step_specs.append(
+                (logical_key_tokens, key_tokens, query_tokens, flops)
+            )
+            if include_decode_steps:
+                decode_step = {
+                    "step": step + 1,
+                    "query_tokens": query_tokens,
+                    "key_tokens": key_tokens,
+                    "matmul_flops": flops,
+                }
+                if logical_key_tokens != key_tokens:
+                    decode_step["logical_key_tokens"] = logical_key_tokens
+                decode_steps.append(decode_step)
 
     decode_key_token_sum = (
         sum(spec[1] for spec in decode_step_specs)
@@ -609,39 +849,11 @@ def estimate_decoder_inference(
         )
     else:
         total_decode_flops = sum(spec[3] for spec in decode_step_specs)
-    decode_step_summary = None
-    if not include_decode_steps:
-        first_logical_key_tokens = (
-            prompt_tokens + 1 if decode_step_count else None
-        )
-        last_logical_key_tokens = (
-            prompt_tokens + decode_step_count
-            if decode_step_count
-            else None
-        )
-        decode_step_summary = {
-            "count": decode_step_count,
-            "first_key_tokens": (
-                _effective_context_tokens(
-                    first_logical_key_tokens,
-                    window_tokens=kv_cache_window_tokens,
-                )
-                if first_logical_key_tokens is not None
-                else None
-            ),
-            "last_key_tokens": (
-                _effective_context_tokens(
-                    last_logical_key_tokens,
-                    window_tokens=kv_cache_window_tokens,
-                )
-                if last_logical_key_tokens is not None
-                else None
-            ),
-            "key_tokens_sum": decode_key_token_sum,
-            "matmul_flops": total_decode_flops,
-        }
-
-    cache_tokens_after_generation = prompt_tokens + max(0, generated_tokens - 1)
+    final_key_tokens = _effective_context_tokens(
+        prompt_tokens + decode_step_count,
+        window_tokens=kv_cache_window_tokens,
+    )
+    decode_query_tokens = 1 if use_cache else final_key_tokens
     kv_cache_prefill = int(kv_cache["prefill"]["allocated_bytes"])
     kv_cache_final = int(kv_cache["generation"]["allocated_bytes"])
     prefill_transient = _forward_transient_bytes(
@@ -656,34 +868,20 @@ def estimate_decoder_inference(
     decode_transient = _forward_transient_bytes(
         dimensions,
         batch_size=batch_size,
-        query_tokens=(
-            _effective_context_tokens(
-                cache_tokens_after_generation,
-                window_tokens=kv_cache_window_tokens,
-            )
-            if not use_cache
-            else 1
-        ),
-        key_tokens=_effective_context_tokens(
-            cache_tokens_after_generation,
-            window_tokens=kv_cache_window_tokens,
-        ),
+        query_tokens=decode_query_tokens,
+        key_tokens=final_key_tokens,
         element_bytes=element_bytes,
         attention_implementation=attention_implementation,
         logits_to_keep=logits_to_keep,
     )
-    decode_input_tokens = (
-        _effective_context_tokens(
-            cache_tokens_after_generation,
-            window_tokens=kv_cache_window_tokens,
-        )
-        if not use_cache
-        else 1
-    )
-    decode_input_bytes = batch_size * decode_input_tokens * 8
-    decode_transient_total = None
-    if not use_cache:
-        totals = {
+    decode_input_bytes = batch_size * decode_query_tokens * 8
+    if use_cache:
+        decode_transient_sum = {
+            key: value * decode_step_count
+            for key, value in decode_transient.items()
+        }
+    else:
+        decode_transient_sum = {
             key: 0
             for key in (
                 "attention_bytes",
@@ -706,8 +904,7 @@ def estimate_decoder_inference(
                 logits_to_keep=logits_to_keep,
             )
             for key, value in transient.items():
-                totals[key] += value
-        decode_transient_total = totals
+                decode_transient_sum[key] += value
     input_bytes = batch_size * prompt_tokens * 8
     prefill_peak = (
         parameter_bytes
@@ -737,9 +934,8 @@ def estimate_decoder_inference(
         prefill_cache_bytes=kv_cache_prefill,
         final_cache_bytes=kv_cache_final,
         prefill_transient=prefill_transient,
-        decode_transient=decode_transient,
+        decode_transient_sum=decode_transient_sum,
         decode_forward_steps=decode_step_count,
-        decode_transient_total=decode_transient_total,
     )
     performance = None
     if target_profile:
@@ -798,7 +994,20 @@ def estimate_decoder_inference(
     }
     if not include_decode_steps:
         compute_report["decode_steps_included"] = False
-        compute_report["decode_step_summary"] = decode_step_summary
+        compute_report["decode_step_summary"] = {
+            "count": decode_step_count,
+            "first_key_tokens": (
+                _effective_context_tokens(
+                    prompt_tokens + 1,
+                    window_tokens=kv_cache_window_tokens,
+                )
+                if decode_step_count
+                else None
+            ),
+            "last_key_tokens": final_key_tokens if decode_step_count else None,
+            "key_tokens_sum": decode_key_token_sum,
+            "matmul_flops": total_decode_flops,
+        }
 
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -841,6 +1050,12 @@ def estimate_decoder_inference(
             ),
             "kv_cache_max_tokens": kv_cache["max_cache_tokens"],
             "kv_cache_window_tokens": kv_cache_window_tokens,
+            "kv_cache_group_size": (
+                kv_cache_group_size
+                if kv_cache_strategy == "quantized"
+                else None
+            ),
+            "mla_kv_cache_layout": cache_layout["mla_layout"],
         },
         "checkpoint": checkpoint,
         "weight_storage": {
@@ -931,11 +1146,16 @@ def estimate_decoder_inference(
             "Checkpoint storage and parameter count come from safetensors headers without loading payloads.",
             "KV-cache bytes use the architecture-specific per-layer cache layout, sequence, batch, storage bit width, and allocation-strategy dimensions.",
             (
-                "MLA cache storage keeps one compressed KV latent plus the decoupled RoPE key component per layer and token; backend-specific absorbed projections remain unmodeled."
+                (
+                    "MLA cache storage keeps one compressed KV latent plus the decoupled RoPE key component per layer and token, as paged MLA backends do; backend-specific absorbed projections remain unmodeled."
+                    if cache_layout["mla_layout"] == "latent"
+                    else "MLA cache storage keeps decompressed per-head keys (qk_nope + qk_rope) and values (v_head_dim) per layer and token, as Transformers' DeepseekV3 attention caches them."
+                )
                 if attention_kind == "multi_head_latent"
                 else "Standard attention cache storage keeps separate key and value tensors per KV head."
             ),
-            "Quantized KV cache keeps a configurable recent full-precision residual before accounting for older low-bit storage.",
+            "Quantized KV cache follows Transformers QuantizedCache: the prefill is quantized at once, at most residual_length-1 generated tokens stay at the compute dtype, and each q_group_size group keeps a compute-dtype scale and zero-point.",
+            "Sliding-window layers from the model config hold only their window in the cache; a Transformers dynamic cache still keeps the whole prompt on those layers until the first decode step.",
             "Static reservation and paged block rounding are included; backend block-table and scheduler metadata remain implementation-specific.",
             "Quantized base-weight memory uses exact safetensors payload bytes, including scale and metadata tensors.",
             "Adapter runtime bytes use adapter parameter count and the selected compute dtype.",
@@ -1056,6 +1276,122 @@ def _require_attention_only_decoder(config: Mapping[str, Any]) -> None:
         )
 
 
+def _sliding_window_layout(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Count the sliding-window layers the way Transformers configs resolve them.
+
+    Follows the 4.57 config classes: explicit ``layer_types`` win; Qwen-style
+    configs keep full attention unless ``use_sliding_window`` is set and then
+    slide from ``max_window_layers`` on; ``sliding_window_pattern`` (or the
+    model-type default) marks every pattern-th layer as full attention; any
+    other config with a ``sliding_window`` slides on every layer, as
+    ``DynamicCache``/``StaticCache`` do when ``layer_types`` is absent.
+    """
+
+    layer_count = int(config["num_hidden_layers"])
+    raw_window = config.get("sliding_window")
+    window = (
+        int(raw_window)
+        if isinstance(raw_window, int)
+        and not isinstance(raw_window, bool)
+        and raw_window > 0
+        else None
+    )
+    layer_types = config.get("layer_types")
+    if isinstance(layer_types, list):
+        sliding = sum(kind == "sliding_attention" for kind in layer_types)
+        source = "layer_types"
+    elif (
+        window is None
+        or config.get("use_sliding_window") is False
+        # Qwen-style configs (with max_window_layers) default
+        # use_sliding_window to False and then drop sliding_window.
+        or (
+            config.get("use_sliding_window") is None
+            and "max_window_layers" in config
+        )
+    ):
+        sliding = 0
+        source = "none"
+    elif config.get("use_sliding_window") is True and isinstance(
+        config.get("max_window_layers"), int
+    ):
+        start = max(0, int(config["max_window_layers"]))
+        sliding = max(0, layer_count - start)
+        source = "max_window_layers"
+    else:
+        pattern = config.get("sliding_window_pattern")
+        source = "sliding_window_pattern"
+        if not isinstance(pattern, int) or isinstance(pattern, bool):
+            pattern = _SLIDING_WINDOW_PATTERN_DEFAULTS.get(
+                str(config.get("model_type"))
+            )
+            source = "model_type_pattern_default"
+        if isinstance(pattern, int) and pattern > 0:
+            sliding = sum(
+                1 for index in range(layer_count) if (index + 1) % pattern
+            )
+        else:
+            sliding = layer_count
+            source = "sliding_window_on_every_layer"
+    if sliding and window is None:
+        raise ValueError(
+            "sliding_attention layers require a positive sliding_window"
+        )
+    return {
+        "sliding_attention_layers": sliding,
+        "sliding_window_tokens": window if sliding else None,
+        "source": source,
+    }
+
+
+def _kv_cache_layout(
+    dimensions: Mapping[str, Any],
+    *,
+    mla_layout: str,
+    kv_cache_strategy: str,
+) -> dict[str, Any]:
+    """Pick the cache layout a runtime stores for these attention dimensions.
+
+    Transformers' DeepseekV3 attention caches decompressed per-head keys
+    (qk_nope + qk_rope) and values (v_head_dim); paged MLA backends such as
+    vLLM's cache one latent plus the RoPE key. ``auto`` follows the
+    strategy: paged means latent, the Transformers caches mean decompressed.
+    """
+
+    if mla_layout not in MLA_KV_CACHE_LAYOUTS:
+        choices = ", ".join(sorted(MLA_KV_CACHE_LAYOUTS))
+        raise ValueError(f"mla_kv_cache_layout must be one of: {choices}")
+    if dimensions.get("attention_kind") != "multi_head_latent":
+        return {
+            "layout": str(dimensions["kv_cache_layout"]),
+            "elements_per_token_per_layer": int(
+                dimensions["kv_cache_elements_per_token_per_layer"]
+            ),
+            "mla_layout": None,
+        }
+    resolved = mla_layout
+    if resolved == "auto":
+        resolved = "latent" if kv_cache_strategy == "paged" else "decompressed"
+    if resolved == "latent":
+        return {
+            "layout": str(dimensions["kv_cache_layout"]),
+            "elements_per_token_per_layer": int(
+                dimensions["kv_cache_elements_per_token_per_layer"]
+            ),
+            "mla_layout": "latent",
+        }
+    return {
+        "layout": "decompressed_per_head_key_value",
+        "elements_per_token_per_layer": int(dimensions["num_attention_heads"])
+        * (
+            int(dimensions["qk_nope_head_dim"])
+            + int(dimensions["qk_rope_head_dim"])
+            + int(dimensions["v_head_dim"])
+        ),
+        "mla_layout": "decompressed",
+    }
+
+
 def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:
     required = {
         "hidden_size": config.get("hidden_size"),
@@ -1150,6 +1486,14 @@ def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:
             "num_attention_heads"
         )
 
+    # Llama 4 dense layers use intermediate_size_mlp, while its experts and
+    # always-present shared expert use intermediate_size.
+    llama4_text = config.get("model_type") == "llama4_text"
+    dense_intermediate_size = (
+        _first_positive_integer(config, ("intermediate_size_mlp",))
+        if llama4_text
+        else 0
+    ) or int(required["intermediate_size"])
     expert_count = _first_positive_integer(
         config,
         ("num_experts", "num_local_experts", "n_routed_experts"),
@@ -1180,7 +1524,7 @@ def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:
             shared_experts = _first_positive_integer(
                 config,
                 ("n_shared_experts", "num_shared_experts"),
-            ) or 0
+            ) or int(llama4_text)
             shared_expert_intermediate_size = (
                 shared_experts * moe_intermediate_size
             )
@@ -1210,7 +1554,7 @@ def _decoder_dimensions(config: Mapping[str, Any]) -> dict[str, Any]:
         "qk_nope_head_dim": qk_nope_head_dim,
         "qk_rope_head_dim": qk_rope_head_dim,
         "v_head_dim": v_head_dim,
-        "intermediate_size": int(required["intermediate_size"]),
+        "intermediate_size": dense_intermediate_size,
         "vocab_size": int(required["vocab_size"]),
         "model_kind": (
             "mixture_of_experts" if expert_count else "dense_decoder"
@@ -1248,32 +1592,91 @@ def _moe_layer_count(
     *,
     layer_count: int,
 ) -> int:
+    # Llama 4 lists its sparse layers explicitly; transformers derives the
+    # list from interleave_moe_layer_step when it is absent.
+    moe_layers = config.get("moe_layers")
+    if isinstance(moe_layers, list):
+        return len(
+            {
+                value
+                for value in moe_layers
+                if isinstance(value, int)
+                and not isinstance(value, bool)
+                and 0 <= value < layer_count
+            }
+        )
+    interleave_step = _first_positive_integer(
+        config,
+        ("interleave_moe_layer_step",),
+    )
+    if interleave_step:
+        return len(range(interleave_step - 1, layer_count, interleave_step))
     mlp_only_layers = config.get("mlp_only_layers")
-    if isinstance(mlp_only_layers, list):
-        dense_layers = {
-            int(value)
+    dense_layers = (
+        {
+            value
             for value in mlp_only_layers
             if isinstance(value, int)
             and not isinstance(value, bool)
             and 0 <= value < layer_count
         }
-        return layer_count - len(dense_layers)
-
+        if isinstance(mlp_only_layers, list)
+        else set()
+    )
     sparse_step = config.get("decoder_sparse_step")
     if sparse_step is None:
-        return layer_count
-    if (
+        sparse_step = 1
+    elif (
         not isinstance(sparse_step, int)
         or isinstance(sparse_step, bool)
         or sparse_step <= 0
     ):
         raise ValueError("decoder_sparse_step must be a positive integer")
-    return layer_count // sparse_step
+    first_dense = config.get("first_k_dense_replace")
+    if first_dense is None:
+        first_dense = 0
+    elif (
+        not isinstance(first_dense, int)
+        or isinstance(first_dense, bool)
+        or first_dense < 0
+    ):
+        raise ValueError("first_k_dense_replace must be a non-negative integer")
+    return sum(
+        1
+        for index in range(first_dense, layer_count)
+        if index not in dense_layers and (index + 1) % sparse_step == 0
+    )
 
 
-def _normalize_dtype(dtype: str, *, config: dict[str, Any]) -> str:
+def _first_floating_checkpoint_dtype(root: Path) -> str | None:
+    """Mirror transformers' dtype="auto" fallback for configs without dtype.
+
+    transformers reads the first shard and returns the dtype of the first
+    floating, non-FP8 tensor in safetensors' sorted key order.
+    """
+    index_path = root / "model.safetensors.index.json"
+    if index_path.is_file():
+        weight_map = json.loads(index_path.read_text(encoding="utf-8"))["weight_map"]
+        first_shard = root / sorted({str(name) for name in weight_map.values()})[0]
+    else:
+        first_shard = sorted(root.glob("*.safetensors"))[0]
+    floating = {"F16": "float16", "BF16": "bfloat16", "F32": "float32", "F64": "float64"}
+    header = _read_safetensors_header(first_shard)
+    for name in sorted(header):
+        metadata = header[name]
+        if name != "__metadata__" and metadata.get("dtype") in floating:
+            return floating[metadata["dtype"]]
+    return None
+
+
+def _normalize_dtype(
+    dtype: str,
+    *,
+    config: dict[str, Any],
+    auto_fallback: str = "float32",
+) -> str:
     value = (
-        str(config.get("dtype") or config.get("torch_dtype") or "float32")
+        str(config.get("dtype") or config.get("torch_dtype") or auto_fallback)
         if dtype == "auto"
         else str(dtype)
     )
@@ -1352,8 +1755,11 @@ def _forward_matmul_flops(
             * (qk_head_dim + dimensions["v_head_dim"])
         )
     else:
+        # q_proj and o_proj span heads * head_dim, which differs from
+        # hidden_size when the config overrides head_dim.
+        query_width = heads * dimensions["head_dim"]
         attention_projection_per_layer = (
-            4 * token_count * hidden * hidden
+            4 * token_count * hidden * query_width
             + 4 * token_count * hidden * kv_width
         )
         attention_per_layer = (
@@ -1432,16 +1838,13 @@ def _sum_decode_context_tokens(
 ) -> int:
     """Sum effective KV context lengths without materializing each step."""
 
-    count = max(0, int(decode_step_count))
-    if count == 0:
-        return 0
-    first = int(prompt_tokens) + 1
+    count = decode_step_count
+    first = prompt_tokens + 1
     if window_tokens is None:
         return count * first + count * (count - 1) // 2
-    window = int(window_tokens)
-    uncapped = min(count, max(0, window - first + 1))
+    uncapped = min(count, max(0, window_tokens - first + 1))
     uncapped_sum = uncapped * first + uncapped * (uncapped - 1) // 2
-    return uncapped_sum + (count - uncapped) * window
+    return uncapped_sum + (count - uncapped) * window_tokens
 
 
 def _kv_storage_bytes(
@@ -1572,9 +1975,7 @@ def _quantization_summary(
         )
     dtype_bytes = dict(checkpoint.get("dtype_bytes") or {})
     quantized_storage_dtypes = sorted(
-        dtype
-        for dtype in dtype_bytes
-        if dtype in {"U8", "I8", "F8_E4M3", "F8_E5M2"}
+        dtype for dtype in dtype_bytes if dtype in _LOW_PRECISION_STORAGE_DTYPES
     )
     enabled = bool(
         quantization_config
@@ -1593,8 +1994,10 @@ def _quantization_summary(
     if bits is None:
         if config.get("load_in_4bit"):
             bits = 4
-        elif config.get("load_in_8bit") or quantized_storage_dtypes:
+        elif config.get("load_in_8bit"):
             bits = 8
+        elif quantized_storage_dtypes:
+            bits = min(_DTYPE_BITS[dtype] for dtype in quantized_storage_dtypes)
 
     return {
         "enabled": enabled,
@@ -1707,40 +2110,20 @@ def _inference_memory_traffic(
     prefill_cache_bytes: int,
     final_cache_bytes: int,
     prefill_transient: Mapping[str, int],
-    decode_transient: Mapping[str, int],
+    decode_transient_sum: Mapping[str, int],
     decode_forward_steps: int,
-    decode_transient_total: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     forward_steps = 1 + decode_forward_steps
     weight_reads = parameter_bytes * forward_steps
     kv_traffic = prefill_cache_bytes + final_cache_bytes * decode_forward_steps
-    decode_transient_peak_sum = (
-        int(decode_transient_total["peak_bytes"])
-        if decode_transient_total is not None
-        else int(decode_transient["peak_bytes"]) * decode_forward_steps
-    )
-    transient_peak_sum = int(prefill_transient["peak_bytes"]) + (
-        decode_transient_peak_sum
+    transient_peak_sum = int(prefill_transient["peak_bytes"]) + int(
+        decode_transient_sum["peak_bytes"]
     )
     lower = weight_reads + kv_traffic
-    decode_component_sum = (
-        {
-            key: int(decode_transient_total[key])
-            for key in ("attention_bytes", "mlp_bytes", "logits_bytes")
-        }
-        if decode_transient_total is not None
-        else {
-            key: int(decode_transient[key]) * decode_forward_steps
-            for key in ("attention_bytes", "mlp_bytes", "logits_bytes")
-        }
-    )
     expected = lower + 2 * transient_peak_sum
-    upper = lower + 4 * (
-        sum(
-            int(prefill_transient[key])
-            for key in ("attention_bytes", "mlp_bytes", "logits_bytes")
-        )
-        + sum(decode_component_sum.values())
+    upper = lower + 4 * sum(
+        int(prefill_transient[key]) + int(decode_transient_sum[key])
+        for key in ("attention_bytes", "mlp_bytes", "logits_bytes")
     )
     return {
         "lower_bytes": lower,

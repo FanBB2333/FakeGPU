@@ -13,6 +13,9 @@ from .machine.config import MachineConfig, MachinePaths
 from .machine.layout import is_machine_state_dir, layout_state
 from .nvml import NvmlStateBridge
 
+# Fits nvitop's 75-column header next to "NVITOP x.y.z" and the CUDA version.
+MODELED_DRIVER_VERSION = "FakeGPU (modeled)"
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -62,6 +65,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
             from nvitop.cli import main as nvitop_main
 
+            if args.telemetry == "reference":
+                from nvitop.api.device import Device
+
+                # The header is the one line nvitop always shows; let it say
+                # that temperature, power and utilization are modeled.
+                Device.driver_version = staticmethod(lambda: MODELED_DRIVER_VERSION)
             label = ("modeled sensors, A100 reference or default curve "
                      "(CPU activity proxy, not hardware measurements)"
                      if args.telemetry == "reference" else "hardware telemetry is N/A")

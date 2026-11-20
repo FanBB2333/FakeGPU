@@ -2,6 +2,7 @@
 id: gtx1650
 name: Fake NVIDIA GeForce GTX 1650
 torch_name: NVIDIA GeForce GTX 1650
+canonical: true
 official_model: GeForce GTX 1650
 architecture: turing
 compute_major: 7

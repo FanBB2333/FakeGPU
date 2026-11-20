@@ -38,5 +38,4 @@ supported_types:
   - fp16
   - bf16
   - int8
-  - int4
   - fp8

@@ -69,7 +69,8 @@
           512,
           512
         ],
-        "layers_per_block": 2
+        "layers_per_block": 2,
+        "sample_size": 512
       },
       "source": {
         "repository": "stable-diffusion-v1-5/stable-diffusion-v1-5",
@@ -125,12 +126,12 @@
         ],
         "layers_per_block": 2,
         "attention_heads": [
-          5,
+          0,
           10,
           20
         ],
         "transformer_layers_per_block": [
-          1,
+          0,
           2,
           10
         ],
@@ -149,6 +150,7 @@
           512
         ],
         "layers_per_block": 2,
+        "sample_size": 1024,
         "force_upcast": true,
         "sdpa_low_precision_parameter_count": 10513940
       },
@@ -222,7 +224,8 @@
           512,
           512
         ],
-        "layers_per_block": 2
+        "layers_per_block": 2,
+        "sample_size": 512
       },
       "source": {
         "repository": "PixArt-alpha/PixArt-Sigma-XL-2-1024-MS",

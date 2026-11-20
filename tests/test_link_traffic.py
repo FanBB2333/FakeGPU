@@ -149,6 +149,20 @@ def test_recording_keeps_only_recent_samples_and_all_time_totals() -> None:
     assert link["rx_bytes_per_second"] == 1000
 
 
+def test_idle_separated_copies_keep_only_the_window_of_segments() -> None:
+    clock = [0.0]
+    topology = LinkTopology((GpuSlot(host_gbps=10.0),))
+    traffic = LinkTraffic(lambda: topology, clock=lambda: clock[0])
+
+    for index in range(1000):
+        clock[0] = index * 0.01
+        traffic.record(None, 0, 1 << 20)
+    (schedule,) = traffic._links.values()
+    assert len(schedule.segments) <= 101
+    clock[0] = 20.0
+    assert traffic.snapshot()[0]["links"]["pcie"]["rx_bytes"] == 1000 << 20
+
+
 def test_records_normalize_merge_and_format() -> None:
     record = empty_record("c2c", 450.0)
     record["copies"]["host_to_device"] = {"calls": 1, "bytes": 3 * 2**30, "modeled_seconds": 0.007}
@@ -209,7 +223,7 @@ def test_smi_sums_publishers_and_shows_modeled_copies(tmp_path: Path, capsys) ->
         "--query-gpu=index,pcie.throughput.rx,pcie.throughput.tx,copy.h2d,copy.modeled_time",
         "--format=csv,noheader",
     ]) == 0
-    assert capsys.readouterr().out.strip() == "0,1048576 KB/s,0 KB/s,1024.0 MiB,0.034 s"
+    assert capsys.readouterr().out.strip() == "0, 1048576 KB/s, 0 KB/s, 1024.0 MiB, 0.034 s"
 
 
 def test_fakecuda_records_copies_over_the_platform_links() -> None:
@@ -289,6 +303,37 @@ def test_fakecuda_layout_refresh_resets_copy_counters_and_routes() -> None:
         text=True, capture_output=True, timeout=60,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_fakecuda_repatch_records_copies_on_new_devices() -> None:
+    code = textwrap.dedent(
+        """
+        import json, os
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+        import fakegpu
+        fakegpu.patch_torch(num_devices=2)
+        import torch
+        from fakegpu import torch_patch
+
+        torch.tensor([1.0], device="cuda:0")
+        fakegpu.patch_torch(num_devices=4)
+        torch.ones(256, dtype=torch.float32).to("cuda:3").to("cuda:0")
+        print(json.dumps(torch_patch._transfer_snapshot()))
+        """
+    )
+    env = dict(os.environ, PYTHONPATH=str(ROOT))
+    for name in ("FAKEGPU_PLATFORM", "FAKEGPU_SLOTS", "FAKEGPU_NVLINK_FABRIC", "FAKEGPU_NVLINK_GROUPS"):
+        env.pop(name, None)
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, env=env, text=True, capture_output=True, timeout=60
+    )
+    assert completed.returncode == 0, completed.stderr
+    snapshot = {int(key): value for key, value in json.loads(completed.stdout.strip().splitlines()[-1]).items()}
+    third = snapshot[3]["copies"]
+    assert (third["host_to_device"]["calls"], third["host_to_device"]["bytes"]) == (1, 1024)
+    assert third["peer_send"]["bytes"] == snapshot[0]["copies"]["peer_receive"]["bytes"] == 1024
+    # Counters restart with the re-patched topology, like the memory tracker.
+    assert snapshot[0]["copies"]["host_to_device"]["calls"] == 0
 
 
 def _library(name: str) -> Path:

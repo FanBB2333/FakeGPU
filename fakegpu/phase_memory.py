@@ -12,8 +12,9 @@ import math
 from statistics import fmean
 from uuid import UUID
 
-from ._finetune_workflow_store import _digest, _now
+from ._finetune_workflow_store import _now
 from ._finetune_allocator import validate_memory_allocator
+from .structured_io import canonical_sha256 as _digest
 
 SAMPLE_SCHEMA = "fakegpu.phase_memory_sample.v1"
 BUDGET_SCHEMA = "fakegpu.phase_memory_budget.v1"

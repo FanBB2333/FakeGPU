@@ -3,6 +3,7 @@
 id: quadro-p620
 name: Fake NVIDIA Quadro P620
 torch_name: Quadro P620
+canonical: true
 official_model: Quadro P620
 architecture: pascal
 compute_major: 6

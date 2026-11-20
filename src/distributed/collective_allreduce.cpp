@@ -20,25 +20,15 @@ bool open_participant_buffers(
 
     for (const CollectiveExecutionParticipant& participant : participants) {
         if (participant.bytes != request.bytes) {
-            error =
-                "participant rank " + std::to_string(participant.rank) +
-                " reported bytes=" + std::to_string(participant.bytes) +
-                ", expected " + std::to_string(request.bytes);
+            error = participant_size_mismatch(participant, request);
             return false;
         }
 
         std::vector<char> buffer;
-        if (!load_participant_buffer(
-                participant.transport,
-                participant.staging_name,
-                request.dtype,
-                participant.transport == BufferTransport::SocketPayload
-                    ? participant.payload_bytes
-                    : request.bytes,
+        if (!load_participant_input(
+                request,
+                participant,
                 shape,
-                participant.rank,
-                request.seqno,
-                participant.payload,
                 buffer,
                 error)) {
             return false;
@@ -61,9 +51,6 @@ CollectiveExecutionResult execute_allreduce_sum(
     }
 
     const std::size_t dtype_size = collective_data_type_size(request.dtype);
-    if (dtype_size == 0) {
-        return collective_error("unsupported_dtype", "unsupported allreduce dtype");
-    }
     if (request.bytes != request.count * dtype_size) {
         return collective_error("invalid_collective_size", "allreduce bytes do not match count * dtype_size");
     }
@@ -80,16 +67,13 @@ CollectiveExecutionResult execute_allreduce_sum(
     CollectiveExecutionResult result;
     result.ok = true;
     for (const CollectiveExecutionParticipant& participant : participants) {
-        if (!store_participant_buffer(
-                participant.transport,
-                participant.staging_name,
-                request.dtype,
+        if (!store_participant_output(
+                request,
+                participant,
                 {request.count},
-                participant.rank,
-                request.seqno,
                 reduced_bytes.data(),
                 request.bytes,
-                result.output_payloads[participant.rank],
+                result,
                 error)) {
             return collective_error("staging_open_failed", error);
         }
@@ -107,9 +91,6 @@ CollectiveExecutionResult execute_reduce(
     }
 
     const std::size_t dtype_size = collective_data_type_size(request.dtype);
-    if (dtype_size == 0) {
-        return collective_error("unsupported_dtype", "unsupported reduce dtype");
-    }
     if (request.bytes != request.count * dtype_size) {
         return collective_error("invalid_collective_size", "reduce bytes do not match count * dtype_size");
     }
@@ -141,16 +122,13 @@ CollectiveExecutionResult execute_reduce(
             result.output_payloads[participant.rank].clear();
             continue;
         }
-        if (!store_participant_buffer(
-                participant.transport,
-                participant.staging_name,
-                request.dtype,
+        if (!store_participant_output(
+                request,
+                participant,
                 {request.count},
-                participant.rank,
-                request.seqno,
                 reduced_bytes.data(),
                 request.bytes,
-                result.output_payloads[participant.rank],
+                result,
                 error)) {
             return collective_error("staging_open_failed", error);
         }

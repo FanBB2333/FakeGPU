@@ -2,6 +2,7 @@
 id: gtx1660ti
 name: Fake NVIDIA GeForce GTX 1660 Ti
 torch_name: NVIDIA GeForce GTX 1660 Ti
+canonical: true
 official_model: GeForce GTX 1660 Ti
 architecture: turing
 compute_major: 7

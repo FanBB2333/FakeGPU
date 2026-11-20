@@ -59,12 +59,12 @@ def _input_arguments(
 def _load_inputs(
     args: argparse.Namespace,
 ) -> tuple[dict[str, Any], dict[str, Any], Path]:
-    training = load_finetune_config(args.config, framework=args.framework)
-    model_path = args.model or training.get("model_name_or_path")
-    if not model_path:
-        raise ValueError(
-            "provide --model or a model path in the framework configuration"
-        )
+    training = load_finetune_config(
+        args.config,
+        framework=args.framework,
+        model_path=Path(args.model).expanduser().resolve() if args.model else None,
+    )
+    model_path = args.model or training["model_name_or_path"]
     path = Path(model_path).expanduser().resolve()
     config_path = path / "config.json" if path.is_dir() else path
     if not config_path.is_file():
@@ -334,7 +334,10 @@ def run_main(argv: Sequence[str] | None = None) -> int:
     planning.add_argument(
         "--planning-epochs",
         type=float,
-        help="Prepare a CPU sampling plan for this many epochs and verify consumed batch inputs.",
+        help=(
+            "Prepare a CPU sampling plan for this many epochs, counted as the "
+            "framework does, and verify consumed batch inputs."
+        ),
     )
     planning.add_argument(
         "--planning-max-steps",

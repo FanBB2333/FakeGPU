@@ -12,7 +12,7 @@ from ._cli import (
 )
 from .workspace_profiles import (
     WorkspaceProfileError,
-    _summarize_workspace_profiles,
+    _catalog_summary,
     load_workspace_profiles,
 )
 
@@ -40,11 +40,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         usage_error(parser, exc)
 
     if args.json:
-        print(json.dumps(_summarize_workspace_profiles(profiles), indent=2, sort_keys=True))
+        print(json.dumps(_catalog_summary(profiles), indent=2, sort_keys=True))
         return 0
     print(f"Workspace profiles: {len(profiles)}")
     for profile in profiles:
-        match = dict(profile.get("match") or {})
+        match = profile["match"]
         stack = []
         for key in (
             "profile_ids",

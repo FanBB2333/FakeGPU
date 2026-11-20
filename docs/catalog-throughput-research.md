@@ -27,7 +27,7 @@ The RTX PRO 6000 and RTX PRO 4500 Blackwell Server Edition pages publish tensor 
 | `memory_bandwidth_gbps` | 232 |
 | `mig_max_instances` | 165 |
 | `base_clock_mhz` | 119 |
-| `nvlink_generation` | 89 |
+| `nvlink_generation` | 91 |
 | `ecc` | 75 |
 
 An absent key means unknown. `nvlink_generation: 0` and `mig_max_instances: 0` mean NVIDIA states the product has no NVLink or no MIG; MIG support follows the [MIG user guide](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-gpus.html). NVLink bandwidth is NVIDIA's total bidirectional figure per GPU (for bridged boards, the bridge bandwidth). Memory bandwidth is NVIDIA's figure, or the published data rate × bus width where only those are given.

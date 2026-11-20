@@ -98,6 +98,18 @@ def test_capability_cli_filters_and_writes_json(capsys) -> None:
     }
 
 
+def test_capability_audit_reads_mach_o_by_content_not_suffix(tmp_path: Path) -> None:
+    from fakegpu.capabilities import _is_mach_o
+
+    # The macOS build also names its NVML dylib libnvidia-ml.so.1 for pynvml.
+    mach_o = tmp_path / "libnvidia-ml.so.1"
+    mach_o.write_bytes(b"\xcf\xfa\xed\xfe" + bytes(28))
+    elf = tmp_path / "libcudart.so.12"
+    elf.write_bytes(b"\x7fELF" + bytes(28))
+    assert _is_mach_o(mach_o)
+    assert not _is_mach_o(elf)
+
+
 def test_capability_report_summarizes_catalog() -> None:
     report = native_capability_report()
     assert report["summary"]["group_count"] == 5

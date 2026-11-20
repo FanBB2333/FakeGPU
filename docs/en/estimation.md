@@ -71,12 +71,29 @@ How the LLM estimator works:
 - `--kv-cache-strategy` accepts `dynamic`, `static`, `quantized`, or `paged`.
   The report separates logical storage, quantization savings, static
   reservation, paged overhead, and sliding-window limits.
-- Quantized caches keep the 128 most recent tokens at the compute dtype by
-  default. Change this with `--kv-cache-residual-tokens`.
+- Sliding-window layers are read from the config the way Transformers
+  resolves them: `layer_types`, Qwen-style `use_sliding_window` with
+  `max_window_layers`, or `sliding_window_pattern` (Gemma 3 makes every sixth
+  layer full attention by default). After prefill, a dynamic cache still
+  holds the whole prompt on those layers; after a decode step it holds the
+  last `sliding_window` tokens. A paged cache holds the window plus the
+  scheduled tokens. Full-attention layers keep the whole context.
+  `--kv-cache-window-tokens` instead applies one window to every layer.
+- A quantized cache (Transformers `QuantizedCache`) quantizes the prompt at
+  prefill. Generated tokens stay at the compute dtype until
+  `--kv-cache-residual-tokens` (default 128) of them accumulate, and then the
+  whole cache is re-quantized, so at most that number minus one stay
+  unquantized. Every `--kv-cache-group-size` (default 64) quantized elements
+  add a scale and a zero point at the compute dtype. Every layer keeps its
+  full history.
 - MHA, GQA, and MQA use separate key and value storage. Configs with
   `kv_lora_rank`, `qk_nope_head_dim`, `qk_rope_head_dim`, and `v_head_dim` are
-  treated as MLA (compressed latent plus decoupled RoPE). MLA backend
-  workspaces need calibration.
+  treated as MLA. `--mla-kv-cache-layout` selects what the runtime caches:
+  `decompressed` per-head keys (`qk_nope_head_dim + qk_rope_head_dim`) and
+  values (`v_head_dim`), as Transformers does, or the compressed `latent` plus
+  the RoPE key, as vLLM does. `auto`, the default, uses `latent` for the paged
+  strategy and `decompressed` otherwise. MLA backend workspaces need
+  calibration.
 - For models with a vision encoder, checkpoint weights are counted but
   vision and projector activations and FLOPs are not. The report flags this.
   Decoder token counts must already include the visual tokens.
@@ -113,13 +130,29 @@ How the diffusion estimator works:
   schedulers report `denoiser_evaluations: null`.
 - UNets, cross-attention transformers (DiT/PixArt), and SD3/Flux-style
   joint-attention transformers use different activation formulas. CFG doubles
-  the denoiser batch only where both branches exist.
+  the denoiser batch only where both branches exist. The text encoders run on
+  the prompt batch, as `encode_prompt` encodes prompts and negative prompts in
+  separate calls.
+- For SD3, `--text-tokens` is the T5 `max_sequence_length` (default 256). The
+  joint attention sequence also carries the 77-token CLIP prefix, reported as
+  `inputs.denoiser_text_tokens`. Without `text_encoder_3`, the T5 part is a
+  fixed 77-token placeholder.
+- Pipeline classes without recorded call defaults use the
+  `StableDiffusionPipeline` values (50 steps, guidance 7.5, 77 tokens).
+  `generation_defaults.assumed_inputs` and `assumptions` list each value that
+  was filled this way. Pass `--steps`, `--guidance-scale`, and `--text-tokens`
+  with the pipeline's own defaults.
 - `--weight-variant fp16|bf16|fp32` selects a checkpoint family. Built-in
   profiles include `pixart-sigma-xl-2-1024-ms` and two Stable Diffusion UNets.
 - `--offload model`, `--attention-slicing`, `--vae-slicing`, and
   `--vae-tiling` model common Diffusers trade-offs. Without a matching
   real-GPU comparison, reports stay `Modeled` and `uncalibrated`, with no error
   percentage or prediction interval.
+- As in Diffusers, `--attention-slicing` changes only UNet denoisers.
+  Transformer denoisers (PixArt, SD3, Flux) ignore pipeline attention slicing.
+- `--vae-tile-size` defaults to the VAE config's `sample_size`, the tile that
+  `enable_vae_tiling()` uses (1024 for SDXL, so a 1024x1024 decode is not
+  tiled). It falls back to 512 when the config has none.
 
 To train diffusion models, see [Diffusion training](diffusion-training.md).
 

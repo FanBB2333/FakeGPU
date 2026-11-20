@@ -77,7 +77,7 @@ Transformers 5.14.1).
 | Native interception | Build, library boundaries, exports, preload, memory types, coordinator, and unsupported-API policy | **Passed** |
 | FakeGPU-SMI diagnostics | Bounded state, topology/NVLink/MIG views, NVML peer/MIG queries, health fields, and event reporting | **Passed** |
 | Monitoring exporter | Prometheus/JSON snapshots, bounded history/cardinality, malformed-state degradation, and HTTP endpoints | **Passed** |
-| Native capability inventory (updated 2026-10-18) | 5 groups, 106 explicit APIs, 93 policy-enforced APIs | **Passed** |
+| Native capability inventory (updated 2026-10-22) | 5 groups, 109 explicit APIs, 96 policy-enforced APIs | **Passed** |
 | GPU profile catalog | 307 profiles across 16 compute capabilities (catalog updated 2026-10-16) | **Passed** |
 | CPU numerical simulation | GEMM, cuBLASLt, batched GEMM, BLAS1/2, and FP16: 8 maintained test groups | **Passed** |
 | CUDA-enabled PyTorch native matmul | Requires a CUDA build of PyTorch | **Not run on this CPU-only host** |
@@ -119,10 +119,10 @@ GiB values are binary units.
 | Online serving prefix cache | Same decoder, 8 active sequences, 4K prompt + 256 generated tokens, paged BF16 KV; independent caches → one shared 1K prefix | **4.25 → 3.38 GiB** (−20.6%) | Shared/private paged-block formula |
 | Mixed chat/completion serving | Same decoder; prompts 4K/8K/2K and generation 256/512/1024; independent KV → two chat requests sharing a 1K system prefix | **1.97 → 1.84 GiB** decode KV (−6.3%) | Heterogeneous request-set formula and chat/RAG matrix |
 | Speculative target calls | 5 draft tokens per verification step and an independent 70% per-token acceptance assumption | **1.00 → 2.94** expected output tokens per target step; not a throughput claim | Geometric acceptance formula plus dual-model memory tests |
-| LLM training | 8B BF16 parameters, AdamW, 4 GPUs, checkpointed activations; replicated → full shard | **104.31 → 26.54 GiB** per rank (−74.6%) | Training-plan phase model |
+| LLM training | 8B BF16 parameters, AdamW, 4 GPUs, checkpointed activations; replicated → full shard | **149.01 → 37.72 GiB** per rank (−74.7%) | Training-plan phase model |
 | Stable Diffusion v1.5 generation | 512², batch 1, FP16, CFG; all weights resident → model offload | **2.61 → 1.72 GiB** (−34.3%) | Component + phase model |
 | SDXL batch generation | 1024², batch 4, FP16, CFG; regular VAE decode → VAE slicing | **26.64 → 11.64 GiB** (−56.3%) | Sequential VAE batch-shape model |
-| SDXL high-resolution generation | 2048², batch 1, FP16, CFG; full-frame VAE → 512² VAE tiles | **26.64 → 8.28 GiB** (−68.9%) | Sequential VAE tile-shape model |
+| SDXL high-resolution generation | 2048², batch 1, FP16, CFG; full-frame VAE → 512² VAE tiles | **26.64 → 7.92 GiB** (−70.3%) | Sequential VAE tile-shape model |
 | PixArt-Sigma DiT generation | 1024², batch 1, FP16, CFG, model offload; eager → SDPA denoise phase | **2.32 → 1.28 GiB** (−44.7%) | Patch-token, cross-attention, and phase model |
 
 - Diffusion profiles use component parameter counts from fixed revisions of

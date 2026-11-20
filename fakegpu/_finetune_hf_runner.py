@@ -110,9 +110,7 @@ _UNSUPPORTED_ARGUMENTS = {
 def _dataset_path(value, base_dir, field):
     if not isinstance(value, str) or not value:
         raise ValueError(f"Hugging Face {field} must name a local processed JSONL file")
-    path = Path(value).expanduser()
-    if not path.is_absolute():
-        path = Path(base_dir) / path
+    path = Path(base_dir) / Path(value).expanduser()
     if path.suffix.lower() != ".jsonl" or not path.is_file():
         raise ValueError(
             f"Hugging Face {field} must be an existing processed .jsonl file"
@@ -128,7 +126,7 @@ def _argument_options(raw, normalized, argument_type):
             "unsupported Hugging Face native configuration fields: "
             + ", ".join(sorted(unknown))
         )
-    for key in _UNSUPPORTED_ARGUMENTS:
+    for key in sorted(_UNSUPPORTED_ARGUMENTS):
         if raw.get(key):
             raise ValueError(f"Hugging Face native runner does not support {key}")
     if raw.get("do_train") is False:
@@ -221,27 +219,22 @@ def validate_huggingface_config(raw, normalized, base_dir):
 
 
 def _load_processed_dataset(path, sequence_length, *, packed=False):
+    expected = {"input_ids", "attention_mask", "labels"}
+    required = "input_ids, attention_mask and labels"
+    if packed:
+        from ._finetune_packed_batches import packed_source_membership
+
+        expected.add("position_ids")
+        required = "input_ids, attention_mask, labels and position_ids"
     records = []
     with Path(path).expanduser().open(encoding="utf-8") as source:
         for line_number, line in enumerate(source, 1):
             if not line.strip():
                 continue
             row = json.loads(line)
-            expected = {
-                "input_ids",
-                "attention_mask",
-                "labels",
-            }
-            if packed:
-                expected.add("position_ids")
             if not isinstance(row, dict) or set(row) != expected:
-                fields = (
-                    "input_ids, attention_mask, labels and position_ids"
-                    if packed
-                    else "input_ids, attention_mask and labels"
-                )
                 raise ValueError(
-                    f"processed dataset row {line_number} requires exactly {fields}"
+                    f"processed dataset row {line_number} requires exactly {required}"
                 )
             for key in row:
                 row[key] = _token_list(row[key], key, labels=key == "labels")
@@ -255,8 +248,6 @@ def _load_processed_dataset(path, sequence_length, *, packed=False):
                     f"processed dataset row {line_number} mask and labels must match input_ids length"
                 )
             if packed:
-                from ._finetune_packed_batches import packed_source_membership
-
                 packed_source_membership([row], framework="huggingface")
             elif any(value not in (0, 1) for value in row["attention_mask"]):
                 raise ValueError(

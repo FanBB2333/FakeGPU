@@ -417,6 +417,49 @@ def test_fractional_epoch_retains_whole_optimizer_windows(native_run):
     assert plan["workload"] == {"optimizer_steps": 8, "microsteps": 14, "samples": 14}
 
 
+@pytest.mark.parametrize(("epochs", "steps"), [(2.5, 7), (32, 80)])
+def test_axolotl_transfer_epochs_follow_its_max_steps_conversion(
+    native_run, epochs, steps
+):
+    # Axolotl 0.18.0 hands Trainer max_steps = ceil(rows * num_epochs /
+    # batch_size) for unpacked data: 5 rows, micro batch 1, accumulation 2.
+    run = transfer_run(native_run, 1)
+    versions = {
+        "torch": "fixture",
+        "axolotl": "0.18.0",
+        "transformers": "5.14.1",
+        "accelerate": "1.13.0",
+    }
+    run["framework"] = "axolotl"
+    run["training_config"]["source_framework"] = "axolotl"
+    run["dataset"]["source_framework"] = "axolotl"
+    run["observation"]["native_framework"] = "axolotl"
+    run["training_config"]["software_versions"] = versions
+    run["observation"]["software_versions"] = deepcopy(versions)
+    sampling = run["sampling_plan"]
+    sampling["framework"] = "axolotl"
+    sampling["sampler"]["versions"] = versions
+    sampling.pop("plan_sha256")
+    sampling["plan_sha256"] = _digest(sampling)
+    run["observation"]["sampling_verification"]["plan_sha256"] = sampling[
+        "plan_sha256"
+    ]
+    refresh_signature(run)
+    plan = plan_finetuning_transfer(run, epochs=epochs)
+    assert plan["workload"]["optimizer_steps"] == steps
+    assert plan["projection"]["epoch_step_rule"] == "axolotl_max_steps"
+
+
+def test_packed_axolotl_epochs_are_not_converted_without_its_estimate():
+    from fakegpu.finetune_pipeline_plan import _target_steps
+
+    with pytest.raises(ValueError, match="multipack"):
+        _target_steps(
+            1.0, None, 3, framework="axolotl", rows=5, batch_size=2, packed=True
+        )
+    assert _target_steps(None, 4, 3, framework="axolotl", packed=True) == 4
+
+
 def test_old_reports_remain_available_only_to_the_original_protocol(native_run):
     run = sequential_run(native_run, 1)
     pipeline_plan_from_run(run)

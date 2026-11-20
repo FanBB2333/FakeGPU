@@ -34,7 +34,9 @@ KV segments, runtime overhead, and usable headroom.
 
 - Use `--device-memory-gib` instead of `--target-profile` for a custom
   capacity.
-- Prefix sharing needs a dynamic or paged cache.
+- Prefix sharing needs a dynamic or paged cache. Like vLLM, a paged cache
+  shares only full prefix blocks; a partial last block stays private to
+  each request.
 - Capacity search never goes beyond `--max-batch-size`.
 
 ## Match vLLM's memory reservation
@@ -46,39 +48,79 @@ Select its memory policy when you deploy on vLLM:
 python3 -m fakegpu plan-serving \
   --model-dir /models/Qwen/Qwen3-0.6B \
   --active-sequences 16 \
-  --max-batch-size 64 \
   --prompt-tokens 4096 \
   --generated-tokens 256 \
   --runtime vllm \
-  --kv-cache-strategy paged \
-  --kv-cache-block-tokens 16 \
+  --max-batch-size 256 \
+  --vllm-max-num-batched-tokens 8192 \
   --target-profile "$TARGET_GPU_PROFILE" \
   --memory-utilization 0.92 \
   --json build/vllm-serving-plan.json
 ```
 
-- Automatic sizing follows vLLM V1. It takes the requested executor memory,
-  subtracts the profiled non-KV memory, and rounds down to whole blocks. The
-  report shows `num_gpu_blocks`, cache token capacity, whether initialization
-  fits, and concurrency at `max_model_len`, separately from the logical KV
-  demand of the requests.
-- Each maximum-length request needs whole cache blocks. For sliding-window
-  attention, the startup estimate uses the prefill chunk size as the scheduler's
-  token budget and reserves an extra block for page alignment. With unchunked
-  prefill it uses the full modeled context.
+The model follows vLLM 0.19.1 (V1 engine, one GPU).
+
+- Automatic sizing takes the requested executor memory (device memory times
+  `--memory-utilization`), subtracts the non-KV memory of vLLM's startup
+  profile run, and rounds down to whole blocks. The report shows
+  `num_gpu_blocks`, the token count vLLM logs as "GPU KV cache size", whether
+  initialization fits, and concurrency at `max_model_len`, separately from
+  the logical KV demand of the requests.
+- The profile run is one forward of `max_num_batched_tokens` tokens and a
+  sampler pass over one row per request, `min(max_num_batched_tokens,
+  max_num_seqs)` rows: model-dtype logits, float32 logits, probabilities and
+  sampling noise, and the top-k/top-p workspace. Weights and a modeled 112 MiB
+  of non-torch memory complete the estimate. That allowance (library handles
+  and loaded kernels) was measured with vLLM 0.19.1 on one Ampere GPU
+  (sm_80) and varies with the software stack.
+- `--max-batch-size` is vLLM's `max_num_seqs` and
+  `--vllm-max-num-batched-tokens` its `max_num_batched_tokens`. Unset, they
+  take vLLM's defaults: 256 sequences and 2048 tokens for `vllm serve`, or
+  8192 tokens for the offline `LLM` class (`--vllm-usage-context
+  llm_class`). Devices with at least 70 GiB that are not A100s get 1024
+  sequences and 8192 or 16384 tokens. The token default is capped at
+  `max_num_seqs` times `max_model_len`, the longest request.
+- Prefill is chunked at `max_num_batched_tokens` unless
+  `--prefill-chunk-tokens` is set.
+- `--vllm-kv-cache-dtype` accepts `auto` (the model dtype), `bfloat16`,
+  `float16`, `fp8`, `fp8_e4m3`, and `fp8_e5m2`. The fp8 types store one byte
+  per element.
+- Sliding-window models use vLLM's hybrid KV cache groups. The layers of each
+  attention type are split into groups of equal size, padding the last one.
+  Each block ID takes one page in every layer of a group. A sliding-window
+  group adds the budget for one scheduler step to the window length minus one,
+  capped at `max_model_len`. This budget uses `--vllm-max-num-batched-tokens`
+  when set, then `--prefill-chunk-tokens`, then the runtime default. The group
+  rounds up to whole blocks and reserves one more for page alignment. Concurrency
+  counts the blocks one maximum-length request needs across all groups.
+- MLA models cache the latent plus the RoPE key. The block size defaults to
+  16. On compute capability 10.x, vLLM picks FlashInfer MLA (32 tokens, for
+  `qk_nope_head_dim` 64, 128, or 192) or else CUTLASS MLA (128 tokens).
+  `--kv-cache-block-tokens` overrides the default.
+- Like vLLM, one block is held back as the null block. Initialization fails
+  unless one `max_model_len` request fits in the remaining blocks.
+- A paged prefix-cache hit covers whole blocks only, and at most
+  `prompt_tokens - 1` tokens.
+- CUDA graph memory is not modeled. vLLM 0.19.1 captures graphs after it
+  sizes the KV cache and subtracts them only with
+  `VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1`. Changes to the forward peak
+  from `torch.compile` and attention-backend workspaces are not modeled
+  either.
 - `--vllm-non-kv-cache-memory-bytes` replaces the modeled non-KV value with
   one from a vLLM startup profile (weights, peak activations, non-torch memory,
   and CUDA graphs).
 - `--vllm-kv-cache-memory-bytes` sets an exact per-GPU cache size. Like vLLM,
   it then ignores `--memory-utilization`.
+- Like vLLM's `--dtype auto`, float32 checkpoints are planned in bfloat16, or
+  in float16 below compute capability 8.0.
 - `--memory-utilization` defaults to `0.92`, matching the
   [vLLM CacheConfig reference](https://docs.vllm.ai/en/latest/api/vllm/config/cache/).
   Set it explicitly for version-locked reports.
 - The budget follows vLLM's
   [GPU-worker profiling path](https://docs.vllm.ai/en/latest/api/vllm/v1/worker/gpu_worker/).
-  Free memory, other processes, tensor and pipeline parallelism, hybrid cache
-  groups, fragmentation, and version-specific kernels still need an
-  observation on the same stack.
+  Free memory, other processes, tensor and pipeline parallelism,
+  fragmentation, and version-specific kernels still need an observation on
+  the same stack.
 - Speculative decoding is only available with the generic runtime model.
 
 ## Speculative decoding

@@ -75,12 +75,10 @@ def main(argv: list[str] | None = None) -> int:
         workload_names=selected_names,
         warmup_runs=ns.warmup_runs,
         repeats=ns.repeats,
-        static_only=bool(ns.static_only),
+        static_only=ns.static_only,
         max_underestimate_percent=ns.max_underestimate_percent,
         min_workspace_coverage=ns.min_workspace_coverage,
-        reject_extrapolated_workspaces=bool(
-            ns.reject_extrapolated_workspaces
-        ),
+        reject_extrapolated_workspaces=ns.reject_extrapolated_workspaces,
     )
 
     output = ns.output.resolve()
@@ -101,17 +99,14 @@ def run_validation(
     repeats: int,
     static_only: bool,
     max_underestimate_percent: float | None,
-    min_workspace_coverage: float | None = None,
-    reject_extrapolated_workspaces: bool = False,
+    min_workspace_coverage: float | None,
+    reject_extrapolated_workspaces: bool,
 ) -> dict[str, Any]:
     import torch
 
     from fakegpu.memory_estimator import estimate_module_memory
 
     available_workloads = _workloads()
-    invalid = [name for name in workload_names if name not in available_workloads]
-    if invalid:
-        raise ValueError(f"unknown workload(s): {', '.join(invalid)}")
 
     has_real_cuda = bool(torch.cuda.is_available()) and not static_only
     backend_calibration = _measure_backend_resident() if has_real_cuda else None
@@ -162,79 +157,54 @@ def run_validation(
     measured_comparisons = [
         item["comparison"]
         for item in results
-        if isinstance(item.get("comparison"), dict)
+        if item["comparison"] is not None
         and item["comparison"].get("underestimate_percent") is not None
     ]
     summary = _comparison_summary(measured_comparisons)
     workspace_estimates = [
-        dict(item["static_estimate"].get("workspace_estimate") or {})
-        for item in results
+        item["static_estimate"]["workspace_estimate"] for item in results
     ]
-    coverage_candidates = sum(
-        int((workspace.get("coverage") or {}).get("candidate_operator_count", 0) or 0)
-        for workspace in workspace_estimates
-    )
-    coverage_modeled = sum(
-        int((workspace.get("coverage") or {}).get("modeled_operator_count", 0) or 0)
-        for workspace in workspace_estimates
-    )
-    coverage_non_extrapolated = sum(
-        int(
-            (workspace.get("coverage") or {}).get(
-                "non_extrapolated_operator_count",
-                0,
-            )
-            or 0
+    coverage_totals = {
+        field: sum(workspace["coverage"][field] for workspace in workspace_estimates)
+        for field in (
+            "candidate_operator_count",
+            "modeled_operator_count",
+            "non_extrapolated_operator_count",
+            "unprofiled_operator_count",
         )
-        for workspace in workspace_estimates
-    )
-    coverage_unprofiled = sum(
-        int((workspace.get("coverage") or {}).get("unprofiled_operator_count", 0) or 0)
-        for workspace in workspace_estimates
-    )
+    }
+    coverage_candidates = coverage_totals["candidate_operator_count"]
     modeled_fraction = (
-        coverage_modeled / coverage_candidates if coverage_candidates else 1.0
+        coverage_totals["modeled_operator_count"] / coverage_candidates
+        if coverage_candidates
+        else 1.0
     )
     non_extrapolated_fraction = (
-        coverage_non_extrapolated / coverage_candidates
+        coverage_totals["non_extrapolated_operator_count"] / coverage_candidates
         if coverage_candidates
         else 1.0
     )
     aggregate_workspace_coverage = {
         "unit": "workspace_candidate_operator_calls",
-        "candidate_operator_count": coverage_candidates,
-        "modeled_operator_count": coverage_modeled,
-        "non_extrapolated_operator_count": coverage_non_extrapolated,
-        "unprofiled_operator_count": coverage_unprofiled,
+        **coverage_totals,
         "modeled_fraction": round(modeled_fraction, 6),
         "non_extrapolated_fraction": round(non_extrapolated_fraction, 6),
     }
     summary.update(
         {
             "workspace_profile_count": sum(
-                int(workspace.get("profiled_operator_count", 0) or 0)
-                for workspace in workspace_estimates
+                workspace["profiled_operator_count"] for workspace in workspace_estimates
             ),
             "extrapolated_workspace_profile_count": sum(
-                int(workspace.get("extrapolated_profile_count", 0) or 0)
+                workspace["extrapolated_profile_count"]
                 for workspace in workspace_estimates
             ),
             "graph_modeled_attention_operator_count": sum(
-                sum(
-                    int(count)
-                    for count in dict(
-                        workspace.get("graph_modeled_attention_operators") or {}
-                    ).values()
-                )
+                sum(workspace["graph_modeled_attention_operators"].values())
                 for workspace in workspace_estimates
             ),
             "unprofiled_attention_operator_count": sum(
-                sum(
-                    int(count)
-                    for count in dict(
-                        workspace.get("unprofiled_attention_operators") or {}
-                    ).values()
-                )
+                sum(workspace["unprofiled_attention_operators"].values())
                 for workspace in workspace_estimates
             ),
             "workspace_coverage": aggregate_workspace_coverage,
@@ -317,21 +287,14 @@ def _measure_real_cuda(
 
     torch.cuda.empty_cache()
     torch.cuda.manual_seed_all(0)
-    device = torch.device("cuda", 0)
-    model = model.to(device)
-    cuda_args = tuple(_move_to_device(value, device) for value in args)
-    optimizer = torch.optim.AdamW(
-        [parameter for parameter in model.parameters() if parameter.requires_grad],
-        lr=1e-3,
-        foreach=False,
-    )
+    model, cuda_args, optimizer = _cuda_training_setup(model, args)
 
-    for _ in range(max(0, int(warmup_runs))):
+    for _ in range(warmup_runs):
         _training_step(model, cuda_args, optimizer)
     torch.cuda.synchronize()
 
     trials: list[dict[str, Any]] = []
-    for trial_index in range(max(1, int(repeats))):
+    for trial_index in range(repeats):
         optimizer.zero_grad(set_to_none=True)
         torch.cuda.synchronize()
         baseline_allocated = int(torch.cuda.memory_allocated())
@@ -445,7 +408,7 @@ def _measure_real_cuda(
     result = {
         "status": "PASS_MEASURED",
         "trial_count": len(trials),
-        "warmup_runs": max(0, int(warmup_runs)),
+        "warmup_runs": warmup_runs,
         "trials": trials,
         "peak_stage": str(peak_trial["peak_stage"]),
         "peak_requested_stage": (
@@ -510,14 +473,7 @@ def _measure_backend_resident() -> dict[str, Any]:
         dtype="float32",
     )
     model, args = spec.factory()
-    device = torch.device("cuda", 0)
-    model = model.to(device)
-    cuda_args = tuple(_move_to_device(value, device) for value in args)
-    optimizer = torch.optim.AdamW(
-        [parameter for parameter in model.parameters() if parameter.requires_grad],
-        lr=1e-3,
-        foreach=False,
-    )
+    model, cuda_args, optimizer = _cuda_training_setup(model, args)
     _training_step(model, cuda_args, optimizer)
     optimizer.zero_grad(set_to_none=True)
     torch.cuda.synchronize()
@@ -544,15 +500,25 @@ def _measure_backend_resident() -> dict[str, Any]:
     }
 
 
-def _training_step(
+def _cuda_training_setup(
     model: Any,
     args: tuple[Any, ...],
-    optimizer: Any,
-    *,
-    zero_grad: bool = True,
-) -> float:
-    if zero_grad:
-        optimizer.zero_grad(set_to_none=True)
+) -> tuple[Any, tuple[Any, ...], Any]:
+    import torch
+
+    device = torch.device("cuda", 0)
+    model = model.to(device)
+    cuda_args = tuple(value.to(device) for value in args)
+    optimizer = torch.optim.AdamW(
+        [parameter for parameter in model.parameters() if parameter.requires_grad],
+        lr=1e-3,
+        foreach=False,
+    )
+    return model, cuda_args, optimizer
+
+
+def _training_step(model: Any, args: tuple[Any, ...], optimizer: Any) -> float:
+    optimizer.zero_grad(set_to_none=True)
     output = model(*args)
     loss = _training_loss(output)
     loss.backward()
@@ -573,10 +539,8 @@ def _compare_estimate(
     if measured is None:
         return None
     static_estimated = int(static_estimate["estimated_peak_bytes"])
-    backend_resident_bytes = int(
-        (backend_calibration or {}).get("resident_allocated_bytes", 0) or 0
-    )
-    estimated = static_estimated + max(0, int(backend_resident_bytes))
+    backend_resident_bytes = backend_calibration["resident_allocated_bytes"]
+    estimated = static_estimated + backend_resident_bytes
     actual = int(measured["peak_allocated_bytes"])
     signed_error = estimated - actual
     absolute_error = abs(signed_error)
@@ -585,7 +549,7 @@ def _compare_estimate(
     result = {
         "method": "static_graph_plus_backend_resident_calibration",
         "static_estimated_peak_bytes": static_estimated,
-        "backend_resident_calibration_bytes": max(0, int(backend_resident_bytes)),
+        "backend_resident_calibration_bytes": backend_resident_bytes,
         "calibrated_estimated_peak_bytes": estimated,
         "estimated_peak_bytes": estimated,
         "actual_peak_allocated_bytes": actual,
@@ -611,10 +575,10 @@ def _compare_estimate(
         ),
     }
     requested_peak = measured.get("requested_peak_bytes")
-    backend_requested = (backend_calibration or {}).get("resident_requested_bytes")
-    if requested_peak is not None and backend_requested is not None:
+    backend_requested = backend_calibration["resident_requested_bytes"]
+    if requested_peak is not None:
         requested_actual = int(requested_peak)
-        requested_backend = max(0, int(backend_requested))
+        requested_backend = backend_requested
         requested_estimated = static_estimated + requested_backend
         requested_signed_error = requested_estimated - requested_actual
         result.update(
@@ -645,44 +609,35 @@ def _compare_estimate(
                 ),
             }
         )
-    peak_by_stage = measured.get("peak_by_stage")
-    if isinstance(peak_by_stage, dict):
-        forward = dict(peak_by_stage.get("forward") or {})
-        backward = dict(peak_by_stage.get("backward") or {})
-        optimizer = dict(peak_by_stage.get("optimizer") or {})
-        graph_stage_name, graph_stage = max(
-            (("forward", forward), ("backward", backward)),
-            key=lambda item: int(item[1].get("peak_allocated_bytes", 0) or 0),
-        )
-        result["actual_peak_stage"] = measured.get("peak_stage")
-        result["actual_requested_peak_stage"] = measured.get(
-            "peak_requested_stage"
-        )
-        result["estimated_peak_phase"] = static_estimate.get("peak_phase")
-        result["phase_comparison"] = {
-            "graph": _compare_phase_peak(
-                static_peak_bytes=int(static_estimate["graph_phase_peak_bytes"]),
-                actual_allocated_bytes=int(
-                    graph_stage.get("peak_allocated_bytes", 0) or 0
-                ),
-                actual_requested_bytes=graph_stage.get("peak_requested_bytes"),
-                backend_allocated_bytes=backend_resident_bytes,
-                backend_requested_bytes=backend_requested,
-                actual_substage=graph_stage_name,
-            ),
-            "optimizer": _compare_phase_peak(
-                static_peak_bytes=int(
-                    static_estimate.get("optimizer_phase_peak_bytes", 0) or 0
-                ),
-                actual_allocated_bytes=int(
-                    optimizer.get("peak_allocated_bytes", 0) or 0
-                ),
-                actual_requested_bytes=optimizer.get("peak_requested_bytes"),
-                backend_allocated_bytes=backend_resident_bytes,
-                backend_requested_bytes=backend_requested,
-                actual_substage="optimizer",
-            ),
-        }
+    peak_by_stage = measured["peak_by_stage"]
+    forward = peak_by_stage["forward"]
+    backward = peak_by_stage["backward"]
+    optimizer = peak_by_stage["optimizer"]
+    graph_stage_name, graph_stage = max(
+        (("forward", forward), ("backward", backward)),
+        key=lambda item: item[1]["peak_allocated_bytes"],
+    )
+    result["actual_peak_stage"] = measured.get("peak_stage")
+    result["actual_requested_peak_stage"] = measured.get("peak_requested_stage")
+    result["estimated_peak_phase"] = static_estimate.get("peak_phase")
+    result["phase_comparison"] = {
+        "graph": _compare_phase_peak(
+            static_peak_bytes=int(static_estimate["graph_phase_peak_bytes"]),
+            actual_allocated_bytes=graph_stage["peak_allocated_bytes"],
+            actual_requested_bytes=graph_stage.get("peak_requested_bytes"),
+            backend_allocated_bytes=backend_resident_bytes,
+            backend_requested_bytes=backend_requested,
+            actual_substage=graph_stage_name,
+        ),
+        "optimizer": _compare_phase_peak(
+            static_peak_bytes=static_estimate["optimizer_phase_peak_bytes"],
+            actual_allocated_bytes=optimizer["peak_allocated_bytes"],
+            actual_requested_bytes=optimizer.get("peak_requested_bytes"),
+            backend_allocated_bytes=backend_resident_bytes,
+            backend_requested_bytes=backend_requested,
+            actual_substage="optimizer",
+        ),
+    }
     return result
 
 
@@ -692,10 +647,10 @@ def _compare_phase_peak(
     actual_allocated_bytes: int,
     actual_requested_bytes: Any,
     backend_allocated_bytes: int,
-    backend_requested_bytes: Any,
+    backend_requested_bytes: int,
     actual_substage: str,
 ) -> dict[str, Any]:
-    estimated_allocated = static_peak_bytes + max(0, int(backend_allocated_bytes))
+    estimated_allocated = static_peak_bytes + backend_allocated_bytes
     allocated_signed_error = estimated_allocated - actual_allocated_bytes
     result = {
         "actual_substage": actual_substage,
@@ -705,11 +660,8 @@ def _compare_phase_peak(
         "allocated_signed_error_bytes": allocated_signed_error,
         "allocated_underestimate_bytes": max(0, -allocated_signed_error),
     }
-    if actual_requested_bytes is not None and backend_requested_bytes is not None:
-        estimated_requested = static_peak_bytes + max(
-            0,
-            int(backend_requested_bytes),
-        )
+    if actual_requested_bytes is not None:
+        estimated_requested = static_peak_bytes + backend_requested_bytes
         requested_signed_error = estimated_requested - int(actual_requested_bytes)
         result.update(
             {
@@ -778,8 +730,6 @@ def _comparison_summary(comparisons: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _sample_summary(values: list[int | float]) -> dict[str, int | float]:
-    if not values:
-        raise ValueError("sample summary requires at least one value")
     ordered = sorted(values)
     return {
         "count": len(ordered),
@@ -800,20 +750,6 @@ def _gpu_fingerprint() -> dict[str, Any]:
         "compute_capability": f"{int(props.major)}.{int(props.minor)}",
         "sm_count": int(props.multi_processor_count),
     }
-
-
-def _move_to_device(value: Any, device: Any) -> Any:
-    import torch
-
-    if isinstance(value, torch.Tensor):
-        return value.to(device)
-    if isinstance(value, dict):
-        return {key: _move_to_device(item, device) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return tuple(_move_to_device(item, device) for item in value)
-    if isinstance(value, list):
-        return [_move_to_device(item, device) for item in value]
-    return value
 
 
 def _workloads() -> dict[str, WorkloadSpec]:
@@ -984,31 +920,29 @@ def _transformer_spec(
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    workspace_coverage = dict(
-        (report.get("summary") or {}).get("workspace_coverage") or {}
-    )
+    workspace_coverage = report["summary"]["workspace_coverage"]
     lines = [
         "# Static Memory Estimator Validation",
         "",
-        f"**Status:** `{report.get('status')}`",
+        f"**Status:** `{report['status']}`",
         (
             "**Workspace coverage:** "
-            f"{float(workspace_coverage.get('modeled_fraction', 1.0)):.1%} "
-            f"({int(workspace_coverage.get('modeled_operator_count', 0))}/"
-            f"{int(workspace_coverage.get('candidate_operator_count', 0))} "
+            f"{workspace_coverage['modeled_fraction']:.1%} "
+            f"({workspace_coverage['modeled_operator_count']}/"
+            f"{workspace_coverage['candidate_operator_count']} "
             "candidate calls)"
         ),
         "",
     ]
-    gpu = report.get("gpu")
-    if isinstance(gpu, dict):
+    gpu = report["gpu"]
+    if gpu is not None:
         lines.extend(
             [
                 "## GPU",
                 "",
-                f"- name: `{gpu.get('name')}`",
-                f"- compute capability: `{gpu.get('compute_capability')}`",
-                f"- total memory: `{_fmt_bytes(int(gpu.get('total_memory', 0) or 0))}`",
+                f"- name: `{gpu['name']}`",
+                f"- compute capability: `{gpu['compute_capability']}`",
+                f"- total memory: `{_fmt_bytes(gpu['total_memory'])}`",
                 "",
             ]
         )
@@ -1020,17 +954,17 @@ def render_markdown(report: dict[str, Any]) -> str:
             "|---|---|---:|---:|---:|---|---:|---:|---:|---|",
         ]
     )
-    for item in report.get("workloads", []):
-        static = item.get("static_estimate") or {}
+    for item in report["workloads"]:
+        static = item["static_estimate"]
         real = item.get("real_cuda") or {}
         comparison = item.get("comparison") or {}
-        graph = static.get("graph") or {}
+        graph = static["graph"]
         lines.append(
             "| `{name}` | `{family}` | {static_peak} | {calibrated_peak} | {real_peak} | `{real_phase}` | {signed} | {underestimate} | {requested_error} | "
             "{nodes} nodes / {aliases} aliases |".format(
-                name=item.get("name"),
-                family=item.get("family"),
-                static_peak=_fmt_bytes(int(static.get("estimated_peak_bytes", 0) or 0)),
+                name=item["name"],
+                family=item["family"],
+                static_peak=_fmt_bytes(static["estimated_peak_bytes"]),
                 calibrated_peak=(
                     _fmt_bytes(
                         int(comparison.get("calibrated_estimated_peak_bytes", 0) or 0)
@@ -1061,8 +995,8 @@ def render_markdown(report: dict[str, Any]) -> str:
                     if comparison.get("requested_signed_error_bytes") is not None
                     else "n/a"
                 ),
-                nodes=int(graph.get("node_count", 0) or 0),
-                aliases=int(graph.get("alias_node_count", 0) or 0),
+                nodes=graph["node_count"],
+                aliases=graph["alias_node_count"],
             )
         )
     lines.extend(

@@ -3,6 +3,7 @@
 id: gt1010
 name: Fake NVIDIA GeForce GT 1010 2 GB GDDR5 (Colorful LP reference)
 torch_name: NVIDIA GeForce GT 1010
+canonical: true
 official_model: GeForce GT 1010
 architecture: pascal
 compute_major: 6

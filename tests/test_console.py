@@ -11,9 +11,11 @@ import pytest
 pytest.importorskip("textual")
 
 from rich.console import Console  # noqa: E402
-from textual.widgets import DataTable, Input, Select, Static  # noqa: E402
+from textual.widgets import Button, DataTable, Input, Select, Static  # noqa: E402
 
-from fakegpu.console.app import Confirm, ConsoleApp, ProfilePicker, machine_charts, plan_layout  # noqa: E402
+from fakegpu.console.app import (  # noqa: E402
+    Confirm, ConsoleApp, ProfilePicker, machine_charts, plan_layout, sources_text,
+)
 from fakegpu.console.widgets import Chart, selected_key  # noqa: E402
 from fakegpu.machine.client import MachineError  # noqa: E402
 from fakegpu.machine.config import MachineConfig, MachinePaths  # noqa: E402
@@ -52,6 +54,7 @@ def test_console_shows_and_controls_the_machine(service, child):  # noqa: F811
             assert len(app.cards) == 2
             assert app.query_one("#overview-processes", DataTable).row_count == 1
             assert [event["kind"] for event in app.events] == ["process.attached"]
+            assert "· memory tracked, sensors " in app.query_one("#machine-trends", Static).border_title
 
             await pilot.press("3")
             await pilot.pause()
@@ -60,6 +63,7 @@ def test_console_shows_and_controls_the_machine(service, child):  # noqa: F811
             recorder.print(app.query_one("#device-detail", Static).content)
             detail = recorder.export_text()
             assert "Copies" in detail and "none recorded" in detail
+            assert "· memory tracked, sensors" in detail
             assert "NVLink" in detail  # trend rows follow the HGX board's links
             await pilot.press("1")
             await pilot.pause()
@@ -84,6 +88,9 @@ def test_console_shows_and_controls_the_machine(service, child):  # noqa: F811
             assert service.config.devices == "a100:2"
             app.query_one("#cfg-platform", Select).value = "generic"
             await pilot.pause()
+            # Button ignores clicks until its press animation from the first Apply ends.
+            while app.query_one("#cfg-apply", Button).has_class("-active"):
+                await pilot.pause(0.05)
             await pilot.click("#cfg-apply")
             await pilot.pause()
             assert (service.config.devices, service.config.platform) == ("a100:2,h100:1", "generic")
@@ -120,15 +127,29 @@ def test_console_survives_a_stopped_machine(service):
     assert app.return_value == "stop"
 
 
-def test_console_opens_with_supported_daemon_platform_settings(service):
-    service.update_config({"devices": "l4:2", "platform": "PCIE-SERVER", "pcie_generation": 2})
-    app = ConsoleApp(LocalClient(service))
+@pytest.mark.parametrize(("platform", "pcie_generation"), [(" Auto ", 0), ("auto", 1), ("PCIE-SERVER", 2)])
+def test_console_loads_any_valid_machine_config(tmp_path, platform, pcie_generation):
+    config = MachineConfig(devices="l4:2", platform=platform, pcie_generation=pcie_generation)
+    app = ConsoleApp(LocalClient(MachineService(MachinePaths(tmp_path), config)), interval=0.1)
 
     async def scenario():
-        async with app.run_test() as pilot:
-            assert app.query_one("#cfg-platform", Select).value == "pcie-server"
-            assert app.query_one("#cfg-pcie", Select).value == 2
-            await pilot.press("q")
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert app.form_loaded
+            assert app.query_one("#cfg-platform", Select).value == platform.strip().lower()
+            assert app.query_one("#cfg-pcie", Select).value == pcie_generation
+
+    asyncio.run(scenario())
+
+
+def test_console_refresh_after_exit_is_a_no_op(tmp_path):
+    app = ConsoleApp(LocalClient(MachineService(MachinePaths(tmp_path), MachineConfig())), interval=60)
+
+    async def scenario():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+        # The refresh timer can still fire after shutdown removed the widgets.
+        app.refresh_machine()
 
     asyncio.run(scenario())
 
@@ -226,6 +247,13 @@ def test_console_edits_the_layout_per_gpu(service):
             assert service.config.devices == "a100:1,h100:3"
             assert selected_key(devices) == "gpu-2"
 
+            await pilot.click("#gpu-add")  # toolbar buttons run the same actions as the keys
+            await pilot.pause()
+            assert isinstance(app.screen, ProfilePicker)
+            await pilot.click("#picker-cancel")
+            await pilot.pause()
+            assert service.config.devices == "a100:1,h100:3"
+
             await pilot.press("x")
             await pilot.pause()
             assert isinstance(app.screen, Confirm)
@@ -256,3 +284,8 @@ def test_console_edits_the_layout_per_gpu(service):
             await pilot.press("q")
 
     asyncio.run(scenario())
+
+
+def test_trend_titles_say_which_readings_are_modeled():
+    assert sources_text([{"telemetry": {"power_w": 56.0}}, {"telemetry": None}]) == "memory tracked, sensors modeled"
+    assert sources_text([{"telemetry": None}]) == "memory tracked, sensors N/A"

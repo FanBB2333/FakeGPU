@@ -7,6 +7,7 @@
 id: gb300
 name: Fake NVIDIA GB300 (one GPU)
 torch_name: NVIDIA GB300
+canonical: true
 official_model: NVIDIA GB300
 architecture: blackwell
 compute_major: 10
@@ -57,7 +58,6 @@ supported_types:
   - fp16
   - bf16
   - int8
-  - int4
   - fp8
   - fp4
 throughput_published:

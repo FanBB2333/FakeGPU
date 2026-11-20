@@ -3,6 +3,7 @@
 #include "../core/version.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -181,14 +182,8 @@ std::vector<ClusterNodePairReportStats> complete_node_pairs(
     }
 
     for (const ClusterNodePairReportStats& snapshot_pair : snapshot.node_pairs) {
-        const NodePairKey key =
-            make_node_pair_key(snapshot_pair.node_a, snapshot_pair.node_b);
+        const NodePairKey key{snapshot_pair.node_a, snapshot_pair.node_b};
         ClusterNodePairReportStats pair = snapshot_pair;
-        if (pair.node_a != key.first) {
-            std::swap(pair.a_to_b, pair.b_to_a);
-        }
-        pair.node_a = key.first;
-        pair.node_b = key.second;
         if (cluster_config.loaded()) {
             if (pair.a_to_b.model_bandwidth_gbps <= 0.0) {
                 pair.a_to_b.model_bandwidth_gbps =
@@ -265,15 +260,29 @@ std::string format_decimal(double value, int precision = 3) {
     return out.str();
 }
 
-std::string format_rank_list(const std::vector<int>& ranks) {
+std::string join_ints(const std::vector<int>& values, const char* separator) {
     std::ostringstream out;
-    for (std::size_t index = 0; index < ranks.size(); ++index) {
+    for (std::size_t index = 0; index < values.size(); ++index) {
         if (index > 0) {
-            out << ',';
+            out << separator;
         }
-        out << ranks[index];
+        out << values[index];
     }
     return out.str();
+}
+
+using CollectiveRow = std::pair<const char*, const ClusterCollectiveReportStats*>;
+
+std::array<CollectiveRow, 7> collective_rows(const ClusterReportSnapshot& snapshot) {
+    return {{
+        {"all_reduce", &snapshot.all_reduce},
+        {"reduce", &snapshot.reduce},
+        {"broadcast", &snapshot.broadcast},
+        {"all_gather", &snapshot.all_gather},
+        {"reduce_scatter", &snapshot.reduce_scatter},
+        {"all_to_all", &snapshot.all_to_all},
+        {"barrier", &snapshot.barrier},
+    }};
 }
 
 void write_collective_json(
@@ -367,13 +376,14 @@ bool write_json_report(
     out << "  },\n";
 
     out << "  \"collectives\": {\n";
-    write_collective_json(out, "all_reduce", snapshot.all_reduce, true);
-    write_collective_json(out, "reduce", snapshot.reduce, true);
-    write_collective_json(out, "broadcast", snapshot.broadcast, true);
-    write_collective_json(out, "all_gather", snapshot.all_gather, true);
-    write_collective_json(out, "reduce_scatter", snapshot.reduce_scatter, true);
-    write_collective_json(out, "all_to_all", snapshot.all_to_all, true);
-    write_collective_json(out, "barrier", snapshot.barrier, false);
+    const std::array<CollectiveRow, 7> collectives = collective_rows(snapshot);
+    for (std::size_t index = 0; index < collectives.size(); ++index) {
+        write_collective_json(
+            out,
+            collectives[index].first,
+            *collectives[index].second,
+            index + 1 < collectives.size());
+    }
     out << "  },\n";
 
     out << "  \"point_to_point\": {\n";
@@ -508,15 +518,7 @@ bool write_json_report(
         out << "        \"error_detail\": \""
             << json_escape(event.error_detail) << "\",\n";
         out << "        \"observed_ranks\": [";
-        for (std::size_t rank_index = 0;
-             rank_index < event.observed_ranks.size();
-             ++rank_index) {
-            if (rank_index > 0) {
-                out << ", ";
-            }
-            out << event.observed_ranks[rank_index];
-        }
-        out << "],\n";
+        out << join_ints(event.observed_ranks, ", ") << "],\n";
         out << "        \"attempted_payload_bytes\": "
             << event.attempted_payload_bytes << "\n";
         out << "      }"
@@ -536,25 +538,9 @@ bool write_json_report(
         out << "        \"abort_parent\": "
             << (event.abort_parent ? "true" : "false") << ",\n";
         out << "        \"excluded_ranks\": [";
-        for (std::size_t rank_index = 0;
-             rank_index < event.excluded_ranks.size();
-             ++rank_index) {
-            if (rank_index > 0) {
-                out << ", ";
-            }
-            out << event.excluded_ranks[rank_index];
-        }
-        out << "],\n";
+        out << join_ints(event.excluded_ranks, ", ") << "],\n";
         out << "        \"surviving_ranks\": [";
-        for (std::size_t rank_index = 0;
-             rank_index < event.surviving_ranks.size();
-             ++rank_index) {
-            if (rank_index > 0) {
-                out << ", ";
-            }
-            out << event.surviving_ranks[rank_index];
-        }
-        out << "],\n";
+        out << join_ints(event.surviving_ranks, ", ") << "],\n";
         out << "        \"recovery_time_us\": "
             << format_decimal(event.recovery_time_us) << "\n";
         out << "      }"
@@ -589,15 +575,7 @@ bool write_json_report(
         out << "        \"buffer_transport\": \""
             << json_escape(entry.buffer_transport) << "\",\n";
         out << "        \"ranks\": [";
-        for (std::size_t rank_index = 0;
-             rank_index < entry.ranks.size();
-             ++rank_index) {
-            if (rank_index > 0) {
-                out << ", ";
-            }
-            out << entry.ranks[rank_index];
-        }
-        out << "],\n";
+        out << join_ints(entry.ranks, ", ") << "],\n";
         out << "        \"logical_payload_bytes\": "
             << entry.logical_payload_bytes << ",\n";
         out << "        \"socket_request_payload_bytes\": "
@@ -668,17 +646,7 @@ bool write_markdown_report(
     out << "## Collective Summary\n\n";
     out << "| Collective | Calls | Total payload | Estimated time | Contention penalty |\n";
     out << "|---|---:|---:|---:|---:|\n";
-    const std::vector<std::pair<const char*, const ClusterCollectiveReportStats*>>
-        collectives = {
-            {"all_reduce", &snapshot.all_reduce},
-            {"reduce", &snapshot.reduce},
-            {"broadcast", &snapshot.broadcast},
-            {"all_gather", &snapshot.all_gather},
-            {"reduce_scatter", &snapshot.reduce_scatter},
-            {"all_to_all", &snapshot.all_to_all},
-            {"barrier", &snapshot.barrier},
-        };
-    for (const auto& entry : collectives) {
+    for (const CollectiveRow& entry : collective_rows(snapshot)) {
         out << "| `" << entry.first << "`"
             << " | " << entry.second->calls
             << " | " << format_bytes(entry.second->bytes)
@@ -768,7 +736,7 @@ bool write_markdown_report(
             << " | `" << markdown_escape(event.source)
             << "` | `" << markdown_escape(event.operation)
             << "` | `" << markdown_escape(event.error_code)
-            << "` | `" << format_rank_list(event.observed_ranks)
+            << "` | `" << join_ints(event.observed_ranks, ",")
             << "` | " << format_bytes(event.attempted_payload_bytes)
             << " |\n";
     }
@@ -785,8 +753,8 @@ bool write_markdown_report(
             << " | `" << event.parent_comm_id << " → " << event.new_comm_id
             << "` | " << event.seqno
             << " | `" << (event.abort_parent ? "abort" : "default")
-            << "` | `" << format_rank_list(event.excluded_ranks)
-            << "` | `" << format_rank_list(event.surviving_ranks)
+            << "` | `" << join_ints(event.excluded_ranks, ",")
+            << "` | `" << join_ints(event.surviving_ranks, ",")
             << "` | " << format_decimal(event.recovery_time_us) << " us"
             << " |\n";
     }
@@ -823,7 +791,7 @@ bool write_markdown_report(
             << "` | `" << markdown_escape(entry.data_type)
             << "` | `" << markdown_escape(entry.reduce_op)
             << "` | `" << entry.comm_id << ':' << entry.seqno
-            << "` | `" << format_rank_list(entry.ranks)
+            << "` | `" << join_ints(entry.ranks, ",")
             << "` | `" << markdown_escape(entry.buffer_transport)
             << "` | " << format_bytes(entry.logical_payload_bytes)
             << " | " << format_bytes(entry.socket_request_payload_bytes)

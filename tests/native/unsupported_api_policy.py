@@ -91,6 +91,17 @@ driver_results = [
     )
     for _ in range(2)
 ]
+driver.cuStreamAddCallback.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_uint,
+]
+driver.cuStreamAddCallback.restype = ctypes.c_int
+callback_results = [
+    driver.cuStreamAddCallback(None, None, None, 0)
+    for _ in range(2)
+]
 driver_error_name = ctypes.c_char_p()
 driver_name_result = driver.cuGetErrorName(
     driver_results[-1],
@@ -113,6 +124,7 @@ print(json.dumps({
     "driver_name_result": driver_name_result,
     "driver_error_name": driver_error_name.value.decode("utf-8"),
     "unsupported_launch_results": unsupported_launch_results,
+    "callback_results": callback_results,
 }))
 """
 
@@ -164,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"{completed.stderr}"
             )
         payload = json.loads(completed.stdout)
+        callback_result = 801 if policy == "error" else 0
         if payload != {
             "runtime_results": [98, 98],
             "runtime_error_name": "cudaErrorInvalidDeviceFunction",
@@ -176,6 +189,7 @@ def main(argv: list[str] | None = None) -> int:
                 "runtime_graph": 801,
                 "driver_graph": 801,
             },
+            "callback_results": [callback_result, callback_result],
         }:
             raise AssertionError(
                 f"policy {policy} accepted an invalid kernel handle: {payload!r}"
@@ -186,11 +200,20 @@ def main(argv: list[str] | None = None) -> int:
         driver_warning_count = completed.stderr.count(
             "[FakeGPU] warning: cuLaunchKernel"
         )
-        if runtime_warning_count or driver_warning_count:
+        callback_warning_count = completed.stderr.count(
+            "[FakeGPU] warning: cuStreamAddCallback"
+        )
+        expected_callback_warnings = 1 if policy == "warn" else 0
+        if (
+            runtime_warning_count
+            or driver_warning_count
+            or callback_warning_count != expected_callback_warnings
+        ):
             raise AssertionError(
-                f"policy {policy} emitted runtime/driver warning counts "
-                f"{runtime_warning_count}/{driver_warning_count} for invalid handles: "
-                f"{completed.stderr!r}"
+                f"policy {policy} emitted runtime/driver/callback warning "
+                f"counts {runtime_warning_count}/{driver_warning_count}/"
+                f"{callback_warning_count}, expected "
+                f"0/0/{expected_callback_warnings}: {completed.stderr!r}"
             )
 
     print("invalid kernel handles rejected under allow, warn and error policies")

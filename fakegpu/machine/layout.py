@@ -15,7 +15,6 @@ from typing import Any
 
 from .._smi_environment import _modeled_device_topology
 from .._smi_state import LAYOUT_ONLY_KEY, SCHEMA_VERSION, _synthetic_pci_bus_id, _synthetic_uuid
-from ..platforms import PlatformError
 from ..profile_catalog import get_profile
 from .client import daemon_pid
 from .config import MachineConfig, MachinePaths
@@ -44,10 +43,22 @@ def layout_state(paths: MachinePaths | None = None) -> dict[str, Any] | None:
         return None
     try:
         config = MachineConfig.load(paths.config)
-        environment = config.resolved_platform().environment()
-        profiles = [get_profile(profile_id) for profile_id in config.profiles]
-    except (OSError, ValueError, KeyError, PlatformError):
+    except (OSError, ValueError):
         return None
+    environment = config.resolved_platform().environment()
+    return build_layout_state(config.profiles, environment, pid=pid, process_name="fakegpu-daemon")
+
+
+def build_layout_state(
+    profile_ids: list[str], environment: dict[str, str] | None, *, pid: int, process_name: str
+) -> dict[str, Any]:
+    """Every GPU of a layout, idle and used by no process, as an SMI state.
+
+    ``pid`` names the process that keeps the state alive; viewers drop the
+    state once that process exits or stops refreshing ``timestamp_ns``.
+    """
+
+    profiles = [get_profile(profile_id) for profile_id in profile_ids]
     host = socket.gethostname()
     devices = [
         {
@@ -69,7 +80,7 @@ def layout_state(paths: MachinePaths | None = None) -> dict[str, Any] | None:
         "timestamp_ns": time.time_ns(),
         "hostname": host,
         "pid": pid,
-        "process_name": "fakegpu-daemon",
+        "process_name": process_name,
         "running": True,
         LAYOUT_ONLY_KEY: True,
         "topology": _modeled_device_topology(devices, environment),

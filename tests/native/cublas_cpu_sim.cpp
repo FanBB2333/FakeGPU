@@ -2,6 +2,7 @@
 #include "../../src/cuda/cudart_defs.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -189,6 +190,54 @@ int main() {
         check_cuda(cudaFree(dB), "cudaFree B");
         check_cuda(cudaFree(dC), "cudaFree C");
         std::printf("Test1 OK: cublasSgemm_v2\n");
+    }
+
+    // -------------------------
+    // Test 1b: k=0 GEMM scales C by beta; A and B are never read, so padded
+    // leading dimensions must not be checked against their allocations.
+    // -------------------------
+    {
+        const int m = 2;
+        const int n = 2;
+        const float alpha = 1.0f;
+        const float beta = 2.0f;
+        const std::vector<float> hC = {1.0f, 2.0f, 3.0f, 4.0f};
+        const std::vector<float> expected = {2.0f, 4.0f, 6.0f, 8.0f};
+
+        float *dA = nullptr, *dB = nullptr, *dC = nullptr;
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dA), 4 * sizeof(float)), "cudaMalloc A");
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dB), 4 * sizeof(float)), "cudaMalloc B");
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dC), hC.size() * sizeof(float)), "cudaMalloc C");
+
+        cublasHandle_t handle = nullptr;
+        check_cublas(cublasCreate_v2(&handle), "cublasCreate_v2");
+        for (int variant = 0; variant < 2; ++variant) {
+            check_cuda(cudaMemcpy(dC, hC.data(), hC.size() * sizeof(float), cudaMemcpyHostToDevice), "H2D C");
+            if (variant == 0) {
+                check_cublas(
+                    cublasSgemm_v2(handle, CUBLAS_OP_N, CUBLAS_OP_N, m, n, 0, &alpha, dA, 4, dB, 1, &beta, dC, m),
+                    "cublasSgemm_v2 k=0"
+                );
+            } else {
+                check_cublas(
+                    cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_T, m, n, 0, &alpha, dA, 0, m, dB, 0, 4, &beta,
+                                 dC, 0, m, 0, CUBLAS_GEMM_DEFAULT),
+                    "cublasGemmEx k=0"
+                );
+            }
+            std::vector<float> got(hC.size());
+            check_cuda(cudaMemcpy(got.data(), dC, got.size() * sizeof(float), cudaMemcpyDeviceToHost), "D2H C");
+            if (!allclose(got, expected, 0.0f, 0.0f)) {
+                std::fprintf(stderr, "Test1b failed: k=0 GEMM variant %d mismatch\n", variant);
+                return 1;
+            }
+        }
+
+        check_cublas(cublasDestroy_v2(handle), "cublasDestroy_v2");
+        check_cuda(cudaFree(dA), "cudaFree A");
+        check_cuda(cudaFree(dB), "cudaFree B");
+        check_cuda(cudaFree(dC), "cudaFree C");
+        std::printf("Test1b OK: k=0 GEMM\n");
     }
 
     // -------------------------
@@ -614,7 +663,7 @@ int main() {
             }
         }
 
-        // nrm2: sqrt(sum x[i]^2) (incx=-1)
+        // nrm2: sqrt(sum x[i]^2)
         {
             float expected = 0.0f;
             for (int i = 0; i < n; ++i) {
@@ -622,21 +671,21 @@ int main() {
             }
             expected = std::sqrt(expected);
             float got = 0.0f;
-            check_cublas(cublasSnrm2_v2(handle, n, dX, -1, &got), "cublasSnrm2_v2");
+            check_cublas(cublasSnrm2_v2(handle, n, dX, 1, &got), "cublasSnrm2_v2");
             if (!allclose_scalar(got, expected, 1e-5f, 1e-5f, "cublasSnrm2_v2")) {
                 std::fprintf(stderr, "Test6 failed: cublasSnrm2_v2 mismatch\n");
                 return 1;
             }
         }
 
-        // asum: sum abs(x[i]) (incx=-1)
+        // asum: sum abs(x[i])
         {
             float expected = 0.0f;
             for (int i = 0; i < n; ++i) {
                 expected += std::fabs(hx[static_cast<size_t>(i)]);
             }
             float got = 0.0f;
-            check_cublas(cublasSasum_v2(handle, n, dX, -1, &got), "cublasSasum_v2");
+            check_cublas(cublasSasum_v2(handle, n, dX, 1, &got), "cublasSasum_v2");
             if (!allclose_scalar(got, expected, 1e-5f, 1e-5f, "cublasSasum_v2")) {
                 std::fprintf(stderr, "Test6 failed: cublasSasum_v2 mismatch\n");
                 return 1;
@@ -654,6 +703,129 @@ int main() {
             const int expected = 3; // 1-based index
             if (got != expected) {
                 std::fprintf(stderr, "Test6 failed: cublasIsamax_v2 mismatch: got=%d expected=%d\n", got, expected);
+                return 1;
+            }
+        }
+
+        // The cuBLAS reference sets the result of amax/amin/asum/nrm2 to 0
+        // when n <= 0 or incx <= 0, and the dot result to 0 when n <= 0.
+        // axpy, copy and scal list no INVALID_VALUE, so n == 0 is a no-op.
+        {
+            const int bad_incs[] = {0, -1};
+            for (int inc : bad_incs) {
+                int index = -7;
+                float value = -7.0f;
+                check_cublas(cublasIsamax_v2(handle, n, dX, inc, &index), "cublasIsamax_v2 inc<=0");
+                if (index != 0) {
+                    std::fprintf(stderr, "Test6 failed: cublasIsamax_v2 incx=%d gave %d\n", inc, index);
+                    return 1;
+                }
+                index = -7;
+                check_cublas(cublasIsamin_v2(handle, n, dX, inc, &index), "cublasIsamin_v2 inc<=0");
+                if (index != 0) {
+                    std::fprintf(stderr, "Test6 failed: cublasIsamin_v2 incx=%d gave %d\n", inc, index);
+                    return 1;
+                }
+                check_cublas(cublasSasum_v2(handle, n, dX, inc, &value), "cublasSasum_v2 inc<=0");
+                if (value != 0.0f) {
+                    std::fprintf(stderr, "Test6 failed: cublasSasum_v2 incx=%d gave %f\n", inc, value);
+                    return 1;
+                }
+                value = -7.0f;
+                check_cublas(cublasSnrm2_v2(handle, n, dX, inc, &value), "cublasSnrm2_v2 inc<=0");
+                if (value != 0.0f) {
+                    std::fprintf(stderr, "Test6 failed: cublasSnrm2_v2 incx=%d gave %f\n", inc, value);
+                    return 1;
+                }
+            }
+            int index = -7;
+            float value = -7.0f;
+            check_cublas(cublasIsamax_v2(handle, 0, dX, 1, &index), "cublasIsamax_v2 n=0");
+            check_cublas(cublasSasum_v2(handle, 0, dX, 1, &value), "cublasSasum_v2 n=0");
+            if (index != 0 || value != 0.0f) {
+                std::fprintf(stderr, "Test6 failed: n=0 reductions gave index=%d asum=%f\n", index, value);
+                return 1;
+            }
+            value = -7.0f;
+            check_cublas(cublasSdot_v2(handle, 0, dX, 1, dY, 1, &value), "cublasSdot_v2 n=0");
+            if (value != 0.0f) {
+                std::fprintf(stderr, "Test6 failed: cublasSdot_v2 n=0 gave %f\n", value);
+                return 1;
+            }
+            const float one = 1.0f;
+            check_cublas(cublasSaxpy_v2(handle, 0, &one, dX, 1, dY, 1), "cublasSaxpy_v2 n=0");
+            check_cublas(cublasScopy_v2(handle, 0, dX, 1, dY, 1), "cublasScopy_v2 n=0");
+            check_cublas(cublasSscal_v2(handle, 0, &one, dX, 1), "cublasSscal_v2 n=0");
+        }
+
+        // Zero and negative increments, as cuBLAS answers them on a real
+        // GPU: all return success; an increment of 0 reuses one element in
+        // order, and scal with incx <= 0 leaves x untouched.
+        {
+            struct IncCase {
+                int incx, incy;
+                float axpy[8];
+                float copy[8];
+            };
+            const IncCase cases[] = {
+                {0, 1, {12, 22, 32, 42, 50, 60, 70, 80}, {1, 1, 1, 1, 50, 60, 70, 80}},
+                {1, 0, {30, 20, 30, 40, 50, 60, 70, 80}, {4, 20, 30, 40, 50, 60, 70, 80}},
+                {0, 0, {18, 20, 30, 40, 50, 60, 70, 80}, {1, 20, 30, 40, 50, 60, 70, 80}},
+                {-1, 1, {18, 26, 34, 42, 50, 60, 70, 80}, {4, 3, 2, 1, 50, 60, 70, 80}},
+                {1, -1, {18, 26, 34, 42, 50, 60, 70, 80}, {4, 3, 2, 1, 50, 60, 70, 80}},
+                {-1, -1, {12, 24, 36, 48, 50, 60, 70, 80}, {1, 2, 3, 4, 50, 60, 70, 80}},
+                {2, -2, {24, 20, 40, 40, 56, 60, 72, 80}, {7, 20, 5, 40, 3, 60, 1, 80}},
+            };
+            const float x8[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+            const float y8[8] = {10, 20, 30, 40, 50, 60, 70, 80};
+            const float two = 2.0f;
+            float got[8];
+            auto reset = [&]() {
+                check_cuda(cudaMemcpy(dX, x8, sizeof(x8), cudaMemcpyHostToDevice), "H2D x8");
+                check_cuda(cudaMemcpy(dY, y8, sizeof(y8), cudaMemcpyHostToDevice), "H2D y8");
+            };
+            auto matches = [&](float* device, const float* expected, const char* what, int incx, int incy) {
+                check_cuda(cudaMemcpy(got, device, sizeof(got), cudaMemcpyDeviceToHost), "D2H inc case");
+                for (int i = 0; i < 8; ++i) {
+                    if (got[i] != expected[i]) {
+                        std::fprintf(stderr, "Test6 failed: %s incx=%d incy=%d element %d got %f expected %f\n",
+                                     what, incx, incy, i, got[i], expected[i]);
+                        return false;
+                    }
+                }
+                return true;
+            };
+            for (const IncCase& c : cases) {
+                reset();
+                check_cublas(cublasSaxpy_v2(handle, 4, &two, dX, c.incx, dY, c.incy), "cublasSaxpy_v2 inc case");
+                if (!matches(dY, c.axpy, "cublasSaxpy_v2", c.incx, c.incy)) return 1;
+                reset();
+                check_cublas(cublasScopy_v2(handle, 4, dX, c.incx, dY, c.incy), "cublasScopy_v2 inc case");
+                if (!matches(dY, c.copy, "cublasScopy_v2", c.incx, c.incy)) return 1;
+            }
+            const int scal_incs[] = {0, -1, -2};
+            for (int inc : scal_incs) {
+                reset();
+                check_cublas(cublasSscal_v2(handle, 4, &two, dX, inc), "cublasSscal_v2 inc<=0");
+                if (!matches(dX, x8, "cublasSscal_v2", inc, 0)) return 1;
+            }
+            reset();
+            const float scaled_inc2[8] = {2, 2, 6, 4, 10, 6, 14, 8};
+            check_cublas(cublasSscal_v2(handle, 4, &two, dX, 2), "cublasSscal_v2 inc=2");
+            if (!matches(dX, scaled_inc2, "cublasSscal_v2", 2, 0)) return 1;
+        }
+
+        // cublasSetWorkspace accepts any pointer, size and alignment.
+        {
+            char* base = reinterpret_cast<char*>(dX);
+            const size_t offsets[] = {0, 1, 4, 255, 256};
+            for (size_t offset : offsets) {
+                check_cublas(cublasSetWorkspace_v2(handle, base + offset, 16), "cublasSetWorkspace_v2 offset");
+            }
+            check_cublas(cublasSetWorkspace_v2(handle, nullptr, 0), "cublasSetWorkspace_v2 null");
+            check_cublas(cublasSetWorkspace_v2(handle, nullptr, 1024), "cublasSetWorkspace_v2 null size");
+            if (reinterpret_cast<uintptr_t>(dX) % 256 != 0 || reinterpret_cast<uintptr_t>(dY) % 256 != 0) {
+                std::fprintf(stderr, "Test6 failed: cudaMalloc pointers are not 256-byte aligned\n");
                 return 1;
             }
         }
@@ -711,6 +883,33 @@ int main() {
         if (!allclose(got_y, expected_y, 1e-5f, 1e-5f)) {
             std::fprintf(stderr, "Test7 failed: cublasSgemv_v2 mismatch\n");
             return 1;
+        }
+
+        // With beta == 0, y does not have to be a valid input, so a NaN in
+        // y must not reach the result.
+        {
+            const float zero = 0.0f;
+            std::vector<float> nan_y(hy.size(), std::numeric_limits<float>::quiet_NaN());
+            check_cuda(cudaMemcpy(dY, nan_y.data(), nan_y.size() * sizeof(float), cudaMemcpyHostToDevice), "H2D NaN Y");
+            check_cublas(
+                cublasSgemv_v2(handle, CUBLAS_OP_N, m, n, &alpha, dA, lda, dX, 1, &zero, dY, 1),
+                "cublasSgemv_v2 beta=0"
+            );
+            std::vector<float> expected_zero_beta(hy.size());
+            for (int row = 0; row < m; ++row) {
+                double acc = 0.0;
+                for (int col = 0; col < n; ++col) {
+                    acc += static_cast<double>(hA[idx_col_major(row, col, lda)]) *
+                           static_cast<double>(hx[static_cast<size_t>(col)]);
+                }
+                expected_zero_beta[static_cast<size_t>(row)] = static_cast<float>(alpha * acc);
+            }
+            check_cuda(cudaMemcpy(got_y.data(), dY, got_y.size() * sizeof(float), cudaMemcpyDeviceToHost), "D2H beta=0 Y");
+            if (!allclose(got_y, expected_zero_beta, 1e-5f, 1e-5f)) {
+                std::fprintf(stderr, "Test7 failed: cublasSgemv_v2 beta=0 read y\n");
+                return 1;
+            }
+            check_cuda(cudaMemcpy(dY, expected_y.data(), expected_y.size() * sizeof(float), cudaMemcpyHostToDevice), "H2D restore Y");
         }
 
         const float scale = -2.0f;
@@ -837,6 +1036,147 @@ int main() {
         check_cuda(cudaFree(dB), "cudaFree half B");
         check_cuda(cudaFree(dC), "cudaFree half C");
         std::printf("Test8 OK: cublasHgemm (FP16)\n");
+    }
+
+    // -------------------------
+    // Test 9: version queries use the cublas_api.h encoding
+    // -------------------------
+    {
+        // CUBLAS_VERSION is major * 10000 + minor * 100 + patch, and
+        // cublasGetVersion works without a handle (cuBLAS docs 2.4.3).
+        int version = 0;
+        check_cublas(cublasGetVersion_v2(nullptr, &version), "cublasGetVersion_v2");
+        int major = -1;
+        int minor = -1;
+        int patch = -1;
+        check_cublas(cublasGetProperty(0, &major), "cublasGetProperty(MAJOR_VERSION)");
+        check_cublas(cublasGetProperty(1, &minor), "cublasGetProperty(MINOR_VERSION)");
+        check_cublas(cublasGetProperty(2, &patch), "cublasGetProperty(PATCH_LEVEL)");
+        if (major != 12 || version != major * 10000 + minor * 100 + patch) {
+            std::fprintf(stderr, "Test9 failed: version=%d major=%d minor=%d patch=%d\n", version, major, minor, patch);
+            return 1;
+        }
+        int unused = 0;
+        if (cublasGetProperty(3, &unused) != CUBLAS_STATUS_INVALID_VALUE) {
+            std::fprintf(stderr, "Test9 failed: an invalid property type was accepted\n");
+            return 1;
+        }
+        std::printf("Test9 OK: cublasGetVersion/cublasGetProperty\n");
+    }
+
+    // -------------------------
+    // Test 10: cublasLtMatmulAlgoGetHeuristic fills the cublasLt.h layout
+    // -------------------------
+    {
+        // cublas_api.h: the DFALT names alias the DEFAULT algorithms.
+        static_assert(CUBLAS_GEMM_DFALT == -1 && CUBLAS_GEMM_DEFAULT == -1, "default GEMM algo");
+        static_assert(CUBLAS_GEMM_DFALT_TENSOR_OP == 99 && CUBLAS_GEMM_DEFAULT_TENSOR_OP == 99,
+                      "default tensor-op GEMM algo");
+        // cublasLt.h: a 64-byte cublasLtMatmulAlgo_t comes first, then
+        // workspaceSize, state, wavesCount and int reserved[4].
+        static_assert(sizeof(cublasLtMatmulAlgo_t) == 64, "cublasLtMatmulAlgo_t size");
+        static_assert(offsetof(cublasLtMatmulHeuristicResult_t, workspaceSize) == 64, "workspaceSize offset");
+        static_assert(offsetof(cublasLtMatmulHeuristicResult_t, state) == 72, "state offset");
+        static_assert(offsetof(cublasLtMatmulHeuristicResult_t, wavesCount) == 76, "wavesCount offset");
+        static_assert(sizeof(cublasLtMatmulHeuristicResult_t) == 96, "heuristic result size");
+        constexpr int32_t CUDA_R_32F = 0;
+
+        cublasLtHandle_t lt = nullptr;
+        check_cublas(cublasLtCreate(&lt), "cublasLtCreate");
+        cublasLtMatmulDesc_t op = nullptr;
+        check_cublas(cublasLtMatmulDescCreate(&op, CUBLAS_COMPUTE_32F, CUDA_R_32F), "cublasLtMatmulDescCreate");
+        cublasLtMatrixLayout_t layout = nullptr;
+        check_cublas(cublasLtMatrixLayoutCreate(&layout, CUDA_R_32F, 4, 4, 4), "cublasLtMatrixLayoutCreate");
+        cublasLtMatmulPreference_t pref = nullptr;
+        check_cublas(cublasLtMatmulPreferenceCreate(&pref), "cublasLtMatmulPreferenceCreate");
+
+        cublasLtMatmulHeuristicResult_t results[2];
+        std::memset(results, 0xff, sizeof(results));
+        int returned = -1;
+        check_cublas(cublasLtMatmulAlgoGetHeuristic(lt, op, layout, layout, layout, layout, pref, 2, results, &returned),
+                     "cublasLtMatmulAlgoGetHeuristic");
+        if (returned < 1 || results[0].state != CUBLAS_STATUS_SUCCESS || results[0].workspaceSize != 0) {
+            std::fprintf(stderr, "Test10 failed: returned=%d state=%d workspaceSize=%zu\n",
+                         returned, static_cast<int>(results[0].state), results[0].workspaceSize);
+            return 1;
+        }
+        if (cublasLtMatmulAlgoGetHeuristic(lt, op, layout, layout, layout, layout, pref, 0, results, &returned) !=
+            CUBLAS_STATUS_INVALID_VALUE) {
+            std::fprintf(stderr, "Test10 failed: requestedAlgoCount=0 was accepted\n");
+            return 1;
+        }
+
+        check_cublas(cublasLtMatmulPreferenceDestroy(pref), "cublasLtMatmulPreferenceDestroy");
+        check_cublas(cublasLtMatrixLayoutDestroy(layout), "cublasLtMatrixLayoutDestroy");
+        check_cublas(cublasLtMatmulDescDestroy(op), "cublasLtMatmulDescDestroy");
+        check_cublas(cublasLtDestroy(lt), "cublasLtDestroy");
+        std::printf("Test10 OK: cublasLtMatmulAlgoGetHeuristic layout\n");
+    }
+
+    // -------------------------
+    // Test 11: batched GEMM argument checks
+    // -------------------------
+    {
+        // The cuBLAS reference returns CUBLAS_STATUS_INVALID_VALUE for
+        // m, n or k < 0, lda < max(1, m) (op N) or max(1, k) (op T/C),
+        // ldb < max(1, k) (op N) or max(1, n) (op T/C), and ldc < max(1, m).
+        const int m = 4;
+        const int n = 3;
+        const int k = 2;
+        const int batchCount = 2;
+        float* dBuf = nullptr;
+        check_cuda(cudaMalloc(reinterpret_cast<void**>(&dBuf), 256 * sizeof(float)), "cudaMalloc batched");
+        cublasHandle_t handle = nullptr;
+        check_cublas(cublasCreate_v2(&handle), "cublasCreate_v2");
+        const float one = 1.0f;
+        const float zero = 0.0f;
+        const long long stride = 32;
+
+        struct Case {
+            cublasOperation_t transa;
+            cublasOperation_t transb;
+            int m, n, k, lda, ldb, ldc;
+            const char* what;
+        };
+        const Case cases[] = {
+            {CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, m - 1, k, m, "lda < m with op N"},
+            {CUBLAS_OP_T, CUBLAS_OP_N, m, n, k, k - 1, k, m, "lda < k with op T"},
+            {CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, m, k - 1, m, "ldb < k with op N"},
+            {CUBLAS_OP_N, CUBLAS_OP_T, m, n, k, m, n - 1, m, "ldb < n with op T"},
+            {CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, m, k, m - 1, "ldc < m"},
+            {CUBLAS_OP_N, CUBLAS_OP_N, m, n, -1, m, k, m, "k < 0"},
+            {static_cast<cublasOperation_t>(7), CUBLAS_OP_N, m, n, k, m, k, m, "invalid transa"},
+        };
+        float* const Aarray[batchCount] = {dBuf, dBuf + stride};
+        float* const Barray[batchCount] = {dBuf + 2 * stride, dBuf + 3 * stride};
+        float* const Carray[batchCount] = {dBuf + 4 * stride, dBuf + 5 * stride};
+        for (const Case& c : cases) {
+            const cublasStatus_t strided = cublasSgemmStridedBatched(
+                handle, c.transa, c.transb, c.m, c.n, c.k, &one, dBuf, c.lda, stride,
+                dBuf + 2 * stride, c.ldb, stride, &zero, dBuf + 4 * stride, c.ldc, stride, batchCount);
+            const cublasStatus_t batched = cublasSgemmBatched(
+                handle, c.transa, c.transb, c.m, c.n, c.k, &one, Aarray, c.lda, Barray, c.ldb,
+                &zero, Carray, c.ldc, batchCount);
+            const cublasStatus_t strided_ex = cublasGemmStridedBatchedEx(
+                handle, c.transa, c.transb, c.m, c.n, c.k, &one, dBuf, 0, c.lda, stride,
+                dBuf + 2 * stride, 0, c.ldb, stride, &zero, dBuf + 4 * stride, 0, c.ldc, stride,
+                batchCount, CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+            if (strided != CUBLAS_STATUS_INVALID_VALUE || batched != CUBLAS_STATUS_INVALID_VALUE ||
+                strided_ex != CUBLAS_STATUS_INVALID_VALUE) {
+                std::fprintf(stderr, "Test11 failed (%s): strided=%d batched=%d stridedEx=%d\n", c.what,
+                             static_cast<int>(strided), static_cast<int>(batched), static_cast<int>(strided_ex));
+                return 1;
+            }
+        }
+        // op T only needs lda >= k, even when k < m.
+        check_cublas(cublasSgemmStridedBatched(handle, CUBLAS_OP_T, CUBLAS_OP_N, m, n, k, &one, dBuf, k, stride,
+                                               dBuf + 2 * stride, k, stride, &zero, dBuf + 4 * stride, m, stride,
+                                               batchCount),
+                     "cublasSgemmStridedBatched op T lda=k");
+
+        check_cublas(cublasDestroy_v2(handle), "cublasDestroy_v2");
+        check_cuda(cudaFree(dBuf), "cudaFree batched");
+        std::printf("Test11 OK: batched GEMM argument checks\n");
     }
 
     std::printf("All FakeGPU CPU simulation tests passed.\n");

@@ -68,7 +68,7 @@ Blackwell GPU（PyTorch 2.11.0+cu128、Transformers 5.14.1）上執行過。
 | 原生函式庫攔截 | 建置、函式庫邊界、匯出符號、preload、GPU 記憶體類型、coordinator 與不支援 API 策略 | **通過** |
 | FakeGPU-SMI 診斷 | 有上限的狀態發布、拓撲/NVLink/MIG 檢視、NVML peer/MIG 查詢、健康欄位與事件報告 | **通過** |
 | 監控 exporter | Prometheus/JSON 快照、歷史與序列數量限制、異常狀態降級及 HTTP 介面 | **通過** |
-| 原生能力清單（2026-10-18 更新） | 5 個能力群組、106 個明確 API、93 個強制執行策略的 API | **通過** |
+| 原生能力清單（2026-10-22 更新） | 5 個能力群組、109 個明確 API、96 個強制執行策略的 API | **通過** |
 | GPU profile 目錄 | 307 個 profile，涵蓋 16 種 compute capability（目錄更新於 2026-10-16） | **通過** |
 | CPU 數值模擬 | GEMM、cuBLASLt、批次 GEMM、BLAS1/2 與 FP16，共 8 組測試 | **通過** |
 | CUDA 版 PyTorch 原生矩陣乘法 | 需要含 CUDA 的 PyTorch | **這台 CPU-only 主機未執行** |
@@ -107,10 +107,10 @@ GitHub CI 在 Python 3.10–3.12 上執行 Python 測試，並在 Linux 與 macO
 | 線上 serving prefix cache | 相同 decoder、8 個活躍請求、4K prompt + 256 個生成 token、paged BF16 KV；獨立 cache → 共享 1K prefix | **4.25 → 3.38 GiB**（減少 20.6%） | 共享/私有 paged block 公式 |
 | 混合 chat/completion serving | 相同 decoder；prompt 為 4K/8K/2K，生成長度為 256/512/1024；獨立 KV → 兩個 chat 請求共享 1K system prefix | **1.97 → 1.84 GiB** decode KV（減少 6.3%） | 異構請求集公式與 chat/RAG 矩陣 |
 | Speculative target 呼叫 | 每次 verification 生成 5 個 draft token，並假設單 token 獨立接受率為 70% | 每個 target step 的預期輸出 token 為 **1.00 → 2.94**，此數值不代表吞吐量提升 | 幾何接受率公式與雙模型記憶體測試 |
-| LLM 訓練 | 8B BF16 參數、AdamW、4 張 GPU、activation checkpointing；replicated → full shard | **104.31 → 26.54 GiB**/rank（減少 74.6%） | 訓練階段模型 |
+| LLM 訓練 | 8B BF16 參數、AdamW、4 張 GPU、activation checkpointing；replicated → full shard | **149.01 → 37.72 GiB**/rank（減少 74.7%） | 訓練階段模型 |
 | Stable Diffusion v1.5 生成 | 512²、batch 1、FP16、CFG；所有權重常駐 → model offload | **2.61 → 1.72 GiB**（減少 34.3%） | 元件與階段模型 |
 | SDXL 批次生成 | 1024²、batch 4、FP16、CFG；一般 VAE decode → VAE slicing | **26.64 → 11.64 GiB**（減少 56.3%） | 依序 VAE batch shape 模型 |
-| SDXL 高解析度生成 | 2048²、batch 1、FP16、CFG；完整影像 VAE → 512² VAE tile | **26.64 → 8.28 GiB**（減少 68.9%） | 依序 VAE tile shape 模型 |
+| SDXL 高解析度生成 | 2048²、batch 1、FP16、CFG；完整影像 VAE → 512² VAE tile | **26.64 → 7.92 GiB**（減少 70.3%） | 依序 VAE tile shape 模型 |
 | PixArt-Sigma DiT 生成 | 1024²、batch 1、FP16、CFG、model offload；eager → SDPA 的 denoise 階段 | **2.32 → 1.28 GiB**（減少 44.7%） | patch token、交叉注意力與階段模型 |
 
 - Diffusion profile 的元件參數量來自 [Stable Diffusion v1.5][diffusion-sd15]、

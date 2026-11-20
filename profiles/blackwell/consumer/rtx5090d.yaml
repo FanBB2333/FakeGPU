@@ -37,4 +37,3 @@ supported_types:
   - fp8
   - fp4
   - int8
-  - int4

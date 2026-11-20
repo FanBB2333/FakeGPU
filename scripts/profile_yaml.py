@@ -26,6 +26,7 @@ SPEC_KEYS = (
     "base_clock_mhz",
     "memory_type",
     "memory_bandwidth_gbps",
+    "reported_memory_bytes",
     "ecc",
     "form_factor",
     "pcie_generation",
@@ -36,6 +37,13 @@ SPEC_KEYS = (
     "c2c_bandwidth_gbps",
     "mig_max_instances",
     "min_power_limit_mw",
+    "ecc_enabled",
+    "async_engine_count",
+    "single_to_double_precision_perf_ratio",
+    "max_persisting_l2_cache_bytes",
+    "pageable_memory_access",
+    "can_flush_remote_writes",
+    "max_access_policy_window_bytes",
 )
 assert set(SPEC_KEYS) >= set(_OPTIONAL_INTEGER_FIELDS + _OPTIONAL_NUMBER_FIELDS)
 SCALAR_KEYS = SPEC_KEYS + THROUGHPUT_FIELDS + ("throughput_source",)
@@ -49,25 +57,15 @@ def format_number(value: float | int) -> str:
     return f"{value:g}"
 
 
-def read_block(path: Path) -> tuple[dict[str, str], dict[str, list[str]]]:
-    """Return the optional scalars and provenance lists currently in ``path``."""
+def read_block(path: Path) -> dict[str, str]:
+    """Return the optional scalars currently in ``path``."""
 
     scalars: dict[str, str] = {}
-    lists: dict[str, list[str]] = {}
-    current: str | None = None
     for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if stripped.startswith("- ") and current is not None:
-            lists[current].append(stripped[2:].strip())
-            continue
-        current = None
-        key, _, value = stripped.partition(":")
+        key, _, value = line.strip().partition(":")
         if key in SCALAR_KEYS and value.strip():
             scalars[key] = value.strip()
-        elif key in LIST_KEYS and not value.strip():
-            current = key
-            lists[key] = []
-    return scalars, lists
+    return scalars
 
 
 def write_block(
@@ -101,7 +99,7 @@ def write_block(
 
     block = []
     for key in SCALAR_KEYS:
-        if key in scalars and scalars[key] not in (None, ""):
+        if key in scalars:
             value = scalars[key]
             text = format_number(value) if isinstance(value, (int, float)) else str(value)
             block.append(f"{key}: {text}")

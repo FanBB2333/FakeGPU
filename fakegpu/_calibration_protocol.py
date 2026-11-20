@@ -56,6 +56,19 @@ def _positive_plan_integer(payload: Mapping[str, Any], key: str) -> int:
     return int(value)
 
 
+def _target_memory_bytes(context: Mapping[str, Any]) -> int:
+    value = context["profile"].get("memory_bytes")
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value <= 0
+    ):
+        raise CalibrationError(
+            "serving plan target profile has no valid memory_bytes"
+        )
+    return value
+
+
 def _normalize_compute_capability(value: Any, *, label: str) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
@@ -159,6 +172,17 @@ def _serving_plan_observation_context(
     }
 
 
+def _phase_set_mismatch(expected: set[str], supplied: set[str]) -> str:
+    details = []
+    missing = sorted(expected - supplied)
+    if missing:
+        details.append(f"missing phases: {', '.join(missing)}")
+    unexpected = sorted(supplied - expected)
+    if unexpected:
+        details.append(f"unexpected phases: {', '.join(unexpected)}")
+    return "; ".join(details)
+
+
 def _normalize_serving_phase_peaks(
     phase_peaks: Mapping[str, int],
     *,
@@ -167,17 +191,9 @@ def _normalize_serving_phase_peaks(
     if not isinstance(phase_peaks, Mapping):
         raise CalibrationError("phase_peaks must be a mapping")
     normalized = {str(key): value for key, value in phase_peaks.items()}
-    expected = set(planned_phases)
-    supplied = set(normalized)
-    if supplied != expected:
-        missing = sorted(expected - supplied)
-        unexpected = sorted(supplied - expected)
-        details = []
-        if missing:
-            details.append(f"missing phases: {', '.join(missing)}")
-        if unexpected:
-            details.append(f"unexpected phases: {', '.join(unexpected)}")
-        raise CalibrationError("; ".join(details))
+    mismatch = _phase_set_mismatch(set(planned_phases), set(normalized))
+    if mismatch:
+        raise CalibrationError(mismatch)
     result = {}
     for phase in planned_phases:
         peak = normalized[phase]
@@ -224,19 +240,12 @@ def _validate_serving_runner_sample(
     raw_phases = sample.get("phases")
     if not isinstance(raw_phases, Mapping):
         raise CalibrationError(f"{label} phases must be an object")
-    expected_phases = set(context["planned_phases"])
-    supplied_phases = {str(name) for name in raw_phases}
-    if supplied_phases != expected_phases:
-        missing = sorted(expected_phases - supplied_phases)
-        unexpected = sorted(supplied_phases - expected_phases)
-        details = []
-        if missing:
-            details.append(f"missing phases: {', '.join(missing)}")
-        if unexpected:
-            details.append(
-                f"unexpected phases: {', '.join(unexpected)}"
-            )
-        raise CalibrationError(f"{label} {'; '.join(details)}")
+    mismatch = _phase_set_mismatch(
+        set(context["planned_phases"]),
+        {str(name) for name in raw_phases},
+    )
+    if mismatch:
+        raise CalibrationError(f"{label} {mismatch}")
     peaks: dict[str, int] = {}
     for phase in context["planned_phases"]:
         raw_phase = raw_phases.get(phase)
@@ -326,7 +335,7 @@ def _normalize_serving_runner_environment(
             f"{label} environment total_memory_bytes must be a positive "
             "integer"
         )
-    expected_memory_bytes = int(context["profile"]["memory_bytes"])
+    expected_memory_bytes = _target_memory_bytes(context)
     capacity_difference_bytes = total_memory_bytes - expected_memory_bytes
     capacity_difference_percent = (
         abs(capacity_difference_bytes) / expected_memory_bytes * 100

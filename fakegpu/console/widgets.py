@@ -76,9 +76,7 @@ def memory_pair(used: int, total: int) -> str:
     return f"{size(used)}/{size(total)}"
 
 
-def duration(seconds: float | None) -> str:
-    if seconds is None:
-        return "-"
+def duration(seconds: float) -> str:
     seconds = int(seconds)
     if seconds < 60:
         return f"{seconds}s"
@@ -117,16 +115,14 @@ def bar(percent: float | None, width: int, color: str | None = None) -> Text:
     return Text.assemble(("█" * filled, color or level_style(percent)), ("░" * (width - filled), "dim"))
 
 
-def sparkline(
-    values: Sequence[float | None], width: int, maximum: float = 100.0, color: str | None = None
-) -> Text:
+def sparkline(values: Sequence[float | None], width: int, color: str) -> Text:
     text = Text()
     for value in list(values)[-width:]:
         if value is None:
             text.append(" ")
         else:
-            index = min(len(SPARK) - 1, int(max(0.0, value) / maximum * (len(SPARK) - 1) + 0.5))
-            text.append(SPARK[index], style=color or level_style(value / maximum * 100))
+            index = min(len(SPARK) - 1, int(max(0.0, value) / 100 * (len(SPARK) - 1) + 0.5))
+            text.append(SPARK[index], style=color)
     return text
 
 
@@ -279,7 +275,7 @@ class GpuCard(Static):
 
     def show(self, device: dict[str, Any], warning_percent: float) -> None:
         memory, telemetry = device["memory"], device["telemetry"]
-        history = device.get("history", {})
+        history = device["history"]
         percent = memory["percent"]
         self.key = device_key(device)
         self.set_class(device["process_count"] > 0, "busy")
@@ -317,8 +313,8 @@ class GpuCard(Static):
             lines += [Text("sensors N/A", style="dim"), Text(""), Text("")]
         half = (self.BAR + 10) // 2
         lines.append(Text.assemble(
-            ("mem ", COLORS["memory"]), sparkline(history.get("memory_percent", []), half, color=COLORS["memory"]),
-            (" util ", COLORS["gpu"]), sparkline(history.get("gpu", []), half, color=COLORS["gpu"]),
+            ("mem ", COLORS["memory"]), sparkline(history["memory_percent"], half, color=COLORS["memory"]),
+            (" util ", COLORS["gpu"]), sparkline(history["gpu"], half, color=COLORS["gpu"]),
         ))
         for line in lines:
             line.no_wrap, line.overflow = True, "ellipsis"

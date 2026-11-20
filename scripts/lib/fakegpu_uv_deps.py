@@ -3,14 +3,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
+
+_QUOTED = re.compile(r'"([^"]*)"')
 
 
 def _load_with_tomllib(pyproject_path: Path) -> dict | None:
     try:
         import tomllib  # Python 3.11+
-    except Exception:
+    except ImportError:
         return None
     return tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
@@ -43,19 +46,6 @@ def _parse_fakegpu_uv_section(pyproject_text: str) -> dict[str, list[str]]:
 
     in_section = False
     current_key: str | None = None
-    collecting = False
-
-    def add_items_from_line(key: str, line: str) -> None:
-        i = 0
-        while True:
-            start = line.find('"', i)
-            if start == -1:
-                break
-            end = line.find('"', start + 1)
-            if end == -1:
-                break
-            deps.setdefault(key, []).append(line[start + 1 : end])
-            i = end + 1
 
     for raw in pyproject_text.splitlines():
         line = _strip_toml_comment(raw).strip()
@@ -74,10 +64,11 @@ def _parse_fakegpu_uv_section(pyproject_text: str) -> dict[str, list[str]]:
         if not in_section:
             continue
 
-        if collecting and current_key is not None:
-            add_items_from_line(current_key, line)
+        if current_key is not None:
+            items = _QUOTED.findall(line)
+            if items:
+                deps.setdefault(current_key, []).extend(items)
             if "]" in line:
-                collecting = False
                 current_key = None
             continue
 
@@ -89,12 +80,11 @@ def _parse_fakegpu_uv_section(pyproject_text: str) -> dict[str, list[str]]:
             continue
 
         if "[" in rhs:
-            current_key = key
-            collecting = True
-            add_items_from_line(current_key, rhs)
-            if "]" in rhs:
-                collecting = False
-                current_key = None
+            items = _QUOTED.findall(rhs)
+            if items:
+                deps.setdefault(key, []).extend(items)
+            if "]" not in rhs:
+                current_key = key
 
     return deps
 

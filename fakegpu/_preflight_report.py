@@ -30,10 +30,11 @@ def _fmt_bytes(value: int) -> str:
 
 
 def render_markdown_report(report: dict[str, Any]) -> str:
-    status = report.get("status", "UNKNOWN")
-    stage = report.get("stage", "unknown")
-    runtime = report.get("runtime", "unknown")
-    has_safety_factor = any("tracked_peak_memory" in dev for dev in report.get("devices", []) if isinstance(dev, dict))
+    status = report["status"]
+    stage = report["stage"]
+    runtime = report["runtime"]
+    devices = report["devices"]
+    has_safety_factor = any("tracked_peak_memory" in dev for dev in devices)
     device_header = "| GPU | Name | Peak | Total | Headroom | Allocations |"
     device_rule = "|---:|---|---:|---:|---:|---:|"
     if has_safety_factor:
@@ -46,7 +47,7 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         f"**Status:** `{status}`",
         f"**Runtime:** `{runtime}`",
         f"**Stage:** `{stage}`",
-        f"**Tracking confidence:** `{report.get('tracking_confidence', 'unknown')}`",
+        f"**Tracking confidence:** `{report['tracking_confidence']}`",
         "",
         "## Summary",
         "",
@@ -55,7 +56,7 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         "## Command",
         "",
         "```bash",
-        shlex.join([str(part) for part in report.get("command", [])]),
+        shlex.join(report["command"]),
         "```",
         "",
         "## Device Memory",
@@ -63,55 +64,44 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         device_header,
         device_rule,
     ]
-    for dev in report.get("devices", []):
+    for dev in devices:
+        cells = [str(dev["index"]), dev["name"]]
         if has_safety_factor:
-            lines.append(
-                "| {index} | {name} | {tracked} | {estimated} | {total} | {headroom} | {allocs} |".format(
-                    index=dev.get("index", 0),
-                    name=dev.get("name", ""),
-                    tracked=_fmt_bytes(int(dev.get("tracked_peak_memory", dev.get("peak_memory", 0)))),
-                    estimated=_fmt_bytes(int(dev.get("peak_memory", 0))),
-                    total=_fmt_bytes(int(dev.get("total_memory", 0))),
-                    headroom=_fmt_bytes(int(dev.get("headroom_bytes", 0))),
-                    allocs=int(dev.get("allocation_count", 0)),
-                )
-            )
-        else:
-            lines.append(
-                "| {index} | {name} | {peak} | {total} | {headroom} | {allocs} |".format(
-                    index=dev.get("index", 0),
-                    name=dev.get("name", ""),
-                    peak=_fmt_bytes(int(dev.get("peak_memory", 0))),
-                    total=_fmt_bytes(int(dev.get("total_memory", 0))),
-                    headroom=_fmt_bytes(int(dev.get("headroom_bytes", 0))),
-                    allocs=int(dev.get("allocation_count", 0)),
-                )
-            )
+            cells.append(_fmt_bytes(dev.get("tracked_peak_memory", dev["peak_memory"])))
+        cells.extend(
+            [
+                _fmt_bytes(dev["peak_memory"]),
+                _fmt_bytes(dev["total_memory"]),
+                _fmt_bytes(dev["headroom_bytes"]),
+                str(dev["allocation_count"]),
+            ]
+        )
+        lines.append(f"| {' | '.join(cells)} |")
 
-    memory_estimation = report.get("memory_estimation")
-    if isinstance(memory_estimation, dict) and memory_estimation.get("method") == "empirical_repeated_upper_bound":
+    memory_estimation = report["memory_estimation"]
+    if memory_estimation["method"] == "empirical_repeated_upper_bound":
         lines.extend(
             [
                 "",
                 "## Empirical Memory Calibration",
                 "",
-                f"- source: `{memory_estimation.get('source')}`",
-                f"- workload: `{memory_estimation.get('workload')}`",
-                f"- workload signature: `{memory_estimation.get('workload_signature')}`",
-                f"- metric: `{memory_estimation.get('metric')}`",
+                f"- source: `{memory_estimation['source']}`",
+                f"- workload: `{memory_estimation['workload']}`",
+                f"- workload signature: `{memory_estimation['workload_signature']}`",
+                f"- metric: `{memory_estimation['metric']}`",
                 "- metric sources: `{}`".format(
                     ", ".join(
                         sorted(
                             {
                                 str(dev.get("memory_calibration_metric_source"))
-                                for dev in report.get("devices", [])
-                                if isinstance(dev, dict) and dev.get("memory_calibration_metric_source")
+                                for dev in devices
+                                if dev.get("memory_calibration_metric_source")
                             }
                         )
                     )
                 ),
-                f"- matched profiles: `{', '.join(memory_estimation.get('matched_profiles', []))}`",
-                f"- matched devices: `{memory_estimation.get('matched_device_count')}`",
+                f"- matched profiles: `{', '.join(memory_estimation['matched_profiles'])}`",
+                f"- matched devices: `{memory_estimation['matched_device_count']}`",
             ]
         )
 
@@ -119,14 +109,14 @@ def render_markdown_report(report: dict[str, Any]) -> str:
     allocation_rows: list[str] = []
     allocation_has_stack = any(
         alloc.get("stack")
-        for dev in report.get("devices", [])
-        for alloc in (dev.get("largest_allocations", []) or [])
+        for dev in devices
+        for alloc in dev["largest_allocations"]
     )
-    for dev in report.get("devices", []):
-        dev_index = int(dev.get("index", 0))
-        for stage, peak in sorted((dev.get("peak_by_stage") or {}).items()):
-            stage_rows.append(f"| {dev_index} | `{stage}` | {_fmt_bytes(int(peak))} |")
-        for alloc in dev.get("largest_allocations", []) or []:
+    for dev in devices:
+        dev_index = dev["index"]
+        for stage, peak in sorted(dev["peak_by_stage"].items()):
+            stage_rows.append(f"| {dev_index} | `{stage}` | {_fmt_bytes(peak)} |")
+        for alloc in dev["largest_allocations"]:
             origin = _format_stack_origin(alloc.get("stack")) if allocation_has_stack else ""
             row = "| {device} | {size} | `{dtype}` | `{shape}` | `{stage}` | `{category}` |".format(
                 device=int(alloc.get("device", dev_index)),
@@ -155,13 +145,11 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         )
 
     category_rows: list[str] = []
-    for dev in report.get("devices", []):
-        dev_index = int(dev.get("index", 0))
-        categories = dev.get("current_bytes_by_category") or {}
-        for category, size in sorted(categories.items()):
-            category_rows.append(f"| {dev_index} | `{category}` | {_fmt_bytes(int(size))} |")
+    for dev in devices:
+        for category, size in sorted(dev["current_bytes_by_category"].items()):
+            category_rows.append(f"| {dev['index']} | `{category}` | {_fmt_bytes(int(size))} |")
 
-    if report.get("devices"):
+    if devices:
         if not category_rows:
             category_rows.append("| 0 | `_none_live` | 0 B |")
         lines.extend(
@@ -192,13 +180,13 @@ def render_markdown_report(report: dict[str, Any]) -> str:
             ]
         )
 
-    errors = report.get("errors", [])
+    errors = report["errors"]
     if errors:
         lines.extend(["", "## Failure Reason", ""])
         for error in errors:
-            lines.append(f"- `{error.get('type', 'Error')}`: {error.get('message', '')}")
+            lines.append(f"- `{error['type']}`: {error['message']}")
 
-    warnings = report.get("warnings", [])
+    warnings = report["warnings"]
     if warnings:
         lines.extend(["", "## Warnings", ""])
         for warning in warnings:
@@ -209,7 +197,7 @@ def render_markdown_report(report: dict[str, Any]) -> str:
             "",
             "## Confidence",
             "",
-            _confidence_sentence(str(report.get("tracking_confidence", "unknown"))),
+            _confidence_sentence(report["tracking_confidence"]),
             "",
             "## Suggested Next Steps",
             "",
@@ -222,8 +210,8 @@ def render_markdown_report(report: dict[str, Any]) -> str:
             "",
             "## Logs",
             "",
-            f"- stdout: `{report.get('logs', {}).get('stdout')}`",
-            f"- stderr: `{report.get('logs', {}).get('stderr')}`",
+            f"- stdout: `{report['logs']['stdout']}`",
+            f"- stderr: `{report['logs']['stderr']}`",
             "",
         ]
     )
@@ -231,16 +219,21 @@ def render_markdown_report(report: dict[str, Any]) -> str:
 
 
 def _summary_sentence(report: dict[str, Any]) -> str:
-    status = str(report.get("status", "UNKNOWN"))
-    stage = str(report.get("stage", "unknown"))
-    confidence = str(report.get("tracking_confidence", "unknown"))
-    peak = _total_peak_memory(report)
-    headroom = _min_headroom(report)
-    target = _target_profile_text(report)
-    factor = float(report.get("memory_safety_factor", 1.0) or 1.0)
-    margin = int(report.get("memory_safety_margin_bytes", 0) or 0)
-    estimation = report.get("memory_estimation")
-    empirical = isinstance(estimation, dict) and estimation.get("method") == "empirical_repeated_upper_bound"
+    status = report["status"]
+    stage = report["stage"]
+    confidence = report["tracking_confidence"]
+    peak = sum(dev["peak_memory"] for dev in report["devices"])
+    headroom = min((dev["headroom_bytes"] for dev in report["devices"]), default=0)
+    target = (
+        ", ".join(
+            f"{item['profile_id']} x {item['count']}"
+            for item in report["target_profiles"]
+        )
+        or "the selected target profile"
+    )
+    factor = report["memory_safety_factor"]
+    margin = report["memory_safety_margin_bytes"]
+    empirical = report["memory_estimation"]["method"] == "empirical_repeated_upper_bound"
     peak_label = "estimated peak memory" if empirical or factor > 1.0 or margin > 0 else "peak tracked memory"
 
     if status == STATUS_PASS_FIT:
@@ -275,8 +268,8 @@ def _confidence_sentence(confidence: str) -> str:
 
 
 def _next_steps(report: dict[str, Any]) -> list[str]:
-    status = str(report.get("status", "UNKNOWN"))
-    confidence = str(report.get("tracking_confidence", "unknown"))
+    status = report["status"]
+    confidence = report["tracking_confidence"]
     steps: list[str] = []
 
     if status == STATUS_PASS_FIT:
@@ -296,36 +289,6 @@ def _next_steps(report: dict[str, Any]) -> list[str]:
         steps.append("- Re-run preflight after the command reaches the target stage.")
 
     return steps
-
-
-def _target_profile_text(report: dict[str, Any]) -> str:
-    profiles = report.get("target_profiles")
-    if not isinstance(profiles, list) or not profiles:
-        return "the selected target profile"
-    parts: list[str] = []
-    for item in profiles:
-        if not isinstance(item, dict):
-            continue
-        profile_id = item.get("profile_id", "unknown")
-        count = item.get("count", 1)
-        parts.append(f"{profile_id} x {count}")
-    return ", ".join(parts) or "the selected target profile"
-
-
-def _total_peak_memory(report: dict[str, Any]) -> int:
-    total = 0
-    for dev in report.get("devices", []) or []:
-        if isinstance(dev, dict):
-            total += int(dev.get("peak_memory", 0) or 0)
-    return total
-
-
-def _min_headroom(report: dict[str, Any]) -> int:
-    headrooms: list[int] = []
-    for dev in report.get("devices", []) or []:
-        if isinstance(dev, dict):
-            headrooms.append(int(dev.get("headroom_bytes", 0) or 0))
-    return min(headrooms) if headrooms else 0
 
 
 def _format_stack_origin(stack: Any) -> str:

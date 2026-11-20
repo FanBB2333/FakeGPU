@@ -53,6 +53,8 @@ def main():
     library.nvmlDeviceGetPowerUsage.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
     library.nvmlDeviceGetFieldValues.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(_FieldValue)]
     library.nvmlDeviceGetEncoderStats.argtypes = [ctypes.c_void_p, *[ctypes.POINTER(ctypes.c_uint)] * 3]
+    # NVML answers queries only between nvmlInit and the last nvmlShutdown.
+    assert library.nvmlInit_v2() == 0
     for index, device in enumerate(devices):
         handle, power = ctypes.c_void_p(), ctypes.c_uint()
         assert library.nvmlDeviceGetHandleByIndex_v2(index, ctypes.byref(handle)) == 0
@@ -72,6 +74,7 @@ def main():
     outputs = [ctypes.cast(ctypes.byref(stats, offset), ctypes.POINTER(ctypes.c_uint)) for offset in (0, 8, 16)]
     assert library.nvmlDeviceGetEncoderStats(handle, *outputs) == 0
     assert list(stats) == [0, 0xDEADBEEF, 0, 0xDEADBEEF, 0, 0xDEADBEEF]
+    assert library.nvmlShutdown() == 0
     print(f"PASS: full-load modeled telemetry for {len(devices)} catalog profiles via native NVML")
 
 

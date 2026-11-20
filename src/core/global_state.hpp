@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -18,27 +19,8 @@ struct HostIoStats {
     uint64_t memcpy_bytes = 0;
 };
 
-struct DeviceReportStats {
-    int index = -1;
-    std::string profile_id;
-    std::string name;
-    std::string uuid;
-    std::string pci_bus_id;
-    std::string architecture;
-    int compute_major = 0;
-    int compute_minor = 0;
-    int sm_count = 0;
-    int memory_bus_width_bits = 0;
-    int core_clock_mhz = 0;
-    int memory_clock_mhz = 0;
-    int l2_cache_bytes = 0;
-    unsigned int typical_power_usage_mw = 0;
-    unsigned int max_power_limit_mw = 0;
-    std::vector<std::string> supported_types;
-    uint64_t total_memory = 0;
-    uint64_t used_memory_current = 0;
-    uint64_t used_memory_peak = 0;
-
+// Per-device activity counters shared by the runtime stats and the report.
+struct DeviceCounters {
     uint64_t alloc_calls = 0;
     uint64_t alloc_bytes = 0;
     uint64_t free_calls = 0;
@@ -64,6 +46,29 @@ struct DeviceReportStats {
 
     std::unordered_map<std::string, uint64_t> kernel_launches;
     uint64_t kernel_launch_total = 0;
+};
+
+struct DeviceReportStats : DeviceCounters {
+    int index = -1;
+    std::string profile_id;
+    std::string name;
+    std::string uuid;
+    std::string pci_bus_id;
+    std::string architecture;
+    int compute_major = 0;
+    int compute_minor = 0;
+    int sm_count = 0;
+    int memory_bus_width_bits = 0;
+    int core_clock_mhz = 0;
+    int memory_clock_mhz = 0;
+    int l2_cache_bytes = 0;
+    unsigned int typical_power_usage_mw = 0;
+    unsigned int max_power_limit_mw = 0;
+    std::vector<std::string> supported_types;
+    uint64_t total_memory = 0;
+    uint64_t used_memory_current = 0;
+    uint64_t used_memory_peak = 0;
+
     std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> gemm_by_dtype;
     std::vector<std::tuple<std::string, std::string, uint64_t>> compat_events;
     std::vector<std::tuple<std::string, std::string, std::string, uint64_t>>
@@ -84,8 +89,29 @@ public:
     };
 
     void initialize();
+
+    // Two index spaces. CUDA ordinals follow CUDA_DEVICE_ORDER and
+    // CUDA_VISIBLE_DEVICES (CUDA Programming Guide, "Environment Variables");
+    // physical indices are the PCI-ordered inventory NVML, nvidia-smi and
+    // the reports use, which the mask never filters.
+    //
+    // Every call below that takes or returns a device, unless it says
+    // "physical", speaks CUDA ordinals: get_device_count/get_device,
+    // set/get_current_device, the allocation calls, record_memcpy_peer,
+    // record_compat_event, record_unsupported_api and resolve_device_for_ptr.
+    // Device::index, snapshot_device_report, snapshot_device_topology,
+    // snapshot_device_transfer and the MIG lookups are physical.
+    enum class CudaVisibility {
+        Visible,        // at least one CUDA device
+        NoDevice,       // empty mask or first entry invalid: cuInit fails with CUDA_ERROR_NO_DEVICE
+        InvalidDevice,  // a device listed twice: cuInit fails with CUDA_ERROR_INVALID_DEVICE
+    };
     int get_device_count() const;
-    Device& get_device(int index);
+    Device& get_device(int ordinal);
+    CudaVisibility cuda_visibility() const;
+    int physical_index(int ordinal) const;   // -1 if the ordinal is out of range
+    int get_physical_device_count() const;
+    Device& get_physical_device(int index);
     void set_current_device(int device);
     int get_current_device() const;
 
@@ -96,7 +122,9 @@ public:
     bool release_allocation(void* ptr, size_t& size, int& device);
     bool release_host_allocation(void* ptr, size_t& size, int& device);
     bool get_allocation_info(void* ptr, size_t& size, int& device) const;
+    // Matches any address inside a tracked allocation, like the CUDA pointer queries.
     bool get_allocation_info_ex(void* ptr, size_t& size, int& device, AllocationKind& kind) const;
+    bool get_allocation_range(const void* ptr, void*& base, size_t& size) const;
     std::vector<std::pair<void*, size_t>> snapshot_allocations() const;
 
     int resolve_device_for_ptr(const void* ptr, int fallback_device) const;
@@ -141,37 +169,12 @@ private:
     GlobalState();
     ~GlobalState() = default;
 
-    struct DeviceRuntimeStats {
-        uint64_t alloc_calls = 0;
-        uint64_t alloc_bytes = 0;
-        uint64_t free_calls = 0;
-        uint64_t free_bytes = 0;
-
-        uint64_t memcpy_h2d_calls = 0;
-        uint64_t memcpy_h2d_bytes = 0;
-        uint64_t memcpy_d2h_calls = 0;
-        uint64_t memcpy_d2h_bytes = 0;
-        uint64_t memcpy_d2d_calls = 0;
-        uint64_t memcpy_d2d_bytes = 0;
-        uint64_t memcpy_peer_tx_calls = 0;
-        uint64_t memcpy_peer_tx_bytes = 0;
-        uint64_t memcpy_peer_rx_calls = 0;
-        uint64_t memcpy_peer_rx_bytes = 0;
-        uint64_t memset_calls = 0;
-        uint64_t memset_bytes = 0;
-
-        uint64_t cublas_gemm_calls = 0;
-        uint64_t cublas_gemm_flops = 0;
-        uint64_t cublaslt_matmul_calls = 0;
-        uint64_t cublaslt_matmul_flops = 0;
-
+    struct DeviceRuntimeStats : DeviceCounters {
         struct GemmDtypeStats {
             uint64_t calls = 0;
             uint64_t flops = 0;
         };
 
-        std::unordered_map<std::string, uint64_t> kernel_launches;
-        uint64_t kernel_launch_total = 0;
         std::unordered_map<int, GemmDtypeStats> gemm_by_dtype;
 
         struct CompatEvent {
@@ -193,6 +196,11 @@ private:
     bool initialized = false;
     std::vector<Device> devices;
     std::vector<Device> mig_devices;
+    // CUDA ordinal -> physical device index, and the Device CUDA reports for
+    // that ordinal (the GPU, or the MIG instance a MIG- entry names).
+    std::vector<int> cuda_physical;
+    std::vector<Device*> cuda_devices;
+    CudaVisibility visibility = CudaVisibility::Visible;
     ModeledDeviceTopology device_topology;
     mutable LinkTrafficModel link_traffic;
     ModeledFaultModel fault_model;
@@ -207,19 +215,24 @@ private:
 
     struct AllocationRecord {
         size_t size = 0;
-        int device = 0;
+        int device = 0;   // physical index
+        int ordinal = 0;  // CUDA ordinal it was allocated on
         AllocationKind kind = AllocationKind::Device;
     };
 
-    std::unordered_map<void*, AllocationRecord> allocations;
+    // Ordered by base address so interior pointers resolve to their allocation.
+    std::map<void*, AllocationRecord> allocations;
 
-    const AllocationRecord* allocation_for_ptr_nolock(const void* ptr, size_t& offset) const;
+    std::map<void*, AllocationRecord>::const_iterator find_allocation_nolock(const void* ptr) const;
+    // Physical index of the allocation holding ptr, else fallback_device.
     int resolve_device_for_ptr_nolock(const void* ptr, int fallback_device) const;
+    int physical_index_nolock(int ordinal) const;
+    int current_physical_nolock() const;
     DeviceRuntimeStats* stats_for_device_nolock(int device);
     const DeviceRuntimeStats* stats_for_device_nolock(int device) const;
     static void saturating_add_u64(uint64_t& target, uint64_t value);
 
-    bool register_allocation_nolock(void* ptr, size_t size, int device, AllocationKind kind);
+    bool register_allocation_nolock(void* ptr, size_t size, int ordinal, AllocationKind kind);
 };
 
 } // namespace fake_gpu

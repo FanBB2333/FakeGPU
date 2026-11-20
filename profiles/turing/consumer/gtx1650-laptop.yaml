@@ -1,6 +1,6 @@
 id: gtx1650-laptop
 name: Fake NVIDIA GeForce GTX 1650 Laptop GPU
-torch_name: NVIDIA GeForce GTX 1650 Laptop GPU
+torch_name: NVIDIA GeForce GTX 1650
 official_model: GeForce GTX 1650
 architecture: turing
 compute_major: 7

@@ -11,6 +11,9 @@ from ._api import is_initialized as _native_is_initialized
 
 RuntimeName = Literal["auto", "native", "fakecuda"]
 
+# Only direct init() owns these exports. A launcher supplies its already filtered layout.
+_visibility_exports: dict[str, tuple[str | None, str]] = {}
+
 
 @dataclass(frozen=True)
 class RuntimeInitResult:
@@ -53,13 +56,9 @@ def init(
             "Expected one of: 'auto', 'native', 'fakecuda'."
         )
 
-    selected_runtime = runtime_norm
-    if selected_runtime == "auto":
-        # The vendored fakegpu._upstream backend ships with this package, so
-        # the fakecuda runtime is always available and "auto" resolves to it.
-        selected_runtime = "fakecuda"
-
-    if selected_runtime == "native":
+    # The vendored fakegpu._upstream backend ships with this package, so the
+    # fakecuda runtime is always available and "auto" resolves to it.
+    if runtime_norm == "native":
         config = _FakeGpuRuntimeConfig(
             mode=mode,
             oom_policy=oom_policy,
@@ -91,7 +90,6 @@ def init(
         unsupported_api=unsupported_api,
         dist_mode=dist_mode,
         update_env=update_env,
-        force=force,
     )
 
 
@@ -149,7 +147,6 @@ def _init_fakecuda_runtime(
     unsupported_api: str | None = None,
     dist_mode: str | None = None,
     update_env: bool = True,
-    force: bool = False,
 ) -> RuntimeInitResult:
     config = _FakeGpuRuntimeConfig(
         mode=mode,
@@ -161,11 +158,20 @@ def _init_fakecuda_runtime(
     from ._api import _apply_config_env
 
     _apply_config_env(configured_env, config)
-    configured_env["FAKEGPU_RUNTIME"] = "fakecuda"
     if update_env:
         os.environ.update(configured_env)
     os.environ["FAKEGPU_RUNTIME"] = "fakecuda"
     from .machine.client import attach_environment
+
+    # Re-evaluate the mask against the full layout on each init. Preserve any
+    # intervening changes the caller made to these environment variables.
+    for name, (previous, exported) in _visibility_exports.items():
+        if os.environ.get(name) == exported:
+            if previous is None:
+                os.environ.pop(name)
+            else:
+                os.environ[name] = previous
+    _visibility_exports.clear()
 
     attach_environment(
         explicit_layout=profile is not None or devices is not None or device_count is not None
@@ -185,6 +191,24 @@ def _init_fakecuda_runtime(
     if effective_device_count is not None:
         os.environ["FAKEGPU_DEVICE_COUNT"] = str(effective_device_count)
 
+    # CUDA_VISIBLE_DEVICES picks among the simulated GPUs as CUDA does among
+    # real ones. ``fakegpu run`` has already applied it when it sets
+    # FAKEGPU_PHYSICAL_INDICES, so the layout is not filtered twice.
+    if "FAKEGPU_PHYSICAL_INDICES" not in os.environ:
+        visible_count = _apply_cuda_visible_devices(effective_device_count)
+        if visible_count == 0:
+            import warnings
+
+            warnings.warn(
+                "fakegpu: CUDA_VISIBLE_DEVICES="
+                f"{os.environ.get('CUDA_VISIBLE_DEVICES')!r} hides every simulated GPU; "
+                "torch.cuda is left unpatched, as CUDA would report no device",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            return RuntimeInitResult(runtime="fakecuda", backend="none")
+        effective_device_count = visible_count
+
     # Resolve topology only after the daemon and explicit arguments have
     # selected the devices; an inherited platform must see that final layout.
     if platform is not None or os.environ.get("FAKEGPU_PLATFORM"):
@@ -199,6 +223,40 @@ def _init_fakecuda_runtime(
 
     patch_result = patch_torch(num_devices=effective_device_count)
     return RuntimeInitResult(runtime="fakecuda", backend=patch_result.backend)
+
+
+def _apply_cuda_visible_devices(device_count: int | None) -> int | None:
+    """Narrow FAKEGPU_PROFILES to the GPUs ``CUDA_VISIBLE_DEVICES`` leaves visible.
+
+    Returns the visible GPU count, or ``device_count`` unchanged when the mask
+    is unset or keeps every GPU in order. The visible GPUs keep their
+    physical indices in FAKEGPU_PHYSICAL_INDICES, so nvidia-smi and the
+    reports list them as on a real machine.
+    """
+
+    mask = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if mask is None:
+        return device_count
+    from ._profiles import _resolve_per_device_profiles
+    from ._run_bootstrap import PHYSICAL_INDICES_ENV, visible_gpus
+
+    count = device_count if device_count is not None else int(os.environ.get("FAKEGPU_DEVICE_COUNT") or 8)
+    layout = [str(entry["profile_id"]) for entry in _resolve_per_device_profiles(count)]
+    visible = visible_gpus(",".join(layout), mask)
+    if visible is None:
+        return device_count
+    profiles, physical = visible
+    if not profiles:
+        return 0
+    exports = {
+        "FAKEGPU_PROFILES": ",".join(profiles),
+        "FAKEGPU_DEVICE_COUNT": str(len(profiles)),
+        PHYSICAL_INDICES_ENV: ",".join(map(str, physical)),
+    }
+    for name, value in exports.items():
+        _visibility_exports[name] = os.environ.get(name), value
+    os.environ.update(exports)
+    return len(profiles)
 
 
 def _infer_device_count_from_devices(devices: str | Sequence[str] | None) -> int | None:

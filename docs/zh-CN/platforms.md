@@ -75,11 +75,12 @@ GPU 设计的基板上，彼此通过 NVLink 通信，通常经过 NVSwitch 芯�
 按拓扑作答；对没有 peer access 的 GPU 对，`cudaDeviceEnablePeerAccess` 返回
 `cudaErrorPeerAccessUnsupported`。
 
-`fakegpu nvidia-smi topo -m` 用 NVIDIA 的图例显示结果：
+`fakegpu nvidia-smi topo -m` 以 nvidia-smi 的制表符布局和图例显示结果，
+之后是 FakeGPU 的平台说明：
 
 ```text
-      GPU0  GPU1  GPU2  GPU3  GPU4  GPU5  GPU6  GPU7  NUMA Affinity
-GPU0  X     NV1   NV1   NV2   NV2   SYS   SYS   SYS   0
+        GPU0    GPU1    GPU2    GPU3    GPU4    GPU5    GPU6    GPU7    CPU Affinity    NUMA Affinity   GPU NUMA ID
+GPU0     X      NV1     NV1     NV2     NV2     SYS     SYS     SYS     N/A     0               N/A
 ```
 
 ## 拷贝时间与吞吐

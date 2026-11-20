@@ -80,7 +80,7 @@ def main() -> int:
     ):
         _require(nccl_symbols, symbol, nccl)
     for dependency in nccl_dependencies:
-        if dependency == "libcuda.so.1" or dependency.startswith("libcuda."):
+        if dependency.startswith("libcuda."):
             raise SystemExit(
                 f"{nccl}: fake NCCL must not depend on {dependency}; "
                 "hybrid mode needs the process to retain its real CUDA driver"
@@ -147,7 +147,7 @@ def _require(symbols: set[str], symbol: str, path: Path) -> None:
 
 def _forbid(symbols: set[str], symbol: str, path: Path) -> None:
     if symbol in symbols:
-        raise SystemExit(f"{path}: Runtime symbol {symbol} leaked into CUDA Driver library")
+        raise SystemExit(f"{path}: forbidden symbol {symbol} is exported")
 
 
 if __name__ == "__main__":

@@ -177,6 +177,21 @@ def test_packing_requires_a_horizon_and_exclusive_sampler():
             )
 
 
+def test_packed_axolotl_planning_epochs_rejected_before_file_or_gpu_access():
+    # Axolotl converts num_epochs for sample packing from its multipack length
+    # estimate, so a packed Axolotl horizon must be given in optimizer steps.
+    from fakegpu.finetune_runner import run_finetuning
+
+    with pytest.raises(ValueError, match="max_steps"):
+        run_finetuning(
+            "missing.json",
+            framework="axolotl",
+            profile_id="a100",
+            planning_epochs=2,
+            packing_seed=0,
+        )
+
+
 def test_packing_seed_zero_is_forwarded_without_changing_legacy_commands(tmp_path):
     from fakegpu.finetune_workflow import _native_command
 

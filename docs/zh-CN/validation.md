@@ -69,7 +69,7 @@ Blackwell GPU（PyTorch 2.11.0+cu128、Transformers 5.14.1）上跑过。
 | 原生库拦截 | 构建、库边界、导出符号、preload、显存类型、coordinator 和不支持 API 策略 | **通过** |
 | FakeGPU-SMI 诊断 | 有上限的状态、拓扑/NVLink/MIG 视图、NVML peer/MIG 查询、健康字段和事件报告 | **通过** |
 | 监控 exporter | Prometheus/JSON 快照、有上限的历史和序列数量、异常状态降级及 HTTP 接口 | **通过** |
-| 原生能力清单（2026-10-18 更新） | 5 个能力组、106 个显式 API、93 个强制执行策略的 API | **通过** |
+| 原生能力清单（2026-10-22 更新） | 5 个能力组、109 个显式 API、96 个强制执行策略的 API | **通过** |
 | GPU profile 目录 | 307 个 profile，覆盖 16 种 compute capability（目录更新于 2026-10-16） | **通过** |
 | CPU 数值模拟 | GEMM、cuBLASLt、批量 GEMM、BLAS1/2 和 FP16，共 8 组测试 | **通过** |
 | CUDA 版 PyTorch 原生矩阵乘法 | 需要带 CUDA 的 PyTorch | **当前 CPU-only 主机未执行** |
@@ -109,10 +109,10 @@ GitHub CI 在 Python 3.10–3.12 上执行 Python 测试，并在 Linux 和 macO
 | 在线 serving prefix cache | 同一 decoder、8 个活跃请求、4K prompt + 256 个生成 token、paged BF16 KV，独立 cache → 共享一个 1K prefix | **4.25 → 3.38 GiB**（减少 20.6%） | 共享/私有 paged block 公式 |
 | 混合 chat/completion serving | 同一 decoder，prompt 为 4K/8K/2K，生成长度为 256/512/1024，独立 KV → 两个 chat 请求共享 1K system prefix | **1.97 → 1.84 GiB** decode KV（减少 6.3%） | 异构请求集公式和 chat/RAG 矩阵 |
 | Speculative target 调用 | 每次 verification 生成 5 个 draft token，假设每个 token 独立接受率为 70% | 每个 target step 的预期输出 token 为 **1.00 → 2.94**，不代表吞吐提升 | 几何接受率公式和双模型显存测试 |
-| LLM 训练 | 8B BF16 参数、AdamW、4 张 GPU、activation checkpointing，replicated → full shard | **104.31 → 26.54 GiB**/rank（减少 74.6%） | 训练计划阶段模型 |
+| LLM 训练 | 8B BF16 参数、AdamW、4 张 GPU、activation checkpointing，replicated → full shard | **149.01 → 37.72 GiB**/rank（减少 74.7%） | 训练计划阶段模型 |
 | Stable Diffusion v1.5 生成 | 512²、batch 1、FP16、CFG，全部权重常驻 → model offload | **2.61 → 1.72 GiB**（减少 34.3%） | 组件与阶段模型 |
 | SDXL 批量生成 | 1024²、batch 4、FP16、CFG，普通 VAE decode → VAE slicing | **26.64 → 11.64 GiB**（减少 56.3%） | 顺序 VAE batch shape 模型 |
-| SDXL 高分辨率生成 | 2048²、batch 1、FP16、CFG，整图 VAE → 512² VAE tile | **26.64 → 8.28 GiB**（减少 68.9%） | 顺序 VAE tile shape 模型 |
+| SDXL 高分辨率生成 | 2048²、batch 1、FP16、CFG，整图 VAE → 512² VAE tile | **26.64 → 7.92 GiB**（减少 70.3%） | 顺序 VAE tile shape 模型 |
 | PixArt-Sigma DiT 生成 | 1024²、batch 1、FP16、CFG、model offload，denoise 阶段 eager → SDPA | **2.32 → 1.28 GiB**（减少 44.7%） | patch token、交叉注意力与阶段模型 |
 
 - Diffusion profile 的组件参数量来自 [Stable Diffusion v1.5][diffusion-sd15]、

@@ -6,6 +6,9 @@
 - Linux 原生模擬可在 CPU 上執行受支援的 PTX 與相容的 cubin/SASS 指令；不支援的指令與
   啟動特性會明確失敗。macOS 尚不執行這些核心。詳見[框架相容性](frameworks.md)。
 - FakeCUDA 涵蓋專案維護的 Python 與 PyTorch 行為，不支援二進位 CUDA 擴充。
+- FakeCUDA 的亂數在相同 CUDA seed 下可重現，但與真實 GPU 產生的數值不同。
+  每個隨機操作讓 CUDA generator 的 offset 增加 4（建模值）；真實 GPU 上較大的
+  launch 會增加更多。
 - 靜態分析無法解析所有動態 import、生成式 kernel、執行階段 shape 或依賴資料的
   分支。
 - GPU 記憶體估算可能遺漏 backend 私有配置、自訂 operator、allocator 策略與從未
@@ -13,6 +16,9 @@
 - 原生 cuBLAS 中沒有數值實作的演算法、不支援的 GEMM/Lt dtype、layout 或 pointer
   mode，以及略過的 CPU 計算，都依 `FAKEGPU_UNSUPPORTED_API` 處理。設為 `warn` 時
   會記錄警告。設為 `error` 時，呼叫會在寫入輸出前傳回 `CUBLAS_STATUS_NOT_SUPPORTED`。
+- 模擬的裝置記憶體無法與其他行程共用：CUDA IPC 呼叫以及 VMM 可共用 handle 的匯出
+  與匯入都會傳回 not supported。釋放 FakeGPU 從未配置過的指標時預設傳回成功；
+  只有設為 `FAKEGPU_UNSUPPORTED_API=error` 時才會像驅動程式一樣回報錯誤。
 - 對帶有 vision encoder 的模型，`estimate-llm` 與 `plan-serving` 只計入 checkpoint
   權重，不含 vision/projector activation 與 FLOP，報告會標示這一點。decoder token
   數需已包含視覺 token。
@@ -23,8 +29,18 @@
 - Roofline 輸出是分析區間，不代表實測的 kernel 延遲。
 - 分散式耗時包含 coordinator、記憶體複製、socket 與程序排程，不能當作 NCCL、
   NVLink 或 RDMA benchmark。
+- 多程序 FakeCUDA collective 在 CPU 上透過 gloo 執行。跨程序的 FSDP 尚未有測試涵蓋；
+  `torchrun`、`accelerate launch` 與 `multiprocessing` 以外的啟動器需要設定
+  `FAKEGPU_DIST_COLLECTIVES=real`。
+- `fakegpu run` 只為 Python 程序提供模擬 GPU；原生 CUDA 程式需要原生啟動器。它的
+  摘要可能缺少透過 `os._exit()` 或 SIGKILL 結束的程序最後一秒的資料，也不計入 DDP
+  梯度 bucket、CUDA context、函式庫 workspace 或 NCCL 緩衝區。見
+  [`fakegpu run` 的限制](commands.md#limits-of-fakegpu-run)。
 - 建模故障事件只出現在報告中，不會改變 CUDA 執行，也不代表真實的 ECC/Xid 資料。
 - Hybrid 與 passthrough 模式需要相容的實體 CUDA 環境。
+- 不建模 CUDA 預設的 `CUDA_DEVICE_ORDER=FASTEST_FIRST`：模擬 GPU 與 `PCI_BUS_ID`
+  一樣依 PCI 匯流排順序列舉。FakeCUDA 不把 MIG 實例當作 CUDA 裝置提供，
+  `CUDA_VISIBLE_DEVICES` 中的 `MIG-` 項目會讓清單在該處結束。
 - macOS System Integrity Protection 可能移除系統程式的 `DYLD_*` 環境變數。
   原生攔截建議使用 Homebrew、conda 或 pyenv Python。
 

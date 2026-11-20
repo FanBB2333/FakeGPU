@@ -274,6 +274,12 @@ def test_invalid_peak_evidence_is_rejected(runs, field, value):
         estimate_finetuning_memory(runs[:2], pipeline_plan_from_run(runs[2]))
 
 
+def test_missing_peak_evidence_is_rejected(runs):
+    del runs[0]["observation"]["peak_reserved_bytes"]
+    with pytest.raises(FinetuneEstimateError, match="peak_reserved_bytes"):
+        estimate_finetuning_memory(runs[:2], pipeline_plan_from_run(runs[2]))
+
+
 def test_complete_timeline_is_required_for_whole_run_memory_coverage(runs):
     del runs[0]["observation"]["timeline"]
     with pytest.raises((FinetuneEstimateError, ValueError), match="timeline"):

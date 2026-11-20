@@ -13,15 +13,8 @@ import subprocess
 import time
 from uuid import uuid4
 
+from ._local_checkpoint import _stat_marker
 from ._process import process_marker
-
-
-def _canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-
-
-def _digest(value):
-    return hashlib.sha256(_canonical(value).encode()).hexdigest()
 
 
 def _now():
@@ -51,16 +44,8 @@ def _file(path):
             digest.update(chunk)
         after = os.fstat(stream.fileno())
 
-    def marker(value):
-        return (
-            value.st_dev,
-            value.st_ino,
-            value.st_size,
-            value.st_mtime_ns,
-            value.st_ctime_ns,
-        )
-
-    if marker(before) != marker(after) or marker(before) != marker(path.stat()):
+    marker = _stat_marker(before)
+    if marker != _stat_marker(after) or marker != _stat_marker(path.stat()):
         raise ValueError(f"file changed while hashing: {path}")
     return {"bytes": before.st_size, "sha256": digest.hexdigest()}
 
@@ -80,8 +65,7 @@ def _tree(root):
     return result
 
 
-def _source_identity():
-    root = Path(__file__).parent
+def _source_identity(root=Path(__file__).parent):
     return {
         path.relative_to(root).as_posix(): _file(path)
         for path in sorted(root.rglob("*.py"))
@@ -159,7 +143,7 @@ def _execute(
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
-                **({"cwd": cwd} if cwd is not None else {}),
+                cwd=cwd,
             )
         except OSError as exc:
             execution.update(status="failed", error=str(exc), finished_at_utc=_now())

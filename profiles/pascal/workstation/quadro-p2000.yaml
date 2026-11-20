@@ -3,6 +3,7 @@
 id: quadro-p2000
 name: Fake NVIDIA Quadro P2000
 torch_name: Quadro P2000
+canonical: true
 official_model: Quadro P2000
 architecture: pascal
 compute_major: 6

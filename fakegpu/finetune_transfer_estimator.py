@@ -16,20 +16,27 @@ from typing import Any
 
 from ._finetune_batches import _descriptor
 from ._finetune_pipeline_plan import _digest
+from ._finetune_sampler import _integer as _byte_count
 from ._finetune_transfer_plan import (
+    _transfer_plan,
     describe_transfer_components,
-    transfer_plan_from_run,
     transfer_signature,
     validate_transfer_plan,
 )
 from .finetune_estimator import FinetuneEstimateError
-from .finetune_pipeline_estimator import _comparison, _samples as _pipeline_samples
+from .finetune_pipeline_estimator import (
+    _FIELDS,
+    _attach_comparison,
+    _interval,
+    _samples as _pipeline_samples,
+    _timing,
+)
+from .finetune_pipeline_plan import _validate_native_schedule_options
 
 
 SCHEMA_VERSION = "fakegpu.finetune_transfer_estimate.v1"
 COVERAGE_SCHEMA_VERSION = "fakegpu.finetune_transfer_coverage.v1"
 MEMORY_SCHEMA_VERSION = "fakegpu.finetune_transfer_memory.v1"
-_FIELDS = ("wall_seconds", "instrumentation_seconds", "seconds")
 _DATA_BOUND_KINDS = {"setup", "finalization"}
 _MATCH_FIELDS = ("hardware", "memory_allocator", "execution_policy", "cache_regime")
 
@@ -43,21 +50,11 @@ def _requires_target_data(component):
 
 def _sample(run):
     recorded = _pipeline_samples(run)
-    plan = transfer_plan_from_run(run)
+    _validate_native_schedule_options(run)
+    plan = _transfer_plan(run, recorded["plan"])
     components = describe_transfer_components(plan)
-    original = recorded["components"]
-    if len(components) != len(original) or any(
-        any(
-            left[field] != right[field]
-            for field in ("component_id", "kind", "reference")
-        )
-        for left, right in zip(components, original)
-    ):
-        raise FinetuneEstimateError(
-            "transfer components must partition the original native timeline"
-        )
     groups = {}
-    for component, measured in zip(components, original):
+    for component, measured in zip(components, recorded["components"]):
         component["observed"] = deepcopy(measured["observed"])
         groups.setdefault(component["group_id"], []).append(component)
     return {
@@ -262,32 +259,10 @@ def _estimate(plan, samples, setup, components, groups):
         group["target_batch_descriptor_distribution"] = _window_distribution(
             plan, groups[group["group_id"]]
         )
-        group["per_component"] = {}
-        for field in _FIELDS:
-            values = [row["mean"][field] for row in processes]
-            group["per_component"][field] = {
-                "min": min(values),
-                "expected": statistics.mean(values),
-                "max": max(values),
-            }
-        group["predicted"] = {
-            field: {
-                name: value * group["target_components"]
-                for name, value in interval.items()
-            }
-            for field, interval in group["per_component"].items()
-        }
+        group["per_component"], group["predicted"] = _interval(
+            processes, group["target_components"]
+        )
     costs = {group["group_id"]: group["per_component"] for group in coverage}
-
-    def totals(selected):
-        return {
-            field: {
-                name: sum(group["predicted"][field][name] for group in selected)
-                for name in ("min", "expected", "max")
-            }
-            for field in _FIELDS
-        }
-
     return {
         "schema_version": SCHEMA_VERSION,
         "scope": "planned_native_execution_span_with_empirical_shape_transfer",
@@ -347,14 +322,7 @@ def _estimate(plan, samples, setup, components, groups):
             }
             for component in components
         ],
-        "timing": {
-            **totals(coverage),
-            "by_kind": {
-                kind: totals([group for group in coverage if group["kind"] == kind])
-                for kind in sorted({component["kind"] for component in components})
-            },
-            "interval_kind": "sum_of_component_process_mean_extrema_not_confidence_interval",
-        },
+        "timing": _timing(coverage, components),
         "limitations": [
             "Execution-shape pooling is an empirical approximation. Different token, mask and supervision distributions can have different costs despite matching tensor shapes.",
             "Every planned component requires eligible measurements from at least two independent processes. Missing groups cannot be filled by a total residual or dataset-size ratio.",
@@ -376,6 +344,13 @@ def estimate_finetuning_transfer(
     return _estimate(*_prepare(calibration_runs, target_plan, setup_calibration_runs))
 
 
+def _holdout(calibration_runs, target_run, setup_calibration_runs):
+    target = _sample(target_run)
+    prepared = _prepare(calibration_runs, target["plan"], setup_calibration_runs)
+    _unique([*prepared[1], target])
+    return target, prepared
+
+
 def compare_finetuning_transfer(
     calibration_runs: Sequence[Mapping[str, Any]],
     target_run: Mapping[str, Any],
@@ -383,54 +358,11 @@ def compare_finetuning_transfer(
     setup_calibration_runs: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Predict an independent holdout before consulting its measured timings."""
-    target = _sample(target_run)
-    prepared = _prepare(calibration_runs, target["plan"], setup_calibration_runs)
-    _unique([*prepared[1], target])
+    target, prepared = _holdout(calibration_runs, target_run, setup_calibration_runs)
     result = _estimate(*prepared)
     result["scope"] = "recorded_native_execution_span_shape_transfer_replay"
-    result["target_run"] = {
-        field: deepcopy(target[field]) for field in ("identity", "evidence_sha256")
-    }
-    actuals = {
-        component["component_id"]: component["observed"]
-        for component in target["components"]
-    }
-    for component in result["target_components"]:
-        component["observed"] = deepcopy(actuals[component["component_id"]])
-    for group in result["component_groups"]:
-        group["comparison"] = {
-            field: _comparison(
-                group["predicted"][field]["expected"],
-                sum(actuals[index][field] for index in group["target_component_ids"]),
-            )
-            for field in _FIELDS
-        }
-    result["timing"]["comparison"] = {
-        field: _comparison(
-            result["timing"][field]["expected"],
-            sum(values[field] for values in actuals.values()),
-        )
-        for field in _FIELDS
-    }
-    for kind, values in result["timing"]["by_kind"].items():
-        values["comparison"] = {
-            field: _comparison(
-                values[field]["expected"],
-                sum(
-                    row["observed"][field]
-                    for row in target["components"]
-                    if row["kind"] == kind
-                ),
-            )
-            for field in _FIELDS
-        }
+    _attach_comparison(result, target)
     return result
-
-
-def _byte_count(value, field, *, minimum=1):
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise FinetuneEstimateError(f"{field} must be an integer >= {minimum}")
-    return value
 
 
 def estimate_finetuning_transfer_memory(
@@ -447,9 +379,15 @@ def estimate_finetuning_transfer_memory(
     their workloads in another order or running longer can change fragmentation
     or growth; the envelope is not an inferred peak of the combined target run.
     """
-    plan, samples, setup, components, groups = _prepare(
-        calibration_runs, target_plan, setup_calibration_runs
+    return _memory_estimate(
+        _prepare(calibration_runs, target_plan, setup_calibration_runs),
+        memory_budget_bytes=memory_budget_bytes,
+        reserve_bytes=reserve_bytes,
     )
+
+
+def _memory_estimate(prepared, *, memory_budget_bytes, reserve_bytes):
+    plan, samples, setup, components, groups = prepared
     coverage = _coverage(samples, setup, groups)
     if any(not group["covered"] for group in coverage):
         raise FinetuneEstimateError(
@@ -547,15 +485,9 @@ def compare_finetuning_transfer_memory(
     reserve_bytes: int = 0,
 ) -> dict[str, Any]:
     """Check independent target peaks against the pre-existing empirical envelope."""
-    target = _sample(target_run)
-    prepared = _prepare(calibration_runs, target["plan"], setup_calibration_runs)
-    _unique([*prepared[1], target])
-    estimate = estimate_finetuning_transfer_memory(
-        calibration_runs,
-        target["plan"],
-        setup_calibration_runs=setup_calibration_runs,
-        memory_budget_bytes=memory_budget_bytes,
-        reserve_bytes=reserve_bytes,
+    target, prepared = _holdout(calibration_runs, target_run, setup_calibration_runs)
+    estimate = _memory_estimate(
+        prepared, memory_budget_bytes=memory_budget_bytes, reserve_bytes=reserve_bytes
     )
     comparison = {}
     for field, interval in estimate["memory"].items():

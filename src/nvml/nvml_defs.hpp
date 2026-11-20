@@ -84,7 +84,8 @@ typedef struct nvmlMemory_v2_st {
     unsigned long long used;
 } nvmlMemory_v2_t;
 
-#define nvmlMemory_v2 (sizeof(nvmlMemory_v2_t) | (2U << 24))
+// NVML_STRUCT_VERSION(Memory, 2): sizeof(nvmlMemory_v2_t) | (2 << 24)
+#define nvmlMemory_v2 ((unsigned int)(sizeof(nvmlMemory_v2_t) | (2U << 24)))
 
 typedef struct nvmlUtilization_st {
     unsigned int gpu;
@@ -150,11 +151,7 @@ typedef struct nvmlPciInfo_v3_st {
 } nvmlPciInfo_v3_t;
 
 // Constants
-#define NVML_DEVICE_NAME_BUFFER_SIZE 64
-#define NVML_DEVICE_UUID_BUFFER_SIZE 80
 #define NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE 32
-#define NVML_DEVICE_PCI_BUS_ID_BUFFER_V2_SIZE 16
-#define NVML_DEVICE_PART_NUMBER_BUFFER_SIZE 80
 #define NVML_GSP_FIRMWARE_VERSION_BUF_SIZE 0x40
 
 // Versioned structs/constants used by nvidia-smi and pynvml.
@@ -167,8 +164,6 @@ typedef struct nvmlDeviceAddressingMode_st {
 
 // Addressing mode values
 #define NVML_DEVICE_ADDRESSING_MODE_NONE 0
-#define NVML_DEVICE_ADDRESSING_MODE_HMM 1
-#define NVML_DEVICE_ADDRESSING_MODE_ATS 2
 
 #define nvmlPciInfoExt_v1 0x1000040
 
@@ -219,14 +214,10 @@ typedef struct nvmlDramEncryptionInfo_st {
     unsigned int encryptionState;
 } nvmlDramEncryptionInfo_t;
 
-#define nvmlMarginTemperature_v1 0x1000008
-
 typedef struct nvmlMarginTemperature_v1_st {
     unsigned int version;
     int marginTemperature;
 } nvmlMarginTemperature_v1_t;
-
-#define VgpuHeterogeneousMode_v1 0x1000008
 
 typedef struct nvmlVgpuHeterogeneousMode_v1_st {
     unsigned int version;
@@ -256,6 +247,17 @@ typedef struct nvmlGpuFabricInfo_v3_st {
     unsigned char healthSummary;
     unsigned char reserved[3];
 } nvmlGpuFabricInfo_v3_t;
+
+// nvmlDeviceArchitecture_t values (nvml.h NVML_DEVICE_ARCH_*)
+#define NVML_DEVICE_ARCH_MAXWELL 3
+#define NVML_DEVICE_ARCH_PASCAL 4
+#define NVML_DEVICE_ARCH_VOLTA 5
+#define NVML_DEVICE_ARCH_TURING 6
+#define NVML_DEVICE_ARCH_AMPERE 7
+#define NVML_DEVICE_ARCH_ADA 8
+#define NVML_DEVICE_ARCH_HOPPER 9
+#define NVML_DEVICE_ARCH_BLACKWELL 10
+#define NVML_DEVICE_ARCH_UNKNOWN 0xffffffff
 
 // Virtualization mode
 typedef enum {

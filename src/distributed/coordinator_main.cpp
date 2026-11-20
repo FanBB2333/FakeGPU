@@ -75,6 +75,12 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // The registry and the end-of-run report read the cluster config from the
+    // environment, so describe this coordinator there before either does.
+    setenv("FAKEGPU_DIST_MODE", "simulate", 0);
+    setenv("FAKEGPU_COORDINATOR_TRANSPORT", transport.c_str(), 1);
+    setenv("FAKEGPU_COORDINATOR_ADDR", address.c_str(), 1);
+
     fake_gpu::distributed::ClusterCoordinator coordinator(coordinator_transport, address);
     std::string error;
     if (!coordinator.start(error)) {
@@ -82,12 +88,16 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    fake_gpu::distributed::DistributedConfig report_config =
+        fake_gpu::distributed::parse_distributed_config_from_env();
+    if (!report_config.valid()) {
+        std::cerr << "Invalid distributed config: " << report_config.validation_error << "\n";
+    }
+
     std::cout << "fakegpu-coordinator listening on " << coordinator.address() << "\n";
     std::cout.flush();
     int exit_code = coordinator.run();
 
-    fake_gpu::distributed::DistributedConfig report_config =
-        fake_gpu::distributed::parse_distributed_config_from_env();
     if (report_config.mode == fake_gpu::distributed::DistributedMode::Disabled) {
         report_config.mode = fake_gpu::distributed::DistributedMode::Simulate;
     }

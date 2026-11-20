@@ -125,12 +125,10 @@ class NativeTrainerObserver:
             self.torch.cuda.synchronize()
             metadata_started = time.perf_counter()
             try:
-                batch = (
-                    self.batch_matcher.describe(inputs)
-                    if self.batch_matcher is not None
-                    else describe_batch(inputs)
-                )
-                if self.batch_matcher is not None:
+                if self.batch_matcher is None:
+                    batch = describe_batch(inputs)
+                else:
+                    batch = self.batch_matcher.describe(inputs)
                     batch.update(
                         self.batch_matcher.observe(
                             inputs,

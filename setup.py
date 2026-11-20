@@ -15,6 +15,9 @@ from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 
 _ROOT = Path(__file__).resolve().parent
+# A wheel cannot hold symlinks, so the extra names below are copies. A copy
+# loads as a second image, but every FakeGPU library resolves the process's
+# first fakegpu_process_global_state_v1 provider, so state stays shared.
 if sys.platform == "darwin":
     _REQUIRED_LIBS = (
         "libnccl.dylib",
@@ -22,6 +25,9 @@ if sys.platform == "darwin":
         "libcudart.dylib",
         "libcuda.dylib",
         "libnvidia-ml.dylib",
+        # nvidia-ml-py loads CDLL("libnvidia-ml.so.1") on every non-Windows
+        # platform.
+        "libnvidia-ml.so.1",
     )
 else:
     _REQUIRED_LIBS = (
@@ -30,6 +36,8 @@ else:
         "libcudart.so.12",
         "libcuda.so.1",
         "libnvidia-ml.so.1",
+        # nvitop loads CDLL("libcudart.so") on Linux.
+        "libcudart.so",
     )
 
 _REQUIRED_CMAKE_TARGETS = (
@@ -126,17 +134,13 @@ class sdist(_sdist):
 
 class BinaryDistribution(Distribution):
     def has_ext_modules(self) -> bool:
+        # We ship ELF .so files as package data; the wheel is not "pure".
         # Force installation into platlib so wheels containing ELF .so files are
         # platlib-compliant (required by auditwheel).
         return True
 
 
 class bdist_wheel(_bdist_wheel):
-    def finalize_options(self) -> None:
-        super().finalize_options()
-        # We ship ELF .so files as package data; the wheel is not "pure".
-        self.root_is_pure = False
-
     def get_tag(self) -> tuple[str, str, str]:
         _python, _abi, plat = super().get_tag()
         # The Python wrapper is pure; only the platform tag matters.

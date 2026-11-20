@@ -134,7 +134,7 @@ vgpu::DeviceProfile device_profile(const Device& device) {
     auto& limits = profile.limits;
     limits.max_threads_per_block = 1024;
     limits.max_block_dim = {1024, 1024, 64};
-    limits.max_grid_dim = {2147483647, 2147483647, 2147483647};
+    limits.max_grid_dim = {2147483647, 65535, 65535};
     limits.shared_mem_per_block = source.shared_mem_per_block;
     limits.shared_mem_per_block_optin = source.shared_mem_per_block_optin;
     limits.shared_mem_per_sm = source.shared_mem_per_sm;

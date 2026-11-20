@@ -3,9 +3,7 @@
 #include "cuda_driver_defs.hpp"
 #include "../core/backend_config.hpp"
 #include "../core/real_cuda_loader.hpp"
-#include "../core/hybrid_memory_manager.hpp"
 #include "../core/logging.hpp"
-#include <cstring>
 
 namespace fake_gpu {
 
@@ -66,8 +64,6 @@ public:
         static CudaDriverPassthrough pt;
         return pt;
     }
-
-    bool is_available() const { return available_; }
 
     // Initialize and cache function pointers
     bool initialize() {
@@ -150,238 +146,136 @@ public:
         return available_;
     }
 
-    // Passthrough functions
-    CUresult cuInit(unsigned int flags) {
-        if (!real_cuInit) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuInit(flags);
-    }
+    // Passthrough functions: CUDA_ERROR_NOT_INITIALIZED when the real entry point is missing.
+    CUresult cuInit(unsigned int flags) { return forward(real_cuInit, flags); }
 
-    CUresult cuDriverGetVersion(int* version) {
-        if (!real_cuDriverGetVersion) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuDriverGetVersion(version);
-    }
+    CUresult cuDriverGetVersion(int* version) { return forward(real_cuDriverGetVersion, version); }
 
-    CUresult cuDeviceGetCount(int* count) {
-        if (!real_cuDeviceGetCount) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuDeviceGetCount(count);
-    }
+    CUresult cuDeviceGetCount(int* count) { return forward(real_cuDeviceGetCount, count); }
 
-    CUresult cuDeviceGet(CUdevice* device, int ordinal) {
-        if (!real_cuDeviceGet) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuDeviceGet(device, ordinal);
-    }
+    CUresult cuDeviceGet(CUdevice* device, int ordinal) { return forward(real_cuDeviceGet, device, ordinal); }
 
     CUresult cuDeviceGetName(char* name, int len, CUdevice dev) {
-        if (!real_cuDeviceGetName) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuDeviceGetName(name, len, dev);
+        return forward(real_cuDeviceGetName, name, len, dev);
     }
 
     CUresult cuDeviceGetAttribute(int* pi, CUdevice_attribute attrib, CUdevice dev) {
-        if (!real_cuDeviceGetAttribute) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuDeviceGetAttribute(pi, attrib, dev);
+        return forward(real_cuDeviceGetAttribute, pi, attrib, dev);
     }
 
-    CUresult cuDeviceTotalMem(size_t* bytes, CUdevice dev) {
-        if (!real_cuDeviceTotalMem) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuDeviceTotalMem(bytes, dev);
-    }
+    CUresult cuDeviceTotalMem(size_t* bytes, CUdevice dev) { return forward(real_cuDeviceTotalMem, bytes, dev); }
 
-    CUresult cuDeviceGetUuid(CUuuid* uuid, CUdevice dev) {
-        if (!real_cuDeviceGetUuid) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuDeviceGetUuid(uuid, dev);
-    }
+    CUresult cuDeviceGetUuid(CUuuid* uuid, CUdevice dev) { return forward(real_cuDeviceGetUuid, uuid, dev); }
 
     CUresult cuCtxCreate(CUcontext* pctx, unsigned int flags, CUdevice dev) {
-        if (!real_cuCtxCreate) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuCtxCreate(pctx, flags, dev);
+        return forward(real_cuCtxCreate, pctx, flags, dev);
     }
 
-    CUresult cuCtxDestroy(CUcontext ctx) {
-        if (!real_cuCtxDestroy) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuCtxDestroy(ctx);
-    }
+    CUresult cuCtxDestroy(CUcontext ctx) { return forward(real_cuCtxDestroy, ctx); }
 
-    CUresult cuCtxSetCurrent(CUcontext ctx) {
-        if (!real_cuCtxSetCurrent) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuCtxSetCurrent(ctx);
-    }
+    CUresult cuCtxSetCurrent(CUcontext ctx) { return forward(real_cuCtxSetCurrent, ctx); }
 
-    CUresult cuCtxGetCurrent(CUcontext* pctx) {
-        if (!real_cuCtxGetCurrent) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuCtxGetCurrent(pctx);
-    }
+    CUresult cuCtxGetCurrent(CUcontext* pctx) { return forward(real_cuCtxGetCurrent, pctx); }
 
-    CUresult cuCtxGetDevice(CUdevice* device) {
-        if (!real_cuCtxGetDevice) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuCtxGetDevice(device);
-    }
+    CUresult cuCtxGetDevice(CUdevice* device) { return forward(real_cuCtxGetDevice, device); }
 
-    CUresult cuCtxSynchronize() {
-        if (!real_cuCtxSynchronize) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuCtxSynchronize();
-    }
+    CUresult cuCtxSynchronize() { return forward(real_cuCtxSynchronize); }
 
-    CUresult cuMemAlloc(CUdeviceptr* dptr, size_t bytesize) {
-        if (!real_cuMemAlloc) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuMemAlloc(dptr, bytesize);
-    }
+    CUresult cuMemAlloc(CUdeviceptr* dptr, size_t bytesize) { return forward(real_cuMemAlloc, dptr, bytesize); }
 
-    CUresult cuMemFree(CUdeviceptr dptr) {
-        if (!real_cuMemFree) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuMemFree(dptr);
-    }
+    CUresult cuMemFree(CUdeviceptr dptr) { return forward(real_cuMemFree, dptr); }
 
     CUresult cuMemcpyDtoH(void* dstHost, CUdeviceptr srcDevice, size_t byteCount) {
-        if (!real_cuMemcpyDtoH) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuMemcpyDtoH(dstHost, srcDevice, byteCount);
+        return forward(real_cuMemcpyDtoH, dstHost, srcDevice, byteCount);
     }
 
     CUresult cuMemcpyHtoD(CUdeviceptr dstDevice, const void* srcHost, size_t byteCount) {
-        if (!real_cuMemcpyHtoD) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuMemcpyHtoD(dstDevice, srcHost, byteCount);
+        return forward(real_cuMemcpyHtoD, dstDevice, srcHost, byteCount);
     }
 
     CUresult cuMemcpyDtoD(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t byteCount) {
-        if (!real_cuMemcpyDtoD) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuMemcpyDtoD(dstDevice, srcDevice, byteCount);
+        return forward(real_cuMemcpyDtoD, dstDevice, srcDevice, byteCount);
     }
 
     CUresult cuMemAllocManaged(CUdeviceptr* dptr, size_t bytesize, unsigned int flags) {
-        if (!real_cuMemAllocManaged) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuMemAllocManaged(dptr, bytesize, flags);
+        return forward(real_cuMemAllocManaged, dptr, bytesize, flags);
     }
 
-    CUresult cuMemAllocHost(void** pp, size_t bytesize) {
-        if (!real_cuMemAllocHost) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuMemAllocHost(pp, bytesize);
-    }
+    CUresult cuMemAllocHost(void** pp, size_t bytesize) { return forward(real_cuMemAllocHost, pp, bytesize); }
 
-    CUresult cuMemFreeHost(void* p) {
-        if (!real_cuMemFreeHost) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuMemFreeHost(p);
-    }
+    CUresult cuMemFreeHost(void* p) { return forward(real_cuMemFreeHost, p); }
 
     CUresult cuMemHostAlloc(void** pp, size_t bytesize, unsigned int flags) {
-        if (!real_cuMemHostAlloc) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuMemHostAlloc(pp, bytesize, flags);
+        return forward(real_cuMemHostAlloc, pp, bytesize, flags);
     }
 
     CUresult cuMemHostGetDevicePointer(CUdeviceptr* pdptr, void* p, unsigned int flags) {
-        if (!real_cuMemHostGetDevicePointer) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuMemHostGetDevicePointer(pdptr, p, flags);
+        return forward(real_cuMemHostGetDevicePointer, pdptr, p, flags);
     }
 
-    CUresult cuMemGetInfo(size_t* free, size_t* total) {
-        if (!real_cuMemGetInfo) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuMemGetInfo(free, total);
-    }
+    CUresult cuMemGetInfo(size_t* free, size_t* total) { return forward(real_cuMemGetInfo, free, total); }
 
     CUresult cuStreamCreate(CUstream* phStream, unsigned int flags) {
-        if (!real_cuStreamCreate) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuStreamCreate(phStream, flags);
+        return forward(real_cuStreamCreate, phStream, flags);
     }
 
-    CUresult cuStreamDestroy(CUstream hStream) {
-        if (!real_cuStreamDestroy) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuStreamDestroy(hStream);
-    }
+    CUresult cuStreamDestroy(CUstream hStream) { return forward(real_cuStreamDestroy, hStream); }
 
-    CUresult cuStreamSynchronize(CUstream hStream) {
-        if (!real_cuStreamSynchronize) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuStreamSynchronize(hStream);
-    }
+    CUresult cuStreamSynchronize(CUstream hStream) { return forward(real_cuStreamSynchronize, hStream); }
 
-    CUresult cuStreamQuery(CUstream hStream) {
-        if (!real_cuStreamQuery) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuStreamQuery(hStream);
-    }
+    CUresult cuStreamQuery(CUstream hStream) { return forward(real_cuStreamQuery, hStream); }
 
     CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int flags) {
-        if (!real_cuStreamWaitEvent) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuStreamWaitEvent(hStream, hEvent, flags);
+        return forward(real_cuStreamWaitEvent, hStream, hEvent, flags);
     }
 
     CUresult cuStreamGetFlags(CUstream hStream, unsigned int* flags) {
-        if (!real_cuStreamGetFlags) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuStreamGetFlags(hStream, flags);
+        return forward(real_cuStreamGetFlags, hStream, flags);
     }
 
-    CUresult cuEventCreate(CUevent* phEvent, unsigned int flags) {
-        if (!real_cuEventCreate) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuEventCreate(phEvent, flags);
-    }
+    CUresult cuEventCreate(CUevent* phEvent, unsigned int flags) { return forward(real_cuEventCreate, phEvent, flags); }
 
-    CUresult cuEventDestroy(CUevent hEvent) {
-        if (!real_cuEventDestroy) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuEventDestroy(hEvent);
-    }
+    CUresult cuEventDestroy(CUevent hEvent) { return forward(real_cuEventDestroy, hEvent); }
 
-    CUresult cuEventRecord(CUevent hEvent, CUstream hStream) {
-        if (!real_cuEventRecord) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuEventRecord(hEvent, hStream);
-    }
+    CUresult cuEventRecord(CUevent hEvent, CUstream hStream) { return forward(real_cuEventRecord, hEvent, hStream); }
 
-    CUresult cuEventSynchronize(CUevent hEvent) {
-        if (!real_cuEventSynchronize) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuEventSynchronize(hEvent);
-    }
+    CUresult cuEventSynchronize(CUevent hEvent) { return forward(real_cuEventSynchronize, hEvent); }
 
-    CUresult cuEventQuery(CUevent hEvent) {
-        if (!real_cuEventQuery) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuEventQuery(hEvent);
-    }
+    CUresult cuEventQuery(CUevent hEvent) { return forward(real_cuEventQuery, hEvent); }
 
     CUresult cuEventElapsedTime(float* pMilliseconds, CUevent hStart, CUevent hEnd) {
-        if (!real_cuEventElapsedTime) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuEventElapsedTime(pMilliseconds, hStart, hEnd);
+        return forward(real_cuEventElapsedTime, pMilliseconds, hStart, hEnd);
     }
 
     CUresult cuLaunchKernel(CUfunction f, unsigned int gridDimX, unsigned int gridDimY, unsigned int gridDimZ,
                             unsigned int blockDimX, unsigned int blockDimY, unsigned int blockDimZ,
                             unsigned int sharedMemBytes, CUstream hStream, void** kernelParams, void** extra) {
-        if (!real_cuLaunchKernel) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuLaunchKernel(f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ,
-                                   sharedMemBytes, hStream, kernelParams, extra);
+        return forward(real_cuLaunchKernel, f, gridDimX, gridDimY, gridDimZ, blockDimX, blockDimY, blockDimZ,
+                       sharedMemBytes, hStream, kernelParams, extra);
     }
 
-    CUresult cuModuleLoad(CUmodule* module, const char* fname) {
-        if (!real_cuModuleLoad) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuModuleLoad(module, fname);
-    }
+    CUresult cuModuleLoad(CUmodule* module, const char* fname) { return forward(real_cuModuleLoad, module, fname); }
 
     CUresult cuModuleLoadData(CUmodule* module, const void* image) {
-        if (!real_cuModuleLoadData) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuModuleLoadData(module, image);
+        return forward(real_cuModuleLoadData, module, image);
     }
 
-    CUresult cuModuleUnload(CUmodule hmod) {
-        if (!real_cuModuleUnload) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuModuleUnload(hmod);
-    }
+    CUresult cuModuleUnload(CUmodule hmod) { return forward(real_cuModuleUnload, hmod); }
 
     CUresult cuModuleGetFunction(CUfunction* hfunc, CUmodule hmod, const char* name) {
-        if (!real_cuModuleGetFunction) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuModuleGetFunction(hfunc, hmod, name);
+        return forward(real_cuModuleGetFunction, hfunc, hmod, name);
     }
 
     CUresult cuDevicePrimaryCtxRetain(CUcontext* pctx, CUdevice dev) {
-        if (!real_cuDevicePrimaryCtxRetain) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuDevicePrimaryCtxRetain(pctx, dev);
+        return forward(real_cuDevicePrimaryCtxRetain, pctx, dev);
     }
 
-    CUresult cuDevicePrimaryCtxRelease(CUdevice dev) {
-        if (!real_cuDevicePrimaryCtxRelease) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuDevicePrimaryCtxRelease(dev);
-    }
+    CUresult cuDevicePrimaryCtxRelease(CUdevice dev) { return forward(real_cuDevicePrimaryCtxRelease, dev); }
 
-    CUresult cuDevicePrimaryCtxReset(CUdevice dev) {
-        if (!real_cuDevicePrimaryCtxReset) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuDevicePrimaryCtxReset(dev);
-    }
+    CUresult cuDevicePrimaryCtxReset(CUdevice dev) { return forward(real_cuDevicePrimaryCtxReset, dev); }
 
     CUresult cuGetProcAddress(const char* symbol, void** pfn, int cudaVersion, unsigned long long flags) {
-        if (!real_cuGetProcAddress) return CUDA_ERROR_NOT_INITIALIZED;
-        return real_cuGetProcAddress(symbol, pfn, cudaVersion, flags);
+        return forward(real_cuGetProcAddress, symbol, pfn, cudaVersion, flags);
     }
 
     // Get any function by name from real library
@@ -391,6 +285,11 @@ public:
 
 private:
     CudaDriverPassthrough() = default;
+
+    template <class Fn, class... Args>
+    static CUresult forward(Fn fn, Args... args) {
+        return fn ? fn(args...) : CUDA_ERROR_NOT_INITIALIZED;
+    }
 
     bool initialized_ = false;
     bool available_ = false;

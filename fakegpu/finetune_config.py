@@ -37,12 +37,18 @@ class FinetuneConfigError(ValueError):
 
 
 def load_finetune_config(
-    path: str | Path, *, framework: str = "auto"
+    path: str | Path,
+    *,
+    framework: str = "auto",
+    model_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Resolve local model, dataset and distributed paths against this file."""
     resolved = Path(path).expanduser().resolve()
     result = normalize_finetune_config(
-        load_mapping(resolved), framework=framework, base_dir=resolved.parent
+        load_mapping(resolved),
+        framework=framework,
+        base_dir=resolved.parent,
+        model_path=model_path,
     )
     result["source_path"] = str(resolved)
     return result
@@ -53,12 +59,16 @@ def normalize_finetune_config(
     *,
     framework: str = "auto",
     base_dir: str | Path | None = None,
+    model_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Normalize Trainer/PEFT, LLaMA-Factory or Axolotl configuration.
 
     ``num_samples`` means the effective training split *after* filtering and
     validation splitting. ``max_samples`` remains a cap, never a dataset count.
     Missing sequence length and sample count remain None for caller overrides.
+    ``model_path`` (a local directory or ``config.json``) replaces the
+    configured model when reading the checkpoint dtype that LLaMA-Factory
+    loads frozen weights in.
     """
     if not isinstance(config, Mapping):
         raise FinetuneConfigError("training configuration must be a mapping")
@@ -95,16 +105,26 @@ def normalize_finetune_config(
         checkpoint_sha256 = checkpoint_sha256.lower()
     dtype = _precision(values, source)
     storage_dtype = _alias(values, "parameter_dtype", "torch_dtype")
-    parameter_dtype = _dtype(storage_dtype) if storage_dtype is not None else "fp32"
-    if storage_dtype is None:
-        assumptions.append(
-            "Parameter storage defaults to FP32; mixed precision controls computation. "
-            "Set torch_dtype/parameter_dtype to match checkpoint loading for tighter estimates."
-        )
-    quantization = _quantization(values, source)
+    parameter_dtype = _dtype(storage_dtype) if storage_dtype is not None else None
+    quant = _quantization_mapping(values)
+    quantization = _quantization(values, quant, source)
     method, rank, targets = _adapter(values, peft, source, quantization)
+    if parameter_dtype is None:
+        parameter_dtype, note = _default_parameter_dtype(
+            values,
+            source,
+            method,
+            dtype,
+            quantization,
+            Path(model_path).expanduser().resolve()
+            if model_path is not None
+            else _local_path(model.strip(), root),
+        )
+        assumptions.append(note)
     adapter_options = _adapter_options(values, peft, source, rank, assumptions)
-    quantization_options = _quantization_options(values, source, quantization, dtype)
+    quantization_options = _quantization_options(
+        values, quant, source, quantization, dtype
+    )
     learning_rate = values.get("learning_rate")
     if learning_rate is None:
         learning_rate = None if source == "axolotl" else 5e-5
@@ -215,6 +235,13 @@ def normalize_finetune_config(
         ),
         "packing",
     )
+    # LLaMA-Factory DataArguments.__post_init__ turns packing on for neat_packing.
+    if (
+        source == "llamafactory"
+        and values.get("neat_packing") is not None
+        and _boolean(values["neat_packing"], "neat_packing")
+    ):
+        packing = True
     if packing:
         assumptions.append(
             "With packing, sample count must describe packed training sequences."
@@ -486,11 +513,12 @@ def _optimizer_options(
     decay = _nonnegative_float(
         _alias(values, "weight_decay", default=0.0), "weight_decay"
     )
-    grad_norm = _alias(
-        values, "max_grad_norm", default=None if source == "axolotl" else 1.0
+    # Axolotl 0.18.0 forwards max_grad_norm only when it is set
+    # (core/builders/base.py _set_base_training_args), so an unset value leaves
+    # TrainingArguments' default of 1.0 and Trainer clips gradients.
+    grad_norm = _nonnegative_float(
+        _alias(values, "max_grad_norm", default=1.0), "max_grad_norm"
     )
-    if grad_norm is not None:
-        grad_norm = _nonnegative_float(grad_norm, "max_grad_norm")
     return {
         "lr_scheduler_type": scheduler,
         "warmup_steps": steps,
@@ -554,6 +582,72 @@ def _precision(values: Mapping[str, Any], source: str) -> str:
     return selected[0] if selected else "fp32"
 
 
+def _default_parameter_dtype(
+    values: Mapping[str, Any],
+    source: str,
+    method: str,
+    dtype: str,
+    bits: int | None,
+    model_path: str | Path,
+) -> tuple[str, str]:
+    """Return the framework's base-weight storage dtype and why it was chosen."""
+    if source == "axolotl":
+        # Axolotl 0.18.0 utils/config resolve_dtype sets cfg.torch_dtype from
+        # its flags (bf16, then fp16 or load_in_8bit, else fp32), and
+        # loaders/model.py loads the checkpoint with dtype=cfg.torch_dtype.
+        result = (
+            "bf16" if dtype == "bf16" else "fp16" if dtype == "fp16" or bits == 8 else "fp32"
+        )
+        note = f"Axolotl loads weights in its precision flag's dtype ({result})."
+        if method == "full" and result != "fp32":
+            note += (
+                " For full tuning without FSDP it keeps embeddings, lm_head and "
+                "norms in FP32; that difference is not budgeted."
+            )
+        return result, note
+    if source == "llamafactory":
+        # LLaMA-Factory 0.9.5 model/adapter.py casts trainable parameters to
+        # FP32 unless pure_bf16 or BAdam is used.
+        if method == "full" and not (values.get("pure_bf16") or values.get("use_badam")):
+            return "fp32", "LLaMA-Factory casts trainable parameters to FP32 for full tuning."
+        # model/loader.py loads with torch_dtype="auto": the config's dtype.
+        checkpoint = _checkpoint_dtype(model_path)
+        if checkpoint is not None:
+            return checkpoint, (
+                "LLaMA-Factory loads frozen weights with torch_dtype=auto, the "
+                f"checkpoint config's dtype ({checkpoint})."
+            )
+        return "fp32", (
+            "LLaMA-Factory loads frozen weights in the checkpoint dtype "
+            "(torch_dtype=auto), which no local model config declares here; base "
+            "weights are budgeted as FP32. Set parameter_dtype for tighter estimates."
+        )
+    return "fp32", (
+        "Parameter storage defaults to FP32; mixed precision controls computation. "
+        "Set torch_dtype/parameter_dtype to match checkpoint loading for tighter estimates."
+    )
+
+
+def _checkpoint_dtype(model_path: str | Path) -> str | None:
+    """Read the dtype Transformers' torch_dtype="auto" takes from config.json."""
+    path = Path(model_path)
+    if not path.is_absolute():
+        return None  # a Hub model ID; nothing local to read
+    config_path = path / "config.json" if path.is_dir() else path
+    if config_path.name != "config.json" or not config_path.is_file():
+        return None
+    try:
+        config = load_mapping(config_path)
+    except (OSError, ValueError):
+        return None
+    # Transformers 5 writes "dtype"; older checkpoints carry "torch_dtype".
+    value = config.get("dtype") or config.get("torch_dtype")
+    try:
+        return _dtype(value) if value is not None else None
+    except FinetuneConfigError:
+        return None
+
+
 def _attention(values: Mapping[str, Any]) -> str:
     raw = _alias(
         values, "attn_implementation", "attention_implementation", "flash_attn"
@@ -587,8 +681,9 @@ def _attention(values: Mapping[str, Any]) -> str:
     return selected[0] if selected else "auto"
 
 
-def _quantization(values: Mapping[str, Any], source: str) -> int | None:
-    quant = _quantization_mapping(values)
+def _quantization(
+    values: Mapping[str, Any], quant: Mapping[str, Any], source: str
+) -> int | None:
     bits = _optional_integer(
         _alias(values, "quantization_bits", "quantization_bit"), "quantization_bits"
     )
@@ -601,12 +696,8 @@ def _quantization(values: Mapping[str, Any], source: str) -> int | None:
             raise FinetuneConfigError(
                 f"{key}=false conflicts with quantization_bits={bits}"
             )
-        enabled = _alias(
-            {"outer": values.get(key), "inner": quant.get(key)},
-            "outer",
-            "inner",
-            default=False,
-        )
+        fields = {"outer": values.get(key), "inner": quant.get(key)}
+        enabled = _alias(fields, *fields, default=False)
         if _boolean(enabled, key):
             flags.append(width)
     if len(flags) > 1 or (flags and bits is not None and bits != flags[0]):
@@ -623,15 +714,11 @@ def _quantization(values: Mapping[str, Any], source: str) -> int | None:
             "LLaMA-Factory requires quantization_method=bnb; other spellings "
             "do not activate its bitsandbytes loader"
         )
-    method = _alias(
-        {
-            "outer": values.get("quantization_method"),
-            "inner": quant.get("quant_method"),
-        },
-        "outer",
-        "inner",
-        default="bitsandbytes",
-    )
+    fields = {
+        "outer": values.get("quantization_method"),
+        "inner": quant.get("quant_method"),
+    }
+    method = _alias(fields, *fields, default="bitsandbytes")
     if bits is not None and (
         not isinstance(method, str) or method not in {"bitsandbytes", "bnb"}
     ):
@@ -655,9 +742,12 @@ def _quantization_mapping(values: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _quantization_options(
-    values: Mapping[str, Any], source: str, bits: int | None, dtype: str
+    values: Mapping[str, Any],
+    quant: Mapping[str, Any],
+    source: str,
+    bits: int | None,
+    dtype: str,
 ) -> dict[str, Any]:
-    quant = _quantization_mapping(values)
     allowed = {
         "load_in_4bit",
         "load_in_8bit",
@@ -750,13 +840,23 @@ def _adapter_options(
 ) -> dict[str, Any]:
     if rank is None:
         return {"lora_alpha": None, "lora_dropout": 0.0, "lora_bias": "none"}
+    if source == "axolotl" and all(
+        mapping.get(key) is None
+        for mapping, key in ((values, "lora_rank"), (values, "lora_r"), (peft, "r"))
+    ):
+        # Axolotl 0.18.0 has no lora_r default and passes LoraConfig(r=None),
+        # which PEFT rejects when it builds the adapter layers.
+        assumptions.append(
+            f"Axolotl lora_r is unspecified; the estimate assumes r={rank}. "
+            "Provide it before execution."
+        )
+    fields = {
+        "lora_alpha": values.get("lora_alpha"),
+        "peft.lora_alpha": peft.get("lora_alpha"),
+    }
     alpha = _alias(
-        {
-            "lora_alpha": values.get("lora_alpha"),
-            "peft.lora_alpha": peft.get("lora_alpha"),
-        },
-        "lora_alpha",
-        "peft.lora_alpha",
+        fields,
+        *fields,
         default=rank * 2
         if source == "llamafactory"
         else 8
@@ -769,15 +869,11 @@ def _adapter_options(
         assumptions.append(
             "Axolotl lora_alpha is unspecified; provide it before execution."
         )
-    dropout = _alias(
-        {
-            "lora_dropout": values.get("lora_dropout"),
-            "peft.lora_dropout": peft.get("lora_dropout"),
-        },
-        "lora_dropout",
-        "peft.lora_dropout",
-        default=0.0,
-    )
+    fields = {
+        "lora_dropout": values.get("lora_dropout"),
+        "peft.lora_dropout": peft.get("lora_dropout"),
+    }
+    dropout = _alias(fields, *fields, default=0.0)
     if (
         isinstance(dropout, bool)
         or not isinstance(dropout, (int, float))
@@ -785,12 +881,8 @@ def _adapter_options(
         or not 0 <= dropout < 1
     ):
         raise FinetuneConfigError("lora_dropout must be finite and in [0, 1)")
-    bias = _alias(
-        {"lora_bias": values.get("lora_bias"), "peft.bias": peft.get("bias")},
-        "lora_bias",
-        "peft.bias",
-        default="none",
-    )
+    fields = {"lora_bias": values.get("lora_bias"), "peft.bias": peft.get("bias")}
+    bias = _alias(fields, *fields, default="none")
     if bias != "none":
         raise FinetuneConfigError("only lora_bias=none is supported")
     return {"lora_alpha": alpha, "lora_dropout": float(dropout), "lora_bias": bias}
@@ -820,30 +912,19 @@ def _adapter(
         raise FinetuneConfigError("QLoRA requires explicit 4-bit quantization")
     if bits == 4:
         method = "qlora"
-    rank = _integer(
-        _alias(
-            {
-                "lora_rank": values.get("lora_rank"),
-                "lora_r": values.get("lora_r"),
-                "peft.r": peft.get("r"),
-            },
-            "lora_rank",
-            "lora_r",
-            "peft.r",
-            default=8,
-        ),
-        "lora_rank",
-    )
+    fields = {
+        "lora_rank": values.get("lora_rank"),
+        "lora_r": values.get("lora_r"),
+        "peft.r": peft.get("r"),
+    }
+    rank = _integer(_alias(fields, *fields, default=8), "lora_rank")
+    fields = {
+        "lora_target_modules": values.get("lora_target_modules"),
+        "lora_target": values.get("lora_target"),
+        "peft.target_modules": peft.get("target_modules"),
+    }
     target = _alias(
-        {
-            "lora_target_modules": values.get("lora_target_modules"),
-            "lora_target": values.get("lora_target"),
-            "peft.target_modules": peft.get("target_modules"),
-        },
-        "lora_target_modules",
-        "lora_target",
-        "peft.target_modules",
-        default="all" if source == "llamafactory" else None,
+        fields, *fields, default="all" if source == "llamafactory" else None
     )
     if values.get("lora_target_linear") is not None and _boolean(
         values["lora_target_linear"], "lora_target_linear"
@@ -1077,155 +1158,177 @@ def _distributed(
             "optimizer_offload_device": "none",
             **common,
         }
-    try:
-        if ds:
-            config = _config_mapping(ds, root, "deepspeed")
-            _check_finite(config, "deepspeed")
-            for key, expected in (
-                ("gradient_accumulation_steps", accumulation),
-                ("train_micro_batch_size_per_gpu", micro),
-                ("train_batch_size", world * micro * accumulation),
-                ("world_size", world),
-            ):
-                value = config.get(key, "auto")
-                if value != "auto" and _integer(value, f"deepspeed.{key}") != expected:
-                    raise FinetuneConfigError(
-                        f"deepspeed.{key} conflicts with trainer settings"
-                    )
-                config[key] = expected
-            zero = config.get("zero_optimization", {})
-            if not isinstance(zero, Mapping):
-                raise FinetuneConfigError("zero_optimization must be a mapping")
-            zero = dict(zero)
-            stage = _integer(zero.get("stage", 0), "zero_optimization.stage", minimum=0)
-            if stage > 3:
-                raise FinetuneConfigError("DeepSpeed stage must be 0, 1, 2 or 3")
-            for key in ("offload_param", "offload_optimizer"):
-                if zero.get(key) is not None:
-                    offload = zero[key]
-                    if not isinstance(offload, Mapping) or offload.get(
-                        "device", "none"
-                    ) not in {"none", "cpu", "nvme"}:
-                        raise FinetuneConfigError(f"unsupported DeepSpeed {key} device")
-            for key in (
-                "reduce_bucket_size",
-                "allgather_bucket_size",
-                "stage3_prefetch_bucket_size",
-            ):
-                value = zero.get(key, 0)
-                if value == "auto":
-                    assumptions.append(
-                        f"DeepSpeed {key}=auto is model-dependent; its bucket memory is not resolved."
-                    )
-                else:
-                    _integer(value, f"deepspeed.{key}", minimum=0)
-            config["zero_optimization"] = zero
-            for key in ("bf16", "fp16"):
-                precision = config.get(key, {})
-                if not isinstance(precision, Mapping):
-                    raise FinetuneConfigError(f"deepspeed.{key} must be a mapping")
-                enabled = precision.get("enabled", "auto")
-                if enabled != "auto" and _boolean(
-                    enabled, f"deepspeed.{key}.enabled"
-                ) != (dtype == key):
-                    raise FinetuneConfigError(
-                        f"deepspeed.{key} conflicts with trainer precision"
-                    )
-                config[key] = {**precision, "enabled": dtype == key}
-            normalized = normalize_training_config(config, framework="deepspeed")
-        else:
-            config = _config_mapping(values.get("fsdp_config", {}), root, "fsdp_config")
-            _check_finite(config, "fsdp_config")
-            if (
-                "world_size" in config
-                and _integer(config["world_size"], "fsdp_config.world_size") != world
-            ):
-                raise FinetuneConfigError(
-                    "fsdp_config.world_size conflicts with trainer settings"
-                )
-            if fsdp is True:
-                tokens = ["full_shard"]
-            elif isinstance(fsdp, str):
-                tokens = fsdp.lower().split()
-            elif isinstance(fsdp, list) and all(
-                isinstance(token, str) for token in fsdp
-            ):
-                tokens = [token.lower() for token in fsdp]
-            elif fsdp in (None, False):
-                tokens = []
-            else:
-                raise FinetuneConfigError(
-                    "fsdp must be a strategy string, list or boolean"
-                )
-            strategies = {"full_shard", "shard_grad_op", "no_shard", "hybrid_shard"}
-            if set(tokens) - strategies - {"offload", "auto_wrap"}:
-                raise FinetuneConfigError("unsupported FSDP options")
-            selected = set(tokens) & strategies
-            if len(selected) > 1:
-                raise FinetuneConfigError(
-                    "multiple FSDP sharding strategies configured"
-                )
-            if selected:
-                strategy = selected.pop()
-                declared = _alias(config, "sharding_strategy", "fsdp_sharding_strategy")
-                if declared is not None and str(declared).lower() != strategy:
-                    raise FinetuneConfigError("FSDP sharding strategies conflict")
-                config["sharding_strategy"] = strategy
-            if "offload" in tokens:
-                config["fsdp_offload_params"] = True
-            for key in (
-                "offload_params",
-                "activation_checkpointing",
-                "reshard_after_forward",
-            ):
-                if config.get(key) is not None:
-                    _boolean(config[key], f"fsdp_config.{key}")
-            if "offload_params" in config:
-                if "offload" in tokens and not config["offload_params"]:
-                    raise FinetuneConfigError("FSDP offload settings conflict")
-                config["fsdp_offload_params"] = config["offload_params"]
-            precision = _alias(
-                config,
-                "mixed_precision",
-                "fsdp_mixed_precision",
-                "mixed_precision_policy",
-            )
-            if (
-                precision is not None
-                and ("fp32" if precision == "no" else _dtype(precision)) != dtype
-            ):
-                raise FinetuneConfigError(
-                    "FSDP mixed precision conflicts with trainer settings"
-                )
-            version = _integer(
-                _alias(
-                    {
-                        "outer": values.get("fsdp_version"),
-                        "inner": config.get("fsdp_version"),
-                    },
-                    "outer",
-                    "inner",
-                    default=2 if values.get("base_model") else 1,
-                ),
-                "fsdp_version",
-            )
-            if version not in {1, 2}:
-                raise FinetuneConfigError("fsdp_version must be 1 or 2")
-            if version == 2 and config.get("reshard_after_forward") is False:
-                config["sharding_strategy"] = "shard_grad_op"
-            config.update(
-                {"world_size": world, "gradient_accumulation_steps": accumulation}
-            )
-            normalized = normalize_training_config(
-                config, framework=f"fsdp{'2' if version == 2 else ''}"
-            )
-        common["activation_checkpointing"] = (
-            checkpoint or normalized["activation_checkpointing"]
+    if ds:
+        config = _deepspeed_settings(
+            ds, root, world, accumulation, micro, dtype, assumptions
         )
-        normalized.update(common)
-        return normalized
+        framework = "deepspeed"
+    else:
+        config, framework = _fsdp_settings(
+            values, fsdp, root, world, accumulation, dtype
+        )
+    try:
+        normalized = normalize_training_config(config, framework=framework)
     except TrainingPlanError as exc:
         raise FinetuneConfigError(str(exc)) from exc
+    common["activation_checkpointing"] = (
+        checkpoint or normalized["activation_checkpointing"]
+    )
+    normalized.update(common)
+    return normalized
+
+
+def _deepspeed_settings(
+    ds: Any,
+    root: Path,
+    world: int,
+    accumulation: int,
+    micro: int,
+    dtype: str,
+    assumptions: list[str],
+) -> dict[str, Any]:
+    config = _config_mapping(ds, root, "deepspeed")
+    _check_finite(config, "deepspeed")
+    for key, expected in (
+        ("gradient_accumulation_steps", accumulation),
+        ("train_micro_batch_size_per_gpu", micro),
+        ("train_batch_size", world * micro * accumulation),
+        ("world_size", world),
+    ):
+        value = config.get(key, "auto")
+        if value != "auto" and _integer(value, f"deepspeed.{key}") != expected:
+            raise FinetuneConfigError(
+                f"deepspeed.{key} conflicts with trainer settings"
+            )
+        config[key] = expected
+    zero = config.get("zero_optimization", {})
+    if not isinstance(zero, Mapping):
+        raise FinetuneConfigError("zero_optimization must be a mapping")
+    zero = dict(zero)
+    stage = _integer(zero.get("stage", 0), "zero_optimization.stage", minimum=0)
+    if stage > 3:
+        raise FinetuneConfigError("DeepSpeed stage must be 0, 1, 2 or 3")
+    for key in ("offload_param", "offload_optimizer"):
+        if zero.get(key) is not None:
+            offload = zero[key]
+            if not isinstance(offload, Mapping) or offload.get(
+                "device", "none"
+            ) not in {"none", "cpu", "nvme"}:
+                raise FinetuneConfigError(f"unsupported DeepSpeed {key} device")
+    for key in (
+        "reduce_bucket_size",
+        "allgather_bucket_size",
+        "stage3_prefetch_bucket_size",
+    ):
+        value = zero.get(key, 0)
+        if value == "auto":
+            assumptions.append(
+                f"DeepSpeed {key}=auto is model-dependent; its bucket memory is not resolved."
+            )
+        else:
+            _integer(value, f"deepspeed.{key}", minimum=0)
+    config["zero_optimization"] = zero
+    for key in ("bf16", "fp16"):
+        precision = config.get(key, {})
+        if not isinstance(precision, Mapping):
+            raise FinetuneConfigError(f"deepspeed.{key} must be a mapping")
+        enabled = precision.get("enabled", "auto")
+        if enabled != "auto" and _boolean(enabled, f"deepspeed.{key}.enabled") != (
+            dtype == key
+        ):
+            raise FinetuneConfigError(
+                f"deepspeed.{key} conflicts with trainer precision"
+            )
+        config[key] = {**precision, "enabled": dtype == key}
+    return config
+
+
+def _fsdp_settings(
+    values: Mapping[str, Any],
+    fsdp: Any,
+    root: Path,
+    world: int,
+    accumulation: int,
+    dtype: str,
+) -> tuple[dict[str, Any], str]:
+    config = _config_mapping(values.get("fsdp_config", {}), root, "fsdp_config")
+    _check_finite(config, "fsdp_config")
+    if (
+        "world_size" in config
+        and _integer(config["world_size"], "fsdp_config.world_size") != world
+    ):
+        raise FinetuneConfigError(
+            "fsdp_config.world_size conflicts with trainer settings"
+        )
+    if fsdp is True:
+        tokens = ["full_shard"]
+    elif isinstance(fsdp, str):
+        tokens = fsdp.lower().split()
+    elif isinstance(fsdp, list) and all(isinstance(token, str) for token in fsdp):
+        tokens = [token.lower() for token in fsdp]
+    elif fsdp in (None, False):
+        tokens = []
+    else:
+        raise FinetuneConfigError("fsdp must be a strategy string, list or boolean")
+    # transformers.trainer_utils.FSDPOption sharding strategies.
+    strategies = {
+        "full_shard",
+        "shard_grad_op",
+        "no_shard",
+        "hybrid_shard",
+        "hybrid_shard_zero2",
+    }
+    if set(tokens) - strategies - {"offload", "auto_wrap"}:
+        raise FinetuneConfigError("unsupported FSDP options")
+    selected = set(tokens) & strategies
+    if len(selected) > 1:
+        raise FinetuneConfigError("multiple FSDP sharding strategies configured")
+    if selected:
+        strategy = selected.pop()
+        declared = _alias(config, "sharding_strategy", "fsdp_sharding_strategy")
+        if declared is not None and str(declared).lower() != strategy:
+            raise FinetuneConfigError("FSDP sharding strategies conflict")
+        config["sharding_strategy"] = strategy
+    if "offload" in tokens:
+        config["fsdp_offload_params"] = True
+    for key in (
+        "offload_params",
+        "activation_checkpointing",
+        "reshard_after_forward",
+    ):
+        if config.get(key) is not None:
+            _boolean(config[key], f"fsdp_config.{key}")
+    if "offload_params" in config:
+        if "offload" in tokens and not config["offload_params"]:
+            raise FinetuneConfigError("FSDP offload settings conflict")
+        config["fsdp_offload_params"] = config["offload_params"]
+    precision = _alias(
+        config,
+        "mixed_precision",
+        "fsdp_mixed_precision",
+        "mixed_precision_policy",
+    )
+    if (
+        precision is not None
+        and ("fp32" if precision == "no" else _dtype(precision)) != dtype
+    ):
+        raise FinetuneConfigError(
+            "FSDP mixed precision conflicts with trainer settings"
+        )
+    fields = {
+        "outer": values.get("fsdp_version"),
+        "inner": config.get("fsdp_version"),
+    }
+    version = _integer(
+        _alias(fields, *fields, default=2 if values.get("base_model") else 1),
+        "fsdp_version",
+    )
+    if version not in {1, 2}:
+        raise FinetuneConfigError("fsdp_version must be 1 or 2")
+    if version == 2 and config.get("reshard_after_forward") is False:
+        config["sharding_strategy"] = "shard_grad_op"
+    config.update({"world_size": world, "gradient_accumulation_steps": accumulation})
+    return config, "fsdp2" if version == 2 else "fsdp"
 
 
 __all__ = [

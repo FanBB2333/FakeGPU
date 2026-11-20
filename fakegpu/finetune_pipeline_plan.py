@@ -13,6 +13,7 @@ import math
 
 from ._finetune_batches import _descriptor
 from ._finetune_pipeline_plan import pipeline_plan_from_run, validate_pipeline_plan
+from ._finetune_sampler import _integer
 from .finetune_estimator import FinetuneEstimateError
 
 
@@ -21,12 +22,6 @@ _NATIVE_SCHEDULES = {
     "llamafactory": ("0.9.5", "5.6.0", "disable_shuffling"),
     "axolotl": ("0.18.0", "5.14.1", "curriculum_sampling"),
 }
-
-
-def _integer(value, field, minimum=1):
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise FinetuneEstimateError(f"{field} must be an integer >= {minimum}")
-    return value
 
 
 def _epoch_template(run):
@@ -164,6 +159,53 @@ def _schedule_calls(run, steps, updates_per_epoch):
     return calls, resolved
 
 
+AXOLOTL_PACKED_EPOCHS_ERROR = (
+    "Axolotl converts num_epochs for sample packing from its multipack length "
+    "estimate, which is not reproduced; plan packed Axolotl runs with max_steps"
+)
+
+
+def _target_steps(
+    epochs,
+    max_steps,
+    per_epoch,
+    *,
+    framework=None,
+    rows=None,
+    batch_size=None,
+    packed=False,
+):
+    """Count the optimizer updates a native run with these epochs performs.
+
+    Trainer finishes every epoch's short final accumulation window. Axolotl
+    passes its own conversion to Trainer as max_steps instead, so for Axolotl
+    ``rows`` and the effective ``batch_size`` are required.
+    """
+    if (epochs is None) == (max_steps is None):
+        raise FinetuneEstimateError("provide exactly one of epochs or max_steps")
+    if max_steps is not None:
+        return _integer(max_steps, "max_steps")
+    if (
+        isinstance(epochs, bool)
+        or not isinstance(epochs, (int, float))
+        or not math.isfinite(epochs)
+        or epochs <= 0
+    ):
+        raise FinetuneEstimateError("epochs must be finite and positive")
+    if framework == "axolotl":
+        if packed:
+            raise FinetuneEstimateError(AXOLOTL_PACKED_EPOCHS_ERROR)
+        # Axolotl 0.18.0 sets TrainingArguments.max_steps to
+        # ceil(rows * num_epochs / batch_size) for unpacked data
+        # (utils/trainer.py calculate_total_num_steps; core/builders/base.py).
+        return math.ceil(
+            _integer(rows, "dataset rows")
+            * float(epochs)
+            / _integer(batch_size, "effective batch size")
+        )
+    return math.ceil(epochs * per_epoch)
+
+
 def plan_finetuning_pipeline(run, *, epochs=None, max_steps=None, num_samples=None):
     """Project a sequential native dataset onto future epochs or optimizer steps.
 
@@ -178,20 +220,15 @@ def plan_finetuning_pipeline(run, *, epochs=None, max_steps=None, num_samples=No
         raise FinetuneEstimateError(
             "changed dataset size requires matching native dataset calibration"
         )
-    if (epochs is None) == (max_steps is None):
-        raise FinetuneEstimateError("provide exactly one of epochs or max_steps")
     per_epoch = math.ceil(len(template) / accumulation)
-    if max_steps is not None:
-        steps = _integer(max_steps, "max_steps")
-    else:
-        if (
-            isinstance(epochs, bool)
-            or not isinstance(epochs, (int, float))
-            or not math.isfinite(epochs)
-            or epochs <= 0
-        ):
-            raise FinetuneEstimateError("epochs must be finite and positive")
-        steps = math.ceil(epochs * per_epoch)
+    steps = _target_steps(
+        epochs,
+        max_steps,
+        per_epoch,
+        framework=run["framework"],
+        rows=dataset_rows,
+        batch_size=run["training_config"]["micro_batch_size"] * accumulation,
+    )
     planned_updates = []
     for step in range(1, steps + 1):
         epoch, position = divmod(step - 1, per_epoch)
@@ -232,11 +269,11 @@ def _assemble_schedule(
     steps = len(planned_updates)
     calls, resolved = _schedule_calls(run, steps, per_epoch)
     policy = plan["execution_policy"]
-    if policy["logging_strategy"] == "steps":
-        interval = policy["requested_logging_steps"]
-        policy["resolved_logging_steps"] = (
-            math.ceil(steps * interval) if interval < 1 else int(interval)
-        )
+    # Trainer resolves fractional logging_steps for every logging strategy.
+    interval = policy["requested_logging_steps"]
+    policy["resolved_logging_steps"] = (
+        math.ceil(steps * interval) if interval < 1 else int(interval)
+    )
     # Check the supported schedule against source execution before extrapolating.
     source_calls, _ = _schedule_calls(
         run, plan["workload"]["optimizer_steps"], per_epoch
@@ -327,6 +364,11 @@ def _assemble_schedule(
         projection={
             "source_run_uuid": run["run_identity"]["uuid"],
             "epochs": epochs,
+            "epoch_step_rule": None
+            if epochs is None
+            else "axolotl_max_steps"
+            if run["framework"] == "axolotl"
+            else "trainer_epoch_windows",
             "max_steps": max_steps,
             "dataset_rows": dataset_rows,
             "updates_per_epoch": per_epoch,

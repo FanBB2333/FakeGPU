@@ -17,8 +17,6 @@ from functools import lru_cache
 from typing import Any
 
 from .link_topology import (
-    ENVIRONMENT_VARIABLES,
-    LEGACY_NVLINK_VARIABLES,
     GpuSlot,
     LinkTopology,
     NvlinkGroup,
@@ -29,6 +27,8 @@ from .link_topology import (
 from .profile_catalog import GpuProfile, get_profile
 
 AUTO = "auto"
+# Set explicitly, these win over a platform.
+_EXPLICIT_TOPOLOGY_VARIABLES = ("FAKEGPU_SLOTS", "FAKEGPU_NVLINK_FABRIC", "FAKEGPU_NVLINK_GROUPS")
 
 
 class PlatformError(ValueError):
@@ -172,10 +172,6 @@ def load_platforms() -> dict[str, Platform]:
         )
         platforms[platform.id] = platform
     return platforms
-
-
-def platform_ids() -> list[str]:
-    return list(load_platforms())
 
 
 def get_platform(platform_id: str) -> Platform:
@@ -331,7 +327,7 @@ def apply_platform_environment(
     win over the platform.
     """
 
-    if any(environ.get(name) for name in (*ENVIRONMENT_VARIABLES[1:], LEGACY_NVLINK_VARIABLES[0])):
+    if any(environ.get(name) for name in _EXPLICIT_TOPOLOGY_VARIABLES):
         return None
     resolved = resolve_platform(
         profile_ids, platform, pcie_generation=pcie_generation, nvlink_bridges=nvlink_bridges
@@ -389,7 +385,7 @@ def topology_from_environment(profile_ids: Sequence[str], environ: Mapping[str, 
 
     profiles = [_profile_or_none(profile_id) for profile_id in profile_ids]
     platform = (environ.get("FAKEGPU_PLATFORM") or "").strip()
-    explicit = any(environ.get(name) for name in (*ENVIRONMENT_VARIABLES[1:], LEGACY_NVLINK_VARIABLES[0]))
+    explicit = any(environ.get(name) for name in _EXPLICIT_TOPOLOGY_VARIABLES)
     if platform and not explicit:
         try:
             return resolve_platform(profile_ids, platform, **platform_options(environ)).topology

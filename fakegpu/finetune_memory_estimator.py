@@ -10,8 +10,6 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-import hashlib
-import json
 from typing import Any
 
 from ._finetune_pipeline_plan import (
@@ -19,8 +17,10 @@ from ._finetune_pipeline_plan import (
     pipeline_plan_from_run,
     validate_pipeline_plan,
 )
+from ._finetune_sampler import _integer as _byte_count
 from .finetune_estimator import FinetuneEstimateError
 from .finetune_window_estimator import _run_identity
+from .structured_io import canonical_sha256 as _digest
 
 
 SCHEMA_VERSION = "fakegpu.finetune_memory_estimate.v1"
@@ -36,22 +36,12 @@ _COMPATIBILITY_FIELDS = (
 )
 
 
-def _digest(value: Any) -> str:
-    content = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return hashlib.sha256(content.encode()).hexdigest()
-
-
-def _byte_count(value: Any, name: str, *, allow_zero: bool = False) -> int:
-    minimum = 0 if allow_zero else 1
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise FinetuneEstimateError(f"{name} must be an integer >= {minimum}")
-    return value
-
-
 def _native_sample(run: Mapping[str, Any]) -> dict[str, Any]:
     plan = pipeline_plan_from_run(run)
     observation = run["observation"]
-    peaks = {field: _byte_count(observation[field], field) for field in _MEMORY_FIELDS}
+    peaks = {
+        field: _byte_count(observation.get(field), field) for field in _MEMORY_FIELDS
+    }
     if peaks["peak_reserved_bytes"] < peaks["peak_allocated_bytes"]:
         raise FinetuneEstimateError("reserved allocator peak must cover allocated peak")
     if peaks["peak_reserved_bytes"] > plan["hardware"]["total_memory_bytes"]:
@@ -92,7 +82,7 @@ def estimate_finetuning_memory(
         or len(calibration_runs) < 2
     ):
         raise FinetuneEstimateError("memory calibration requires two independent runs")
-    reserve_bytes = _byte_count(reserve_bytes, "reserve_bytes", allow_zero=True)
+    reserve_bytes = _byte_count(reserve_bytes, "reserve_bytes", minimum=0)
     plan = validate_pipeline_plan(target_plan)
     physical_bytes = _byte_count(
         plan["hardware"].get("total_memory_bytes"), "hardware.total_memory_bytes"
@@ -180,53 +170,51 @@ def estimate_finetuning_memory(
         ),
         "oom_safety_verified": False,
     }
-    return deepcopy(
-        {
-            "schema_version": SCHEMA_VERSION,
-            "scope": "covered_native_process_allocator_peak_envelope",
-            **{field: plan[field] for field in _COMPATIBILITY_FIELDS},
-            "target_plan": {
-                "source": plan["source"],
-                "sha256": _digest(plan),
-                "workload": plan["workload"],
-            },
-            "calibration_runs": [
-                {
-                    **sample["identity"],
-                    **sample["peaks"],
-                    "evidence_sha256": sample["evidence_sha256"],
-                    "workload": sample["plan"]["workload"],
-                }
-                for sample in samples
-            ],
-            "coverage": {
-                "target_components": len(components),
-                "target_component_groups": len(grouped),
-                "minimum_samples_per_group_per_calibration_run": 1,
-                "includes_warmup_and_first_occurrences": True,
-                "complete": True,
-            },
-            "component_groups": list(grouped.values()),
-            "memory": envelope,
-            "budget": budget,
-            "limitations": [
-                "The min/max range contains observed complete-run CUDA allocator peaks; "
-                "it is not a confidence interval or a bound on future allocations.",
-                "All target semantic components must be observed in every calibration "
-                "run; window or event peaks are neither inferred nor summed.",
-                "The allocated and reserved peaks can occur at different times. "
-                "Reserved memory includes allocator caching and is not a minimum "
-                "memory requirement.",
-                "CUDA allocator statistics exclude allocations by other processes, "
-                "the driver and libraries outside the PyTorch allocator.",
-                "Matching shapes, event and epoch contexts does not prove identical "
-                "allocator state, fragmentation or memory growth in longer runs.",
-                "A requested budget comparison or caller-selected reserve does not "
-                "establish physical-GPU OOM safety; actual OOM requires a separate "
-                "failed execution with an observed CUDA allocation error.",
-            ],
-        }
-    )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "scope": "covered_native_process_allocator_peak_envelope",
+        **{field: plan[field] for field in _COMPATIBILITY_FIELDS},
+        "target_plan": {
+            "source": plan["source"],
+            "sha256": _digest(plan),
+            "workload": plan["workload"],
+        },
+        "calibration_runs": [
+            {
+                **sample["identity"],
+                **sample["peaks"],
+                "evidence_sha256": sample["evidence_sha256"],
+                "workload": sample["plan"]["workload"],
+            }
+            for sample in samples
+        ],
+        "coverage": {
+            "target_components": len(components),
+            "target_component_groups": len(grouped),
+            "minimum_samples_per_group_per_calibration_run": 1,
+            "includes_warmup_and_first_occurrences": True,
+            "complete": True,
+        },
+        "component_groups": list(grouped.values()),
+        "memory": envelope,
+        "budget": budget,
+        "limitations": [
+            "The min/max range contains observed complete-run CUDA allocator peaks; "
+            "it is not a confidence interval or a bound on future allocations.",
+            "All target semantic components must be observed in every calibration "
+            "run; window or event peaks are neither inferred nor summed.",
+            "The allocated and reserved peaks can occur at different times. "
+            "Reserved memory includes allocator caching and is not a minimum "
+            "memory requirement.",
+            "CUDA allocator statistics exclude allocations by other processes, "
+            "the driver and libraries outside the PyTorch allocator.",
+            "Matching shapes, event and epoch contexts does not prove identical "
+            "allocator state, fragmentation or memory growth in longer runs.",
+            "A requested budget comparison or caller-selected reserve does not "
+            "establish physical-GPU OOM safety; actual OOM requires a separate "
+            "failed execution with an observed CUDA allocation error.",
+        ],
+    }
 
 
 def compare_finetuning_memory(

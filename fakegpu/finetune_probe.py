@@ -22,24 +22,30 @@ from .finetune_estimator import finetune_workload_signature
 from .profile_catalog import get_profile
 
 
-def installed_training_versions() -> dict[str, str]:
+def _package_versions(names) -> dict[str, str]:
     versions = {}
-    for name in (
-        "torch",
-        "transformers",
-        "peft",
-        "accelerate",
-        "bitsandbytes",
-        "flash-linear-attention",
-        "causal-conv1d",
-        "flash-attn",
-        "triton",
-    ):
+    for name in names:
         try:
             versions[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
             versions[name] = "not-installed"
     return versions
+
+
+def installed_training_versions() -> dict[str, str]:
+    return _package_versions(
+        (
+            "torch",
+            "transformers",
+            "peft",
+            "accelerate",
+            "bitsandbytes",
+            "flash-linear-attention",
+            "causal-conv1d",
+            "flash-attn",
+            "triton",
+        )
+    )
 
 
 def measure_finetuning(
@@ -116,9 +122,7 @@ def measure_finetuning(
     )
 
     _reject_simulated_cuda_environment(torch)
-    if not torch.cuda.is_available() or getattr(
-        torch.cuda, "_fakegpu_simulated", False
-    ):
+    if not torch.cuda.is_available():
         raise RuntimeError(
             "a physical CUDA device is required for fine-tuning observations"
         )

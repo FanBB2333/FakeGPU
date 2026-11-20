@@ -79,7 +79,10 @@ void test_numerical_pipeline() {
         CUDA_CHECK(cudaDeviceGetPCIBusId(runtime_bus, sizeof(runtime_bus), device));
         check(cuDeviceGetPCIBusId(driver_bus, sizeof(driver_bus), device) == CUDA_SUCCESS,
               "driver PCI bus query");
-        std::snprintf(expected_bus, sizeof(expected_bus), "0000:%02x:00.0", device + 1);
+        cudaDevicePropV2 properties{};
+        CUDA_CHECK(cudaGetDeviceProperties_v2(&properties, device));
+        std::snprintf(expected_bus, sizeof(expected_bus), "%04X:%02X:%02X.0",
+                      properties.pciDomainID, properties.pciBusID, properties.pciDeviceID);
         check(std::strcmp(runtime_bus, expected_bus) == 0 &&
               std::strcmp(runtime_bus, driver_bus) == 0, "runtime/driver PCI bus identity");
         int resolved = -1;
@@ -87,10 +90,6 @@ void test_numerical_pipeline() {
         check(resolved == device, "runtime PCI device round trip");
         check(cuDeviceGetByPCIBusId(&resolved, runtime_bus) == CUDA_SUCCESS && resolved == device,
               "driver PCI device round trip");
-        cudaDevicePropV2 properties{};
-        CUDA_CHECK(cudaGetDeviceProperties_v2(&properties, device));
-        check(properties.pciBusID == device + 1 && properties.pciDeviceID == 0,
-              "runtime PCI property components");
     }
     CUDA_CHECK(cudaSetDevice(0));
     float* slice_base = nullptr;

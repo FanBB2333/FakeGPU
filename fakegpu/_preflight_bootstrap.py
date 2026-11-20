@@ -121,25 +121,10 @@ def _write_child_report(*, init_result: Any, exception: BaseException | None, ex
 def _snapshot_fakecuda() -> dict[str, Any]:
     try:
         from fakegpu import torch_patch as tp
+
+        return tp.memory_snapshot()
     except Exception:
         return {"tracking_confidence": "C0_incomplete", "devices": []}
-
-    try:
-        snapshot = tp.memory_snapshot()
-    except Exception:
-        return {"tracking_confidence": "C0_incomplete", "devices": []}
-
-    devices = snapshot.get("devices")
-    if isinstance(devices, list):
-        return {
-            **dict(snapshot),
-            "devices": [
-                dict(device)
-                for device in devices
-                if isinstance(device, dict)
-            ],
-        }
-    return {"tracking_confidence": "C0_incomplete", "devices": []}
 
 
 def _system_exit_code(exc: SystemExit) -> int:

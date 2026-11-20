@@ -14,6 +14,35 @@
 | CUDA C/C++ + 原生函式庫 | 主機記憶體支援的配置、拷貝、stream/event 與部分 CPU cuBLAS 運算 | 編譯後的 C++ GEMM 流程、記憶體釋放、模組註冊與主機執行緒啟動設定 |
 | 包含 PTX 或相容 cubin/SASS 的 CUDA 核心（Linux） | 透過原生 Driver/Runtime API 在 CPU 上解譯執行 | 包含或不含 PTX 的 CUDA C++、獨立 cubin，驗證雙精度、warp 指令、結構參數、共享記憶體、屏障、原子操作、全域變數與裝置函式 |
 
+## PyTorch CUDA 顯示記憶體 API
+
+FakeCUDA 模擬 PyTorch 的 CUDA caching allocator
+（`c10/cuda/CUDACachingAllocator.cpp`，涵蓋 torch 2.9 至 2.14），並在其上執行
+torch 內建的 `torch.cuda.memory` 函式。`memory_allocated()`、
+`memory_reserved()`、`memory_stats()`、`memory_summary()`、
+`memory_snapshot()` 與 `torch.cuda.memory._snapshot()` 回報配置器應持有的記憶體。
+與一張實體 Ampere GPU（sm_80）在 torch 2.9.1 與 2.10.0 下的配置軌跡對照，
+已配置與預留位元組、segment 配置與配置器計數器皆一致。
+
+- `PYTORCH_CUDA_ALLOC_CONF`（torch 2.10 起還有 `PYTORCH_ALLOC_CONF`）依已安裝
+  torch 的規則解析。`max_split_size_mb`、`max_non_split_rounding_mb`、
+  `roundup_power2_divisions`、`garbage_collection_threshold`、
+  `expandable_segments`、`large_segment_size_mb`（torch 2.11+）與
+  `per_process_memory_fraction`（torch 2.10+）會改變模擬的記憶體。格式錯誤的設定在
+  `torch.cuda.init()` 與配置時拋出 torch 的錯誤。
+- 每個 stream 有自己的快取區塊。呼叫 `Tensor.record_stream()` 後，釋放的區塊保持
+  占用，直到下一次配置；FakeCUDA 的工作立即完成。
+- `torch.cuda.memory._record_memory_history()` 記錄配置、釋放與 segment 事件及
+  Python 堆疊框架，不含 C++ 框架。
+- `torch.cuda.mem_get_info()` 扣除 601.5 MiB 的模擬 CUDA context。此值是首次
+  cuBLAS 呼叫後總記憶體減去可用與預留記憶體的結果，在一張 Ampere GPU（sm_80）、
+  驅動 580、torch 2.9.1 上量測一次。其他 GPU、驅動與函式庫占用不同。可將
+  `FAKEGPU_CUDA_CONTEXT_BYTES` 設為自己的量測值或 `0`。配置仍可使用 profile 的全部記憶體。
+- 未模擬：`cudaMallocAsync` 後端（接受並回報該設定，但仍使用原生配置器）、私有
+  記憶體池與 CUDA graph、pinned host 配置器（統計保持為零），以及 NVML 可用時
+  OOM 錯誤附加的行程記憶體說明。`FAKEGPU_MEMORY_TRACKING=0` 時不追蹤配置，
+  API 回報各 profile 裝置上的空配置器。
+
 ## scikit-learn 使用模擬 CUDA 張量
 
 在啟動 Python 前開啟 SciPy 的 Array API：

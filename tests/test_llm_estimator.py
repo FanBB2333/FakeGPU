@@ -40,11 +40,14 @@ def _write_safetensors(
 ) -> None:
     offset = 0
     normalized: dict[str, object] = {}
-    dtype_bytes = {"BF16": 2, "F16": 2, "F32": 4, "I8": 1, "U8": 1}
+    dtype_bits = {
+        "BF16": 16, "F16": 16, "F32": 32, "I8": 8, "U8": 8, "F8_E4M3": 8,
+        "F4": 4,
+    }
     for name, raw in header.items():
         metadata = dict(raw)
         shape = metadata["shape"]
-        nbytes = math.prod(shape) * dtype_bytes[str(metadata["dtype"])]
+        nbytes = math.prod(shape) * dtype_bits[str(metadata["dtype"])] // 8
         metadata["data_offsets"] = [offset, offset + nbytes]
         offset += nbytes
         normalized[name] = metadata
@@ -104,6 +107,113 @@ def test_checkpoint_headers_are_read_without_tensor_materialization(tmp_path: Pa
     assert report["parameter_count"] == 320
     assert report["checkpoint_bytes"] == 640
     assert report["dtype_bytes"] == {"BF16": 640}
+
+
+def _write_raw_safetensors(path: Path, header: dict[str, object], payload: int) -> None:
+    encoded = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    encoded += b" " * ((-len(encoded)) % 8)
+    path.write_bytes(struct.pack("<Q", len(encoded)) + encoded + b"\0" * payload)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "payload_bytes"),
+    [
+        # safetensors 0.8 accepts these header dtypes for a [4, 6] tensor only
+        # with these payload sizes: FNUZ FP8 and E8M0 take 1 byte per element,
+        # C64 8 bytes, F4 packs 2 elements per byte and F6 4 elements per 3.
+        ("F8_E4M3FNUZ", 24),
+        ("F8_E5M2FNUZ", 24),
+        ("F8_E8M0", 24),
+        ("C64", 192),
+        ("F4", 12),
+        ("F6_E2M3", 18),
+        ("F6_E3M2", 18),
+    ],
+)
+def test_checkpoint_inspection_reads_every_safetensors_dtype(
+    tmp_path: Path,
+    dtype: str,
+    payload_bytes: int,
+) -> None:
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    _write_raw_safetensors(
+        model_dir / "model.safetensors",
+        {"w": {"dtype": dtype, "shape": [4, 6], "data_offsets": [0, payload_bytes]}},
+        payload_bytes,
+    )
+
+    report = inspect_safetensors_checkpoint(model_dir)
+
+    # The header shape counts logical elements, also for packed dtypes.
+    assert report["parameter_count"] == 24
+    assert report["checkpoint_bytes"] == payload_bytes
+    assert report["dtype_bytes"] == {dtype: payload_bytes}
+
+
+def test_checkpoint_inspection_rejects_packed_tensor_off_a_byte_boundary(
+    tmp_path: Path,
+) -> None:
+    # safetensors rejects 9 F4 elements (36 bits): a sub-byte slice must end
+    # on a byte boundary.
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    _write_raw_safetensors(
+        model_dir / "model.safetensors",
+        {"w": {"dtype": "F4", "shape": [3, 3], "data_offsets": [0, 5]}},
+        5,
+    )
+
+    with pytest.raises(ValueError, match="byte boundary"):
+        inspect_safetensors_checkpoint(model_dir)
+
+
+def test_packed_fp4_checkpoint_counts_as_four_bit_storage(tmp_path: Path) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir, checkpoint_dtype="F4")
+
+    report = estimate_decoder_inference(model_dir, prompt_tokens=1)
+
+    quantization = report["weight_storage"]["quantization"]
+    assert quantization["enabled"] is True
+    assert quantization["quantized_storage_dtypes"] == ["F4"]
+    assert quantization["declared_weight_bits"] == 4
+    # 320 packed elements take 160 bytes of payload.
+    assert report["weight_storage"]["base_model_runtime_bytes"] == 160
+
+
+@pytest.mark.parametrize(
+    ("index", "message"),
+    [
+        ([], "invalid safetensors weight map"),
+        (
+            {"weight_map": {"a": "model.safetensors"}, "metadata": "oops"},
+            "invalid safetensors index metadata",
+        ),
+        (
+            {
+                "weight_map": {"a": "model.safetensors"},
+                "metadata": {"total_size": [1]},
+            },
+            "invalid safetensors index total_size",
+        ),
+    ],
+)
+def test_checkpoint_inspection_rejects_malformed_index(
+    tmp_path: Path,
+    index: object,
+    message: str,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    (model_dir / "model.safetensors").rename(model_dir / "model-00001.safetensors")
+    (model_dir / "model.safetensors.index.json").write_text(
+        json.dumps(index),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        inspect_safetensors_checkpoint(model_dir)
 
 
 def test_checkpoint_inspection_can_select_an_explicit_file_family(
@@ -234,6 +344,75 @@ def test_c11_qwen2vl_last_token_logits_match_recorded_matrix_work(tmp_path: Path
     # Profiler mm/addmm + analytical dense-equivalent QK/AV. Excludes RoPE bmm.
     assert trailing["compute"]["total_flops"] == 816_235_413_504 + 15_750_389_760
     assert trailing["compute"]["decode_flops_total"] == full["compute"]["decode_flops_total"]
+
+
+@pytest.mark.parametrize(
+    ("tensors", "expected"),
+    [
+        ({"model.embed.weight": "F16", "model.proj.weight": "F16"}, "float16"),
+        # Sorted key order decides; FP8 and integer tensors are skipped.
+        (
+            {
+                "a.weight": "F8_E4M3",
+                "b.weight_scale": "I8",
+                "c.norm.weight": "F32",
+                "d.weight": "BF16",
+            },
+            "float32",
+        ),
+    ],
+)
+def test_auto_dtype_without_config_dtype_follows_checkpoint(
+    tmp_path: Path,
+    tensors: dict[str, str],
+    expected: str,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir, config_overrides={"torch_dtype": None})
+    (model_dir / "model.safetensors").unlink()
+    _write_safetensors(
+        model_dir,
+        filename="model.safetensors",
+        header={
+            name: {"dtype": dtype, "shape": [8, 8]}
+            for name, dtype in tensors.items()
+        },
+    )
+    # transformers 5 from_pretrained defaults to dtype="auto"; without a
+    # config dtype it loads in the first floating, non-FP8 tensor's dtype
+    # of the first shard (safetensors keys iterate in sorted order).
+    report = estimate_decoder_inference(model_dir, prompt_tokens=1)
+
+    assert report["inputs"]["dtype"] == expected
+
+
+def test_query_and_output_projection_flops_follow_head_dim_override(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    # Qwen3-0.6B decoder dimensions: 16 heads x head_dim 128 = 2048, which is
+    # twice hidden_size, so q_proj is 1024->2048 and o_proj is 2048->1024.
+    config = {
+        "hidden_size": 1024, "num_hidden_layers": 28,
+        "num_attention_heads": 16, "num_key_value_heads": 8, "head_dim": 128,
+        "intermediate_size": 3072, "vocab_size": 151936,
+        "torch_dtype": "bfloat16",
+    }
+    (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    report = estimate_decoder_inference(model_dir, prompt_tokens=1)
+    # transformers Qwen3ForCausalLM on the meta device has per-layer weights
+    # q 2048x1024, k 1024x1024, v 1024x1024, o 1024x2048 and gate/up/down
+    # 3x3072x1024; one token costs two FLOPs per weight, plus the LM head and
+    # QK/AV over one key token.
+    attention_projections = 2 * 28 * (2 * 2048 * 1024 + 2 * 1024 * 1024)
+    mlp = 2 * 28 * 3 * 3072 * 1024
+    lm_head = 2 * 1024 * 151936
+    attention_scores = 4 * 16 * 1 * 1 * 128 * 28
+    assert attention_projections == 352_321_536
+    assert report["compute"]["prefill_flops"] == (
+        attention_projections + mlp + lm_head + attention_scores
+    )
 
 
 @pytest.mark.parametrize("value", [-1, True, 1.5, "1", None])
@@ -412,7 +591,7 @@ def test_decode_step_aggregation_preserves_flops_without_per_token_records(
     assert aggregated["inputs"]["include_decode_steps"] is False
 
 
-def test_mla_uses_compressed_latent_cache_and_architecture_flops(
+def test_mla_cache_layout_follows_runtime_and_architecture_flops(
     tmp_path: Path,
 ) -> None:
     mla_dir = tmp_path / "mla"
@@ -465,8 +644,26 @@ def test_mla_uses_compressed_latent_cache_and_architecture_flops(
     )
     assert mla["model"]["head_dim"] == 6
     assert mla["model"]["kv_cache_elements_per_token_per_layer"] == 8
-    assert mla["kv_cache"]["elements_per_token_per_layer"] == 8
-    assert mla["kv_cache"]["prefill"]["allocated_bytes"] == 256
+    # Transformers' DeepseekV3 attention caches decompressed per-head keys
+    # (qk_nope + qk_rope) and values (v_head_dim): 4 * (4 + 2 + 4).
+    assert mla["inputs"]["mla_kv_cache_layout"] == "decompressed"
+    assert mla["kv_cache"]["cache_layout"] == (
+        "decompressed_per_head_key_value"
+    )
+    assert mla["kv_cache"]["elements_per_token_per_layer"] == 40
+    assert mla["kv_cache"]["prefill"]["allocated_bytes"] == 2 * 40 * 8 * 2
+    latent = estimate_decoder_inference(
+        mla_dir,
+        batch_size=2,
+        prompt_tokens=4,
+        generated_tokens=2,
+        attention_implementation="sdpa",
+        mla_kv_cache_layout="latent",
+    )
+    assert latent["inputs"]["mla_kv_cache_layout"] == "latent"
+    assert latent["kv_cache"]["elements_per_token_per_layer"] == 8
+    assert latent["kv_cache"]["prefill"]["allocated_bytes"] == 256
+    assert standard["inputs"]["mla_kv_cache_layout"] is None
     assert standard["kv_cache"]["prefill"]["allocated_bytes"] == 1536
     assert mla["compute"]["prefill_flops"] > 0
     assert mla["compute"]["prefill_flops"] != standard["compute"][
@@ -624,13 +821,22 @@ def test_kv_cache_strategies_account_for_storage_and_reservation() -> None:
     assert static["generation"]["allocated_bytes"] == 512
     assert static["prefill"]["reservation_overhead_bytes"] == 384
     assert quantized["storage_bits_per_element"] == 4
-    assert quantized["prefill"]["allocated_bytes"] == 80
-    assert quantized["generation"]["allocated_bytes"] == 88
+    assert quantized["quantized_group_size"] == 64
+    # Transformers' QuantizedLayer quantizes the whole prefill: 2 layers *
+    # 8 elements * 4 tokens at 4 bits, plus one bfloat16 scale and zero
+    # point for the single 64-element group.
+    assert quantized["prefill"]["quantization_metadata_bytes"] == 4
+    assert quantized["prefill"]["allocated_bytes"] == 32 + 4
+    assert quantized["prefill"][
+        "full_precision_residual_tokens_per_sequence"
+    ] == 0
+    # The one decode step appends its token to the full-precision residual.
+    assert quantized["generation"]["allocated_bytes"] == 32 + 4 + 32
     assert quantized["generation"][
         "full_precision_residual_tokens_per_sequence"
-    ] == 2
-    assert quantized["generation"]["quantized_tokens_per_sequence"] == 3
-    assert quantized["generation"]["quantization_savings_bytes"] == 72
+    ] == 1
+    assert quantized["generation"]["quantized_tokens_per_sequence"] == 4
+    assert quantized["generation"]["quantization_savings_bytes"] == 92
     assert paged["prefill"]["allocated_bytes"] == 128
     assert paged["generation"]["allocated_bytes"] == 256
     assert paged["generation"]["reservation_overhead_bytes"] == 96
@@ -791,6 +997,132 @@ def test_moe_flops_memory_and_expert_parallel_traffic_are_modeled(
     assert report["communication"]["total_bytes"] > 0
 
 
+@pytest.mark.parametrize(
+    ("mlp_only_layers", "moe_layer_count"),
+    [([], 2), ([1], 1), ([0, 3], 1)],
+)
+def test_moe_layer_count_applies_mlp_only_layers_and_sparse_step(
+    tmp_path: Path,
+    mlp_only_layers: list[int],
+    moe_layer_count: int,
+) -> None:
+    model_dir = tmp_path / "moe"
+    _write_model(
+        model_dir,
+        config_overrides={
+            "num_hidden_layers": 4,
+            "num_experts": 4,
+            "num_experts_per_tok": 2,
+            "decoder_sparse_step": 2,
+            "mlp_only_layers": mlp_only_layers,
+        },
+    )
+
+    report = estimate_decoder_inference(model_dir, prompt_tokens=4)
+
+    assert report["model"]["moe_layer_count"] == moe_layer_count
+    assert report["model"]["dense_layer_count"] == 4 - moe_layer_count
+
+
+@pytest.mark.parametrize(
+    ("first_k_dense_replace", "moe_layer_count"),
+    [(None, 4), (0, 4), (3, 1), (6, 0)],
+)
+def test_moe_layer_count_skips_first_k_dense_layers(
+    tmp_path: Path,
+    first_k_dense_replace: int | None,
+    moe_layer_count: int,
+) -> None:
+    model_dir = tmp_path / "moe"
+    _write_model(
+        model_dir,
+        config_overrides={
+            "num_hidden_layers": 4,
+            "n_routed_experts": 4,
+            "num_experts_per_tok": 2,
+            "first_k_dense_replace": first_k_dense_replace,
+        },
+    )
+
+    report = estimate_decoder_inference(model_dir, prompt_tokens=4)
+
+    assert report["model"]["moe_layer_count"] == moe_layer_count
+    assert report["model"]["dense_layer_count"] == 4 - moe_layer_count
+
+
+@pytest.mark.parametrize(
+    ("layer_selection", "moe_layer_count"),
+    [
+        ({"moe_layers": list(range(1, 48, 2))}, 24),
+        ({"interleave_moe_layer_step": 2}, 24),
+        ({"interleave_moe_layer_step": 1}, 48),
+    ],
+)
+def test_llama4_moe_layers_dense_width_and_shared_expert(
+    tmp_path: Path,
+    layer_selection: dict[str, object],
+    moe_layer_count: int,
+) -> None:
+    model_dir = tmp_path / "llama4"
+    _write_model(model_dir)
+    # Llama-4-Maverick text_config. transformers' Llama4TextDecoderLayer makes
+    # layer i sparse iff i is in config.moe_layers (default
+    # range(step - 1, layers, step)); dense layers use intermediate_size_mlp and
+    # every Llama4TextMoe adds one intermediate_size shared expert.
+    text_config = {
+        "model_type": "llama4_text",
+        "hidden_size": 5120, "num_hidden_layers": 48,
+        "num_attention_heads": 40, "num_key_value_heads": 8, "head_dim": 128,
+        "intermediate_size": 8192, "intermediate_size_mlp": 16384,
+        "num_local_experts": 128, "num_experts_per_tok": 1,
+        "vocab_size": 202048, "torch_dtype": "bfloat16",
+        **layer_selection,
+    }
+    config = {"model_type": "llama4", "text_config": text_config}
+    (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    report = estimate_decoder_inference(model_dir, prompt_tokens=1)
+    model = report["model"]
+
+    dense_layer_count = 48 - moe_layer_count
+    assert model["moe_layer_count"] == moe_layer_count
+    assert model["dense_layer_count"] == dense_layer_count
+    assert model["intermediate_size"] == 16384
+    assert model["moe_intermediate_size"] == 8192
+    assert model["shared_expert_intermediate_size"] == 8192
+    # Two FLOPs per weight of the meta-device module tree for one token:
+    # q/o 5120x5120, k/v 1024x5120, gate/up/down per dense layer, one routed
+    # and one shared expert plus the 5120x128 router per sparse layer.
+    attention = 2 * 48 * (2 * 5120 * 5120 + 2 * 5120 * 1024)
+    dense = 2 * dense_layer_count * 3 * 5120 * 16384
+    sparse = 2 * moe_layer_count * (2 * 3 * 5120 * 8192 + 5120 * 128)
+    lm_head = 2 * 5120 * 202048
+    scores = 4 * 40 * 128 * 48
+    if moe_layer_count == 24:
+        assert dense + sparse == 24_190_648_320
+    assert report["compute"]["prefill_flops"] == (
+        attention + dense + sparse + lm_head + scores
+    )
+
+
+def test_moe_layer_count_rejects_invalid_first_k_dense_replace(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "moe"
+    _write_model(
+        model_dir,
+        config_overrides={
+            "num_hidden_layers": 4,
+            "n_routed_experts": 4,
+            "num_experts_per_tok": 2,
+            "first_k_dense_replace": -1,
+        },
+    )
+
+    with pytest.raises(ValueError, match="first_k_dense_replace"):
+        estimate_decoder_inference(model_dir, prompt_tokens=4)
+
+
 def test_quantized_checkpoint_uses_exact_payload_storage(
     tmp_path: Path,
 ) -> None:
@@ -906,27 +1238,48 @@ def test_serving_kv_pool_shares_prefix_across_active_sequences() -> None:
     assert shared["decode"]["allocation_utilization_percent"] == 100
 
 
-def test_serving_prefix_segments_are_rounded_independently() -> None:
+@pytest.mark.parametrize(
+    ("prompt_tokens", "shared_prefix_tokens", "shared_blocks", "private_blocks"),
+    [
+        # A 1-token prefix fills no block, so nothing is shared.
+        (17, 1, 0, 2),
+        # 20 prefix tokens share one full block; each 40-token sequence
+        # still holds cdiv(40, 16) - 1 = 2 blocks of its own.
+        (40, 20, 1, 2),
+    ],
+)
+def test_serving_paged_prefix_shares_only_full_blocks(
+    prompt_tokens: int,
+    shared_prefix_tokens: int,
+    shared_blocks: int,
+    private_blocks: int,
+) -> None:
+    # vLLM v0.32.0 vllm/v1/core/kv_cache_utils.py:980-982 hashes, and so
+    # shares, only full blocks of a prompt prefix.
     report = estimate_serving_kv_pool(
         num_hidden_layers=2,
         num_key_value_heads=1,
         head_dim=4,
         active_sequences=2,
-        prompt_tokens=17,
+        prompt_tokens=prompt_tokens,
         element_bytes=2,
         strategy="paged",
-        shared_prefix_tokens=1,
+        shared_prefix_tokens=shared_prefix_tokens,
         block_tokens=16,
     )
 
+    block_bytes = 16 * 32
     prefill = report["prefill"]
-    assert prefill["shared_segment"]["allocated_tokens_per_sequence"] == 16
+    assert prefill["retained_shared_prefix_tokens"] == 16 * shared_blocks
+    assert prefill["shared_segment"]["allocated_tokens_per_sequence"] == (
+        16 * shared_blocks
+    )
     assert prefill["private_segments"][
         "allocated_tokens_per_sequence"
-    ] == 16
-    assert prefill["without_prefix_cache_bytes"] == 2048
-    assert prefill["allocated_bytes"] == 1536
-    assert prefill["reservation_overhead_bytes"] == 480
+    ] == 16 * private_blocks
+    assert prefill["allocated_bytes"] == block_bytes * (
+        shared_blocks + 2 * private_blocks
+    )
 
 
 def test_serving_prefix_cache_rejects_unsupported_storage() -> None:
@@ -1105,7 +1458,8 @@ def test_vllm_runtime_models_executor_budget_and_reserved_kv_blocks(
 ) -> None:
     model_dir = tmp_path / "model"
     _write_model(model_dir)
-    capacity_bytes = 2**20
+    # Synthetic budget large enough for the modeled non-torch allowance.
+    capacity_bytes = 2**30
 
     report = estimate_serving_plan(
         model_dir,
@@ -1136,8 +1490,13 @@ def test_vllm_runtime_models_executor_budget_and_reserved_kv_blocks(
         "requested_model_executor_memory_bytes"
     ] == requested_memory
     assert runtime_memory["non_kv_cache_memory_source"] == (
-        "fakegpu_profile_shape_model"
+        "fakegpu_vllm_profile_run_model"
     )
+    # The default token budget is capped at max_num_seqs * max_model_len,
+    # and the profile run spreads it over min(tokens, max_num_seqs) requests.
+    assert runtime["configuration"]["max_num_seqs"] == 8
+    assert runtime["configuration"]["max_num_batched_tokens"] == 8 * 81
+    assert runtime["configuration"]["profiled_sequence_count"] == 8
     assert runtime_cache["num_gpu_blocks"] == expected_blocks
     assert runtime_cache["allocatable_bytes"] == expected_cache_bytes
     assert runtime_cache["size_tokens"] == expected_blocks * 16
@@ -1206,9 +1565,15 @@ def test_vllm_requires_one_max_length_request_to_initialize(tmp_path: Path) -> N
     assert report["scheduler"]["limiting_factor"] == "vllm_kv_cache_capacity"
 
 
-@pytest.mark.parametrize(("chunk_tokens", "required_blocks"), [(16, 3), (None, 4)])
+@pytest.mark.parametrize(
+    ("chunk_tokens", "scheduler_tokens", "required_blocks"),
+    [(16, None, 3), (None, None, 4), (16, 32, 4)],
+)
 def test_vllm_sliding_window_reserves_prefill_and_boundary_blocks(
-    tmp_path: Path, chunk_tokens: int | None, required_blocks: int,
+    tmp_path: Path,
+    chunk_tokens: int | None,
+    scheduler_tokens: int | None,
+    required_blocks: int,
 ) -> None:
     model_dir = tmp_path / "model"
     _write_model(model_dir)
@@ -1222,11 +1587,13 @@ def test_vllm_sliding_window_reserves_prefill_and_boundary_blocks(
         kv_cache_window_tokens=16,
         kv_cache_block_tokens=16,
         prefill_chunk_tokens=chunk_tokens,
-        vllm_kv_cache_memory_bytes=3 * 16 * 32,
+        vllm_max_num_batched_tokens=scheduler_tokens,
+        vllm_kv_cache_memory_bytes=4 * 16 * 32,  # Three usable blocks and the null block.
+        vllm_non_kv_cache_memory_bytes=0,
         device_capacity_bytes=2**20,
     )
     runtime = report["runtime"]
-    assert runtime["kv_cache"]["max_model_len_concurrency"] == 3 / required_blocks
+    assert runtime["kv_cache"]["max_model_len_concurrency"] == 4 / required_blocks
     assert runtime["memory"]["initialization_fits"] is (required_blocks <= 3)
     assert report["scheduler"]["requested_fits"] is (required_blocks <= 3)
 
@@ -1246,10 +1613,11 @@ def test_vllm_runtime_admission_is_limited_by_reserved_kv_pool(
         active_sequences=2,
         **common,
     )
+    # vLLM holds one block back as the null block.
     cache_bytes = max(
         phase["components"]["kv_cache"]
         for phase in two_sequences["memory_timeline"]["phases"]
-    )
+    ) + 16 * 32
 
     report = estimate_serving_plan(
         model_dir,
@@ -1300,10 +1668,11 @@ def test_vllm_runtime_supports_ordered_request_prefix_admission(
         requests[:2],
         max_batch_size=3,
     )
+    # vLLM holds one block back as the null block.
     cache_bytes = max(
         phase["components"]["kv_cache"]
         for phase in prefix["memory_timeline"]["phases"]
-    )
+    ) + 16 * 32
 
     report = estimate_serving_request_set(
         model_dir,
@@ -1316,13 +1685,159 @@ def test_vllm_runtime_supports_ordered_request_prefix_admission(
     )
 
     assert report["runtime"]["configuration"]["profile_scope"] == (
-        "configured_request_manifest_prefix"
+        "vllm_profile_run_max_num_batched_tokens"
     )
+    # max_model_len comes from the longest of the three candidates.
+    assert report["runtime"]["configuration"]["max_model_len_tokens"] == 104
+    assert report["runtime"]["configuration"][
+        "max_num_batched_tokens"
+    ] == 3 * 104
     assert report["scheduler"]["admitted_request_ids"] == ["a", "b"]
     assert report["scheduler"]["rejected_request_ids"] == ["c"]
     assert report["scheduler"]["limiting_factor"] == (
         "vllm_kv_cache_capacity"
     )
+
+
+def test_vllm_runtime_holds_back_the_null_block(tmp_path: Path) -> None:
+    # vLLM v0.32.0 vllm/v1/core/block_pool.py:184-188 pops block 0 as the
+    # null block, so ten blocks hold four 31-token requests (2 blocks each).
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    block_bytes = 16 * 32
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=5,
+        max_batch_size=8,
+        prompt_tokens=16,
+        generated_tokens=16,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=10 * block_bytes,
+        vllm_non_kv_cache_memory_bytes=0,
+    )
+
+    runtime_cache = report["runtime"]["kv_cache"]
+    assert runtime_cache["num_gpu_blocks"] == 10
+    assert runtime_cache["allocatable_bytes"] == 10 * block_bytes
+    assert runtime_cache["usable_bytes"] == 9 * block_bytes
+    assert runtime_cache["logical_requested_fits"] is False
+    assert runtime_cache["headroom_bytes"] == -block_bytes
+    assert report["scheduler"]["admissible_active_sequences"] == 4
+    assert report["scheduler"]["limiting_factor"] == (
+        "vllm_kv_cache_capacity"
+    )
+
+
+@pytest.mark.parametrize(
+    ("cache_blocks", "failure"),
+    [
+        # check_memory = available - one null block must be positive.
+        (1, "no_available_kv_cache_memory"),
+        # max_model_len 33 needs cdiv(33, 16) = 3 blocks beyond the null one.
+        (2, "max_model_len_exceeds_kv_cache"),
+        (3, "max_model_len_exceeds_kv_cache"),
+        (4, None),
+    ],
+)
+def test_vllm_runtime_startup_requires_one_max_model_len_request(
+    tmp_path: Path,
+    cache_blocks: int,
+    failure: str | None,
+) -> None:
+    # vLLM v0.32.0 vllm/v1/core/kv_cache_utils.py:1003-1040 and 2617-2637
+    # raise at startup instead of serving fewer requests.
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=1,
+        max_batch_size=1,
+        prompt_tokens=16,
+        generated_tokens=17,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=cache_blocks * 16 * 32,
+        vllm_non_kv_cache_memory_bytes=0,
+    )
+
+    memory = report["runtime"]["memory"]
+    assert report["runtime"]["kv_cache"]["max_model_len_blocks"] == 3
+    assert memory["initialization_failure"] == failure
+    assert memory["initialization_fits"] is (failure is None)
+    assert report["scheduler"]["requested_fits"] is (failure is None)
+    if failure is not None:
+        assert report["scheduler"]["admissible_active_sequences"] == 0
+        assert report["scheduler"]["limiting_factor"] == "vllm_kv_cache_capacity"
+
+
+def test_vllm_runtime_concurrency_counts_whole_blocks_per_request(
+    tmp_path: Path,
+) -> None:
+    # vLLM v0.32.0 vllm/v1/core/kv_cache_utils.py:1195-1227 divides
+    # num_blocks by cdiv(max_model_len, block_size): 60 / cdiv(81, 16).
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=1,
+        max_batch_size=1,
+        prompt_tokens=64,
+        generated_tokens=17,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=60 * 16 * 32,
+        vllm_non_kv_cache_memory_bytes=0,
+    )
+
+    runtime_cache = report["runtime"]["kv_cache"]
+    assert runtime_cache["max_model_len_blocks"] == 6
+    assert runtime_cache["max_model_len_concurrency"] == pytest.approx(10.0)
+
+
+@pytest.mark.parametrize(
+    ("runtime", "target_profile", "expected_dtype"),
+    [
+        # vLLM v0.32.0 vllm/config/model.py:2405-2426 downcasts float32 to
+        # the platform's first dtype; vllm/platforms/cuda.py:255-261 puts
+        # bfloat16 first from compute capability 8.0 and float16 before.
+        ("vllm", "a100", "bfloat16"),
+        ("vllm", "t4", "float16"),
+        ("generic", "a100", "float32"),
+    ],
+)
+def test_vllm_runtime_auto_dtype_downcasts_float32_checkpoints(
+    tmp_path: Path,
+    runtime: str,
+    target_profile: str,
+    expected_dtype: str,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(
+        model_dir,
+        config_overrides={"torch_dtype": "float32"},
+        checkpoint_dtype="F32",
+    )
+
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=1,
+        max_batch_size=1,
+        prompt_tokens=16,
+        runtime=runtime,
+        target_profile=target_profile,
+    )
+
+    element_bytes = 4 if expected_dtype == "float32" else 2
+    assert report["inputs"]["dtype"] == expected_dtype
+    assert report["inputs"]["element_bytes"] == element_bytes
+    assert report["memory"]["target_parameter_bytes"] == 320 * element_bytes
+    assert report["kv_cache"][
+        "bytes_per_token_per_sequence_at_compute_dtype"
+    ] == 2 * 2 * 1 * 4 * element_bytes
 
 
 def test_vllm_runtime_rejects_unsupported_or_misplaced_options(

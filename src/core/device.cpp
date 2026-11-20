@@ -1,6 +1,9 @@
 #include "device.hpp"
 
+#include <unistd.h>
+
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cctype>
 #include <cmath>
@@ -28,31 +31,6 @@ std::string trim_copy(const std::string& value) {
     }
     const std::size_t end = value.find_last_not_of(" \t\r\n");
     return value.substr(begin, end - begin + 1);
-}
-
-bool parse_device_index(
-    const std::string& value,
-    std::size_t device_count,
-    int& result) {
-    const std::string trimmed = trim_copy(value);
-    if (trimmed.empty()) {
-        return false;
-    }
-    errno = 0;
-    char* end = nullptr;
-    const long parsed = std::strtol(trimmed.c_str(), &end, 10);
-    if (
-        errno != 0 ||
-        end == trimmed.c_str() ||
-        !end ||
-        *end != '\0' ||
-        parsed < 0 ||
-        static_cast<unsigned long>(parsed) >= device_count ||
-        parsed > std::numeric_limits<int>::max()) {
-        return false;
-    }
-    result = static_cast<int>(parsed);
-    return true;
 }
 
 bool parse_bandwidth(double& result) {
@@ -117,10 +95,67 @@ std::vector<std::string> split_text(const std::string& text, char separator) {
     return parts;
 }
 
+std::vector<std::string> trimmed_fields(const std::string& text) {
+    std::vector<std::string> fields = split_text(text, ':');
+    for (std::string& field : fields) {
+        field = trim_copy(field);
+    }
+    return fields;
+}
+
+bool has_three_or_four_fields(const std::vector<std::string>& fields) {
+    return fields.size() >= 3 && fields.size() <= 4 &&
+        std::none_of(fields.begin(), fields.end(), [](const std::string& field) {
+            return field.empty();
+        });
+}
+
 bool all_digits(const std::string& text) {
     return !text.empty() && std::all_of(text.begin(), text.end(), [](unsigned char c) {
         return c >= '0' && c <= '9';
     });
+}
+
+// Mirrors the Python model: surrounding whitespace, an optional '+', then
+// ASCII digits only.
+bool parse_decimal(
+    const std::string& value,
+    uint64_t minimum,
+    uint64_t maximum,
+    uint64_t& result) {
+    const char* const whitespace = " \t\r\n\v\f";
+    const std::size_t begin = value.find_first_not_of(whitespace);
+    if (begin == std::string::npos) {
+        return false;
+    }
+    std::string digits =
+        value.substr(begin, value.find_last_not_of(whitespace) - begin + 1);
+    if (digits.front() == '+') {
+        digits.erase(0, 1);
+    }
+    if (!all_digits(digits)) {
+        return false;
+    }
+    errno = 0;
+    const unsigned long long parsed = std::strtoull(digits.c_str(), nullptr, 10);
+    if (errno == ERANGE || parsed < minimum || parsed > maximum) {
+        return false;
+    }
+    result = static_cast<uint64_t>(parsed);
+    return true;
+}
+
+bool parse_device_index(
+    const std::string& value,
+    std::size_t device_count,
+    int& result) {
+    uint64_t parsed = 0;
+    if (!parse_decimal(value, 0, std::numeric_limits<uint64_t>::max(), parsed) ||
+        parsed >= device_count) {
+        return false;
+    }
+    result = static_cast<int>(parsed);
+    return true;
 }
 
 unsigned int parse_unsigned(const std::string& text, const std::string& what) {
@@ -281,6 +316,16 @@ ModeledNvLinkGroup parse_nvlink_group(const std::string& text) {
     return group;
 }
 
+std::string encode_nvlink_group(const ModeledNvLinkGroup& group) {
+    std::string text = group.nvswitch ? "switch:" : "mesh:";
+    for (std::size_t position = 0; position < group.members.size(); ++position) {
+        text += (position ? "," : "") + std::to_string(group.members[position]);
+    }
+    char gbps[32];
+    std::snprintf(gbps, sizeof(gbps), "%g", group.link_gbps);
+    return text + ":" + std::to_string(group.links) + ":" + gbps;
+}
+
 std::vector<ModeledNvLinkGroup> legacy_nvlink_groups(
     const std::string& groups_value,
     std::size_t device_count,
@@ -404,28 +449,6 @@ bool valid_fault_code(const std::string& value) {
         });
 }
 
-bool parse_fault_count(const std::string& value, uint64_t& result) {
-    const std::string trimmed = trim_copy(value);
-    if (trimmed.empty()) {
-        return false;
-    }
-    errno = 0;
-    char* end = nullptr;
-    const unsigned long long parsed =
-        std::strtoull(trimmed.c_str(), &end, 10);
-    if (
-        errno != 0 ||
-        end == trimmed.c_str() ||
-        !end ||
-        *end != '\0' ||
-        parsed == 0 ||
-        parsed > kMaximumModeledFaultCount) {
-        return false;
-    }
-    result = static_cast<uint64_t>(parsed);
-    return true;
-}
-
 ModeledFaultModel invalid_fault_model(std::string error) {
     ModeledFaultModel model;
     model.source = "modeled_environment_invalid";
@@ -442,31 +465,6 @@ ModeledMigLayout invalid_mig_layout(std::string error) {
     layout.valid = false;
     layout.error = std::move(error);
     return layout;
-}
-
-bool parse_bounded_positive_integer(
-    const std::string& value,
-    uint64_t maximum,
-    uint64_t& result) {
-    const std::string trimmed = trim_copy(value);
-    if (trimmed.empty() || trimmed.front() == '-') {
-        return false;
-    }
-    errno = 0;
-    char* end = nullptr;
-    const unsigned long long parsed =
-        std::strtoull(trimmed.c_str(), &end, 10);
-    if (
-        errno != 0 ||
-        end == trimmed.c_str() ||
-        !end ||
-        *end != '\0' ||
-        parsed == 0 ||
-        parsed > maximum) {
-        return false;
-    }
-    result = static_cast<uint64_t>(parsed);
-    return true;
 }
 
 bool parse_mig_profile(
@@ -495,8 +493,9 @@ bool parse_mig_profile(
     }
     uint64_t parsed_slices = 0;
     if (
-        !parse_bounded_positive_integer(
+        !parse_decimal(
             profile.substr(0, separator),
+            1,
             kMaximumModeledMigSlicesPerDevice,
             parsed_slices)) {
         return false;
@@ -509,31 +508,144 @@ std::string modeled_mig_uuid(
     const Device& parent,
     unsigned int gpu_instance_id,
     unsigned int compute_instance_id) {
-    const std::string parent_uuid =
-        parent.uuid.rfind("GPU-", 0) == 0
-        ? parent.uuid.substr(4)
-        : parent.uuid;
-    return "MIG-" + parent_uuid + "/" +
-        std::to_string(gpu_instance_id) + "/" +
-        std::to_string(compute_instance_id);
+    return synthetic_mig_uuid(parent.uuid, gpu_instance_id, compute_instance_id);
+}
+
+// SHA-1 (FIPS 180-4), only for the RFC 4122 name-based UUIDs below.
+std::array<unsigned char, 20> sha1(const std::string& message) {
+    uint32_t h[5] = {0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u, 0xC3D2E1F0u};
+    std::string data = message;
+    const uint64_t bit_length = static_cast<uint64_t>(message.size()) * 8;
+    data.push_back(static_cast<char>(0x80));
+    while (data.size() % 64 != 56) data.push_back('\0');
+    for (int shift = 56; shift >= 0; shift -= 8) {
+        data.push_back(static_cast<char>((bit_length >> shift) & 0xFF));
+    }
+    auto rotl = [](uint32_t value, int bits) { return (value << bits) | (value >> (32 - bits)); };
+    for (std::size_t chunk = 0; chunk < data.size(); chunk += 64) {
+        uint32_t w[80];
+        for (int i = 0; i < 16; ++i) {
+            const auto* p = reinterpret_cast<const unsigned char*>(data.data() + chunk + 4 * i);
+            w[i] = (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | uint32_t(p[3]);
+        }
+        for (int i = 16; i < 80; ++i) w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+        uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
+        for (int i = 0; i < 80; ++i) {
+            uint32_t f, k;
+            if (i < 20) { f = (b & c) | (~b & d); k = 0x5A827999u; }
+            else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1u; }
+            else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDCu; }
+            else { f = b ^ c ^ d; k = 0xCA62C1D6u; }
+            const uint32_t temp = rotl(a, 5) + f + e + k + w[i];
+            e = d; d = c; c = rotl(b, 30); b = a; a = temp;
+        }
+        h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+    }
+    std::array<unsigned char, 20> digest{};
+    for (int i = 0; i < 20; ++i) digest[i] = static_cast<unsigned char>((h[i / 4] >> (24 - 8 * (i % 4))) & 0xFF);
+    return digest;
+}
+
+// Python's uuid.uuid5(uuid.NAMESPACE_DNS, name), formatted 8-4-4-4-12.
+std::string uuid5_dns(const std::string& name) {
+    static const unsigned char kNamespaceDns[16] = {
+        0x6b, 0xa7, 0xb8, 0x10, 0x9d, 0xad, 0x11, 0xd1,
+        0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8};
+    std::array<unsigned char, 20> digest =
+        sha1(std::string(reinterpret_cast<const char*>(kNamespaceDns), 16) + name);
+    digest[6] = static_cast<unsigned char>((digest[6] & 0x0F) | 0x50);
+    digest[8] = static_cast<unsigned char>((digest[8] & 0x3F) | 0x80);
+    char text[37];
+    std::snprintf(
+        text, sizeof(text),
+        "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
+        digest[8], digest[9], digest[10], digest[11], digest[12], digest[13], digest[14], digest[15]);
+    return text;
 }
 
 } // namespace
 
+std::string synthetic_gpu_uuid(const std::string& host, int index, const std::string& profile_id) {
+    return "GPU-" + uuid5_dns("fakegpu:" + host + ":" + std::to_string(index) + ":" + profile_id);
+}
+
+std::string synthetic_mig_uuid(
+    const std::string& parent_uuid,
+    unsigned int gpu_instance_id,
+    unsigned int compute_instance_id) {
+    return "MIG-" + uuid5_dns(
+        "fakegpu:mig:" + parent_uuid + ":" + std::to_string(gpu_instance_id) + ":" +
+        std::to_string(compute_instance_id));
+}
+
+std::string synthetic_pci_bus_id(int index) {
+    const int safe_index = std::max(index, 0);
+    char text[32];
+    std::snprintf(text, sizeof(text), "%08X:%02X:00.0", safe_index / 255, safe_index % 255 + 1);
+    return text;
+}
+
+bool uuid_string_bytes(const std::string& uuid, unsigned char bytes[16]) {
+    if (uuid.size() != 40 || (uuid.compare(0, 4, "GPU-") != 0 && uuid.compare(0, 4, "MIG-") != 0)) {
+        return false;
+    }
+    std::string hex;
+    for (std::size_t i = 4; i < uuid.size(); ++i) {
+        if (uuid[i] == '-') continue;
+        if (!std::isxdigit(static_cast<unsigned char>(uuid[i]))) return false;
+        hex.push_back(uuid[i]);
+    }
+    if (hex.size() != 32) return false;
+    for (int i = 0; i < 16; ++i) {
+        bytes[i] = static_cast<unsigned char>(std::stoul(hex.substr(2 * i, 2), nullptr, 16));
+    }
+    return true;
+}
+
+const std::string& local_hostname() {
+    static const std::string host = []() {
+        char buffer[256] = {};
+        if (gethostname(buffer, sizeof(buffer) - 1) == 0 && buffer[0] != '\0') return std::string(buffer);
+        return std::string("localhost");
+    }();
+    return host;
+}
+
+bool parse_pci_address(const std::string& text, PciAddress& address) {
+    unsigned int a = 0, b = 0, c = 0, d = 0;
+    int end = -1;
+    const int length = static_cast<int>(text.size());
+    if (std::sscanf(text.c_str(), "%x:%x:%x.%x%n", &a, &b, &c, &d, &end) == 4 && end == length) {
+        address = {a, b, c, d};
+        return true;
+    }
+    end = -1;
+    if (std::sscanf(text.c_str(), "%x:%x:%x%n", &a, &b, &c, &end) == 3 && end == length) {
+        address = {a, b, c, 0};
+        return true;
+    }
+    end = -1;
+    if (std::sscanf(text.c_str(), "%x:%x.%x%n", &a, &b, &c, &end) == 3 && end == length) {
+        address = {0, a, b, c};
+        return true;
+    }
+    return false;
+}
+
+std::string cuda_pci_bus_id(const PciAddress& address) {
+    char text[48];
+    std::snprintf(text, sizeof(text), "%04X:%02X:%02X.%X", address.domain, address.bus, address.device,
+                  address.function);
+    return text;
+}
+
 Device::Device(int idx, const GpuProfile& profile)
     : index(idx), profile(profile), used_memory(0), used_memory_peak(0) {
     name = profile.name;
-    char uuid_buf[64];
-    unsigned long long tail = 0x6789abcdef00ULL + static_cast<unsigned long long>(idx);
-    snprintf(uuid_buf, sizeof(uuid_buf), "GPU-%08x-%04x-%04x-%04x-%012llx", 
-             idx, 0xabcd, 0xef01, 0x2345, tail);
-    uuid = std::string(uuid_buf);
-    
+    uuid = synthetic_gpu_uuid(local_hostname(), idx, profile.id);
     total_memory = profile.memory_bytes;
-    
-    char pci_buf[32];
-    snprintf(pci_buf, sizeof(pci_buf), "00000000:%02x:00.0", idx + 1);
-    pci_bus_id = std::string(pci_buf);
+    pci_bus_id = synthetic_pci_bus_id(idx);
 }
 
 double ModeledPcieLink::bandwidth_gbps() const {
@@ -755,7 +867,8 @@ ModeledDeviceTopology build_modeled_device_topology(
             for (int member : group.members) {
                 if (member < 0 || static_cast<std::size_t>(member) >= device_count) {
                     throw TopologyError{
-                        "NVLink group names GPU " + std::to_string(member) + ", beyond the " +
+                        "NVLink group " + encode_nvlink_group(group) + " names GPU " +
+                        std::to_string(member) + ", beyond the " +
                         std::to_string(device_count) + " GPUs"};
                 }
             }
@@ -825,33 +938,24 @@ ModeledFaultModel build_modeled_fault_model(
     std::map<
         std::tuple<int, std::string, std::string>,
         uint64_t> counts;
-    std::istringstream events_stream(events_text);
-    std::string event_text;
     std::size_t event_index = 0;
-    while (std::getline(events_stream, event_text, ';')) {
-        ++event_index;
-        event_text = trim_copy(event_text);
+    for (const std::string& entry : split_text(events_text, ';')) {
+        const std::string prefix =
+            "FAKEGPU_FAULT_EVENTS event " +
+            std::to_string(++event_index);
+        const std::string event_text = trim_copy(entry);
         if (
             event_text.empty() ||
             event_text.front() == ':' ||
             event_text.back() == ':') {
             return invalid_fault_model(
-                "FAKEGPU_FAULT_EVENTS event " +
-                std::to_string(event_index) +
-                " must use DEVICE:CODE:SEVERITY[:COUNT]");
+                prefix + " must use DEVICE:CODE:SEVERITY[:COUNT]");
         }
 
-        std::vector<std::string> fields;
-        std::istringstream field_stream(event_text);
-        std::string field;
-        while (std::getline(field_stream, field, ':')) {
-            fields.push_back(trim_copy(field));
-        }
-        if (fields.size() < 3 || fields.size() > 4) {
+        const std::vector<std::string> fields = trimmed_fields(event_text);
+        if (!has_three_or_four_fields(fields)) {
             return invalid_fault_model(
-                "FAKEGPU_FAULT_EVENTS event " +
-                std::to_string(event_index) +
-                " must use DEVICE:CODE:SEVERITY[:COUNT]");
+                prefix + " must use DEVICE:CODE:SEVERITY[:COUNT]");
         }
 
         int device_index = -1;
@@ -860,32 +964,29 @@ ModeledFaultModel build_modeled_fault_model(
                 device_count,
                 device_index)) {
             return invalid_fault_model(
-                "FAKEGPU_FAULT_EVENTS event " +
-                std::to_string(event_index) +
-                " contains an invalid device index");
+                prefix + " contains an invalid device index");
         }
         const std::string code = uppercase_copy(fields[1]);
         if (!valid_fault_code(code)) {
             return invalid_fault_model(
-                "FAKEGPU_FAULT_EVENTS event " +
-                std::to_string(event_index) +
-                " contains an invalid code");
+                prefix + " contains an invalid code");
         }
         const std::string severity = lowercase_copy(fields[2]);
         if (modeled_fault_severity_rank(severity) == 0) {
             return invalid_fault_model(
-                "FAKEGPU_FAULT_EVENTS event " +
-                std::to_string(event_index) +
+                prefix +
                 " severity must be info, warning, error, or critical");
         }
         uint64_t count = 1;
         if (
             fields.size() == 4 &&
-            !parse_fault_count(fields[3], count)) {
+            !parse_decimal(
+                fields[3],
+                1,
+                kMaximumModeledFaultCount,
+                count)) {
             return invalid_fault_model(
-                "FAKEGPU_FAULT_EVENTS event " +
-                std::to_string(event_index) +
-                " count must be between 1 and 1000000000");
+                prefix + " count must be between 1 and 1000000000");
         }
 
         const auto key = std::make_tuple(
@@ -893,11 +994,9 @@ ModeledFaultModel build_modeled_fault_model(
             code,
             severity);
         uint64_t& aggregate = counts[key];
-        aggregate = std::min<uint64_t>(
-            kMaximumModeledFaultCount,
-            aggregate >= kMaximumModeledFaultCount - count
-                ? kMaximumModeledFaultCount
-                : aggregate + count);
+        aggregate = aggregate >= kMaximumModeledFaultCount - count
+            ? kMaximumModeledFaultCount
+            : aggregate + count;
         if (counts.size() > kMaximumModeledFaultTypes) {
             return invalid_fault_model(
                 "FAKEGPU_FAULT_EVENTS exceeds the 128-event-type "
@@ -954,15 +1053,12 @@ ModeledMigLayout build_modeled_mig_layout(
     std::vector<std::size_t> allocated_slices(devices.size(), 0);
     std::vector<unsigned int> instance_counts(devices.size(), 0);
 
-    std::istringstream entries(layout_text);
-    std::string entry_text;
     std::size_t entry_index = 0;
-    while (std::getline(entries, entry_text, ';')) {
-        ++entry_index;
-        entry_text = trim_copy(entry_text);
+    for (const std::string& entry : split_text(layout_text, ';')) {
         const std::string prefix =
             "FAKEGPU_MIG_LAYOUT entry " +
-            std::to_string(entry_index);
+            std::to_string(++entry_index);
+        const std::string entry_text = trim_copy(entry);
         if (
             entry_text.empty() ||
             entry_text.front() == ':' ||
@@ -972,21 +1068,8 @@ ModeledMigLayout build_modeled_mig_layout(
                 " must use DEVICE:PROFILE:MEMORY_MIB[:COUNT]");
         }
 
-        std::vector<std::string> fields;
-        std::istringstream field_stream(entry_text);
-        std::string field;
-        while (std::getline(field_stream, field, ':')) {
-            fields.push_back(trim_copy(field));
-        }
-        if (
-            fields.size() < 3 ||
-            fields.size() > 4 ||
-            std::any_of(
-                fields.begin(),
-                fields.end(),
-                [](const std::string& value) {
-                    return value.empty();
-                })) {
+        const std::vector<std::string> fields = trimmed_fields(entry_text);
+        if (!has_three_or_four_fields(fields)) {
             return invalid_mig_layout(
                 prefix +
                 " must use DEVICE:PROFILE:MEMORY_MIB[:COUNT]");
@@ -1018,8 +1101,9 @@ ModeledMigLayout build_modeled_mig_layout(
         const uint64_t maximum_mib =
             parent.total_memory / kMebibyte;
         uint64_t memory_mib = 0;
-        if (!parse_bounded_positive_integer(
+        if (!parse_decimal(
                 fields[2],
+                1,
                 maximum_mib,
                 memory_mib)) {
             return invalid_mig_layout(
@@ -1032,8 +1116,9 @@ ModeledMigLayout build_modeled_mig_layout(
         uint64_t count = 1;
         if (
             fields.size() == 4 &&
-            !parse_bounded_positive_integer(
+            !parse_decimal(
                 fields[3],
+                1,
                 kMaximumModeledMigInstancesPerDevice,
                 count)) {
             return invalid_mig_layout(
@@ -1051,24 +1136,21 @@ ModeledMigLayout build_modeled_mig_layout(
                 " exceeds the 8-instance per-device limit");
         }
         if (
-            slice_count >
-                kMaximumModeledMigSlicesPerDevice ||
             count >
-                (
-                    kMaximumModeledMigSlicesPerDevice -
-                    allocated_slices[parent_index]
-                ) / slice_count) {
+            (
+                kMaximumModeledMigSlicesPerDevice -
+                allocated_slices[parent_index]
+            ) / slice_count) {
             return invalid_mig_layout(
                 prefix +
                 " exceeds the 8-slice per-device limit");
         }
         if (
-            memory_bytes > parent.total_memory ||
             count >
-                (
-                    parent.total_memory -
-                    allocated_memory[parent_index]
-                ) / memory_bytes) {
+            (
+                parent.total_memory -
+                allocated_memory[parent_index]
+            ) / memory_bytes) {
             return invalid_mig_layout(
                 prefix +
                 " allocates more memory than the parent device");

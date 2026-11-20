@@ -11,6 +11,8 @@ import hashlib
 import os
 from pathlib import Path
 
+from .structured_io import is_sha256_hex
+
 
 SCHEMA_VERSION = "fakegpu.finetune_cache_regime.v1"
 CACHE_VARIABLES = (
@@ -115,9 +117,7 @@ def validate_cache_regime(value: Mapping) -> None:
             or isinstance(size, bool)
             or not isinstance(size, int)
             or size < 0
-            or not isinstance(digest, str)
-            or len(digest) != 64
-            or any(c not in "0123456789abcdef" for c in digest)
+            or not is_sha256_hex(digest)
         ):
             raise ValueError("invalid native kernel cache file identity")
         key = (entry["cache"], path)

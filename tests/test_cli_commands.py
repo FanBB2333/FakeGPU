@@ -225,7 +225,7 @@ def test_torch_patch_registries_are_generated_from_yaml() -> None:
         assert _profiles._PROFILE_CC[profile_id] == profile.compute_capability
         assert _profiles._PROFILE_NAMES[profile_id] == profile.torch_name
         assert (
-            _profiles._PROFILE_TOTAL_MEMORY[profile_id] == profile.memory_bytes
+            _profiles._PROFILE_TOTAL_MEMORY[profile_id] == profile.device_memory_bytes
         )
         assert (
             _profiles._PROFILE_SUPPORTED_TYPES[profile_id]
@@ -939,8 +939,8 @@ def test_readmes_report_research_reliability_scope() -> None:
     assert len(profiles) >= 200
     assert compute_capability_count == 16
     assert len(capabilities["groups"]) == 5
-    assert len(capabilities["apis"]) == 106
-    assert policy_enforced_count == 93
+    assert len(capabilities["apis"]) == 109
+    assert policy_enforced_count == 96
     smi_terms = {
         "FAKEGPU_SMI_STATE_DIR",
         "--query-gpu",
@@ -1124,6 +1124,7 @@ def test_readmes_report_reproducible_research_scenario_effects() -> None:
         height=2048,
         width=2048,
         vae_tiling=True,
+        vae_tile_size=512,
     )
     pixart_eager = estimate_diffusion_generation(
         "pixart-sigma-xl-2-1024-ms",

@@ -3,6 +3,7 @@
 id: quadro-p600
 name: Fake NVIDIA Quadro P600
 torch_name: Quadro P600
+canonical: true
 official_model: Quadro P600
 architecture: pascal
 compute_major: 6
