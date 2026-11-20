@@ -768,21 +768,6 @@ def _find_device_index(value):
     return None
 
 
-def _normalize_to_args(args, kwargs):
-    target = kwargs.get("device")
-    consume_first_arg = False
-    if target is None and args:
-        candidate = args[0]
-        if isinstance(candidate, torch.Tensor):
-            target = candidate.device
-            consume_first_arg = True
-        elif isinstance(candidate, (int, str, torch.device)):
-            target = candidate
-            consume_first_arg = True
-    normalized = _normalize_cuda_device(target, allow_none=True)
-    return target, normalized, consume_first_arg
-
-
 def _factory_wrapper(fn):
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
@@ -832,23 +817,35 @@ def _install_legacy_cuda_types() -> None:
 
 
 def _tensor_to(self, *args, **kwargs):
-    target, normalized, consume_first_arg = _normalize_to_args(args, kwargs)
-    base = self.raw_data if isinstance(self, FakeCudaTensor) else self
+    target = kwargs.get("device", kwargs.get("tensor", args[0] if args else None))
+    requested_device = target.device if isinstance(target, torch.Tensor) else target
+    normalized = _normalize_cuda_device(requested_device, allow_none=True)
+    if normalized is None and not isinstance(self, FakeCudaTensor):
+        return _ORIG_TENSOR_TO(self, *args, **kwargs)
+
+    device = self.device
     if normalized is not None:
-        kwargs = dict(kwargs)
-        kwargs["device"] = torch.device("cpu")
-        call_args = args[1:] if consume_first_arg else args
-        result = _ORIG_TENSOR_TO(base, *call_args, **kwargs)
-        return wrap_tensor(result, device_index=normalized.index or 0)
+        device = normalized
+        # Preserve the overload (device or other tensor) and positional options.
+        cpu_target = unwrap_tensor(target) if isinstance(target, torch.Tensor) else torch.device("cpu")
+        if "device" in kwargs:
+            kwargs["device"] = cpu_target
+        elif "tensor" in kwargs:
+            kwargs["tensor"] = cpu_target
+        else:
+            args = (cpu_target, *args[1:])
+    elif isinstance(requested_device, (str, torch.device)):
+        device = torch.device(requested_device)
+
+    base = unwrap_tensor(self)
     result = _ORIG_TENSOR_TO(base, *args, **kwargs)
-    if isinstance(self, FakeCudaTensor) and isinstance(result, torch.Tensor):
-        if target is not None:
-            target_device = (
-                torch.device(f"cuda:{target}") if isinstance(target, int) else torch.device(target)
-            )
-            if target_device.type != "cuda":
-                return result
-        return wrap_tensor(result, device_index=self.device_index)
+    if result is base:
+        if device == self.device:
+            return self
+        # CPU-backed logical devices still own independent storage after a copy.
+        result = result.clone()
+    if device.type == "cuda":
+        return wrap_tensor(result, device_index=device.index)
     return result
 
 
@@ -864,8 +861,9 @@ def _tensor_cpu(self, memory_format=None):
     kwargs = {}
     if memory_format is not None:
         kwargs["memory_format"] = memory_format
-    base = self.raw_data if isinstance(self, FakeCudaTensor) else self
-    return _ORIG_TENSOR_CPU(base, **kwargs)
+    if isinstance(self, FakeCudaTensor):
+        return _ORIG_TENSOR_TO(self.raw_data, device="cpu", copy=True, **kwargs)
+    return _ORIG_TENSOR_CPU(self, **kwargs)
 
 
 def _normalize_module_device(device) -> torch.device:

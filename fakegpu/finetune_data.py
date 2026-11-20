@@ -97,6 +97,13 @@ def profile_tokenized_records(
     JSON rows, including metadata. Rows wider than sequence_length are rejected.
     Callers must select the effective training split before invoking this API.
     """
+    if (
+        not isinstance(records, Iterable)
+        and hasattr(records, "__len__")
+        and hasattr(records, "__getitem__")
+    ):
+        # Map-style datasets such as torch.utils.data.Subset expose a finite index range.
+        records = map(records.__getitem__, range(len(records)))
     if not isinstance(records, Iterable) or isinstance(records, (str, bytes, Mapping)):
         raise FinetuneDataError("records must be an iterable of tokenized mappings")
     return _profile_dataset(

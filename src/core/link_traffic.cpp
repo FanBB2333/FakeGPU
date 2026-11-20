@@ -84,10 +84,9 @@ TransferRoute route_transfer(const ModeledDeviceTopology& topology, int source, 
     return route;
 }
 
-void LinkTrafficModel::Schedule::add(double now, uint64_t amount, double seconds) {
+void LinkTrafficModel::Schedule::add(double start, uint64_t amount, double seconds) {
     bytes += amount;
     if (seconds <= 0.0) return;
-    const double start = std::max(now, busy_until);
     const double end = start + seconds;
     busy_until = end;
     const double size = static_cast<double>(amount);
@@ -109,29 +108,32 @@ uint64_t LinkTrafficModel::Schedule::delivered(double now) const {
     double pending = 0.0;
     for (auto it = segments.rbegin(); it != segments.rend(); ++it) {
         if (it->end <= now) break;
-        pending += it->bytes * (it->end - std::max(it->start, now)) / (it->end - it->start);
+        pending += it->start >= now ? it->bytes : it->bytes * (it->end - now) / (it->end - it->start);
     }
     const double value = static_cast<double>(bytes) - pending;
     return value > 0.0 ? static_cast<uint64_t>(std::llround(value)) : 0;
 }
 
-uint64_t LinkTrafficModel::Schedule::rate(double now, double window) {
-    while (!segments.empty() && segments.front().end <= now - window) {
+void LinkTrafficModel::Schedule::prune(double cutoff) {
+    while (!segments.empty() && segments.front().end <= cutoff) {
         segments.pop_front();
     }
+}
+
+uint64_t LinkTrafficModel::Schedule::rate(double now, double window) {
     const double low = now - window;
+    prune(low);
     double total = 0.0;
     for (const auto& segment : segments) {
-        if (segment.start >= now) break;
+        if (segment.start > now) break;
+        if (low <= segment.start && segment.end <= now) {
+            total += segment.bytes;
+            continue;
+        }
         const double overlap = std::min(segment.end, now) - std::max(segment.start, low);
         if (overlap > 0.0) total += segment.bytes * overlap / (segment.end - segment.start);
     }
     return static_cast<uint64_t>(std::llround(total / window));
-}
-
-LinkTrafficModel::DeviceState* LinkTrafficModel::device(std::size_t index) {
-    if (index >= devices_.size()) devices_.resize(index + 1);
-    return &devices_[index];
 }
 
 double LinkTrafficModel::record(
@@ -140,29 +142,24 @@ double LinkTrafficModel::record(
     if (bytes == 0 || source == target || source >= count || target >= count) return 0.0;
     const TransferRoute route = route_transfer(topology, source, target);
     const double seconds = modeled_seconds_for(bytes, route.bandwidth_gbps);
+    if (devices_.size() < topology.slots.size()) devices_.resize(topology.slots.size());
     auto count_copy = [&](int index, CopyKind kind) {
-        CopyCounter& counter = device(static_cast<std::size_t>(index))->copies[static_cast<int>(kind)];
+        CopyCounter& counter = devices_[index].copies[static_cast<int>(kind)];
         counter.calls += 1;
         counter.bytes += bytes;
         counter.modeled_seconds += seconds;
     };
-    auto schedule = [&](int index, TransferLink link, bool transmit) {
-        if (link == TransferLink::None) return;
-        DeviceState* state = device(static_cast<std::size_t>(index));
-        Schedule& target_schedule = transmit ? state->tx[static_cast<int>(link)] : state->rx[static_cast<int>(link)];
-        target_schedule.add(now, bytes, seconds);
-    };
-    if (source < 0) {
-        count_copy(target, CopyKind::HostToDevice);
-        schedule(target, route.target, false);
-    } else if (target < 0) {
-        count_copy(source, CopyKind::DeviceToHost);
-        schedule(source, route.source, true);
-    } else {
-        count_copy(source, CopyKind::PeerSend);
-        count_copy(target, CopyKind::PeerReceive);
-        schedule(source, route.source, true);
-        schedule(target, route.target, false);
+    if (source >= 0) count_copy(source, target < 0 ? CopyKind::DeviceToHost : CopyKind::PeerSend);
+    if (target >= 0) count_copy(target, source < 0 ? CopyKind::HostToDevice : CopyKind::PeerReceive);
+
+    Schedule* tx = route.source == TransferLink::None ? nullptr : &devices_[source].tx[static_cast<int>(route.source)];
+    Schedule* rx = route.target == TransferLink::None ? nullptr : &devices_[target].rx[static_cast<int>(route.target)];
+    const double start = std::max({now, tx ? tx->busy_until : now, rx ? rx->busy_until : now});
+    for (Schedule* schedule : {tx, rx}) {
+        if (schedule) {
+            schedule->prune(now - kTransferWindowSeconds);
+            schedule->add(start, bytes, seconds);
+        }
     }
     return seconds;
 }

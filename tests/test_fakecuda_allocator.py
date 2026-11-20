@@ -99,6 +99,15 @@ def test_allocator_best_fit_splits_and_coalesces_blocks() -> None:
     assert snapshot[0]["blocks"][0]["size"] == 2 * MIB
 
 
+def test_uncached_allocator_releases_each_allocation_immediately() -> None:
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=False)
+    tracker.allocate(1, 512, 0)
+    tracker.allocate(2, 512, 0)
+    assert tracker.memory_reserved(0) == 1_024
+    tracker.release(1)
+    assert tracker.memory_reserved(0) == 512
+
+
 def test_allocator_releases_cached_segments_before_retry() -> None:
     tracker = _DeviceMemoryTracker([20 * MIB], caching_allocator=True)
     tracker.allocate(1, 1_000, 0)
@@ -109,6 +118,29 @@ def test_allocator_releases_cached_segments_before_retry() -> None:
     stats = tracker.memory_stats(0)
     assert tracker.memory_reserved(0) == 20 * MIB
     assert stats["num_alloc_retries"] == 1
+    assert stats["reserved_bytes.all.freed"] == 2 * MIB
+
+
+def test_reset_accumulated_stats_with_live_storage() -> None:
+    tracker = _DeviceMemoryTracker([64 * MIB], caching_allocator=True)
+    tracker.allocate(1, 1_000, 0)
+    assert tracker.memory_stats(0)["active_bytes.all.allocated"] == 1_024
+
+    tracker.reset_accumulated(0)
+    stats = tracker.memory_stats(0)
+    for metric, live in (
+        ("allocated_bytes", 1_000),
+        ("active_bytes", 1_024),
+        ("reserved_bytes", 2 * MIB),
+    ):
+        assert stats[f"{metric}.all.current"] == stats[f"{metric}.all.peak"] == live
+        assert stats[f"{metric}.all.allocated"] == stats[f"{metric}.all.freed"] == 0
+
+    tracker.release(1)
+    tracker.empty_cache()
+    stats = tracker.memory_stats(0)
+    assert stats["allocated_bytes.all.freed"] == 1_000
+    assert stats["active_bytes.all.freed"] == 1_024
     assert stats["reserved_bytes.all.freed"] == 2 * MIB
 
 
@@ -218,6 +250,54 @@ def test_fakecuda_memory_api_exposes_allocator_state() -> None:
     assert (
         payload["released"]["reserved_after_empty"]
         <= payload["released"]["reserved_before_empty"]
+    )
+
+
+@pytest.mark.parametrize("dispatch_tracking", ["0", "1"])
+def test_tensor_copies_own_storage_on_each_device(dispatch_tracking: str) -> None:
+    code = textwrap.dedent(
+        """
+        import gc
+        import fakegpu
+        import torch
+
+        fakegpu.init(runtime="fakecuda", devices="test-512m:2")
+        data = torch.ones(2, requires_grad=True)
+        loss = data.square().sum()
+        assert torch.cuda.memory_allocated(0) == 0
+        loss.backward()
+        assert data.grad.tolist() == [2.0, 2.0]
+
+        host = torch.zeros(16)
+        source = host.cuda(0)
+        peer = source.to("cuda:1")
+        back = peer.cpu()
+        assert peer.to("cuda:1") is peer
+        assert peer.to("cuda:1", copy=True) is not peer
+        peer.fill_(1)
+        assert [tensor[0].item() for tensor in (host, source, peer, back)] == [0, 0, 1, 0]
+
+        view = peer[1:]
+        del peer
+        gc.collect()
+        assert [torch.cuda.memory_allocated(i) for i in (0, 1)] == [64, 64]
+        del view
+        gc.collect()
+        assert torch.cuda.memory_allocated(1) == 0
+
+        loss = data.cuda(1).sin().square().to("cpu").sum()
+        assert torch.cuda.memory_allocated(0) == 64
+        loss.backward()
+        torch.testing.assert_close(data.grad, 2 + (2 * data.detach()).sin())
+        del loss
+        gc.collect()
+        assert torch.cuda.memory_allocated(1) == 0
+        """
+    )
+    subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, check=True, timeout=30,
+        env=dict(os.environ, FAKEGPU_TERMINAL_REPORT="0", FAKEGPU_MACHINE="off",
+                 FAKEGPU_DISPATCH_MEMORY_TRACKING=dispatch_tracking),
     )
 
 

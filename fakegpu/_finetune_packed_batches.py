@@ -143,9 +143,6 @@ class IsolatedPackingCollator:
             raise FinetuneEstimateError("native packing changed source bin dimensions")
         batch, width = ids.shape
         positions = torch.zeros_like(ids)
-        allowed = torch.zeros(
-            (batch, 1, width, width), dtype=torch.bool, device=ids.device
-        )
         active = torch.zeros_like(ids, dtype=torch.bool)
         for row, source in enumerate(sources):
             size = len(source["ids"])
@@ -163,10 +160,6 @@ class IsolatedPackingCollator:
                 source["positions"], device=ids.device, dtype=ids.dtype
             )
             active[row, :size] = True
-            for start, end in source["spans"]:
-                allowed[row, 0, start:end, start:end] = torch.ones(
-                    (end - start, end - start), dtype=torch.bool, device=ids.device
-                ).tril()
         native_positions = inputs.get("position_ids")
         if native_positions is not None:
             if (
@@ -199,9 +192,14 @@ class IsolatedPackingCollator:
                 raise FinetuneEstimateError(
                     "packed mask dtype must be float32, float16 or bfloat16"
                 )
-            inputs["attention_mask"] = torch.where(
-                allowed, 0.0, torch.finfo(self.mask_dtype).min
-            ).to(self.mask_dtype)
+            mask = torch.full(
+                (batch, 1, width, width), torch.finfo(self.mask_dtype).min,
+                device=ids.device, dtype=self.mask_dtype,
+            )
+            for row, source in enumerate(sources):
+                for start, end in source["spans"]:
+                    mask[row, 0, start:end, start:end].triu_(diagonal=1)
+            inputs["attention_mask"] = mask
         elif native_mask.ndim != 4:
             raise FinetuneEstimateError(
                 "native packing requires a 2D or block-causal 4D mask"

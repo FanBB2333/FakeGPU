@@ -97,6 +97,23 @@ def plan(trainer, *, steps=8):
     )
 
 
+def test_plan_uses_the_native_batched_dataset_fetch(trainer):
+    class PaddedDataset(list):
+        def __getitems__(self, indices):
+            padded = Collator()([self[index] for index in indices])
+            return [
+                {key: values[row] for key, values in padded.items()}
+                for row in range(len(indices))
+            ]
+
+    trainer.train_dataset = PaddedDataset(trainer.train_dataset[:3])
+    loader = torch.utils.data.DataLoader(trainer.train_dataset, batch_size=3)
+    trainer.get_train_dataloader = lambda: loader
+    planned = plan(trainer, steps=1)["updates"][0]["batches"][0]
+    assert planned["input_sha256"] == batch_input_sha256(next(iter(loader)))
+    assert planned["shape"] == [3, 8]
+
+
 def test_reusing_native_profile_preserves_plan_and_avoids_second_scan(
     trainer, monkeypatch
 ):

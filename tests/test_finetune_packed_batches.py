@@ -66,6 +66,18 @@ def test_real_mask_bytes_and_dtype_are_hashed(dtype):
         assert digest != packed_input_sha256(collator()(flat()))
 
 
+def test_packed_mask_uses_requested_dtype_independently_of_torch_default():
+    expected = collator(dtype=torch.float32)(flat())
+    original = torch.get_default_dtype()
+    try:
+        torch.set_default_dtype(torch.float16)
+        actual = collator(dtype=torch.float32)(flat())
+    finally:
+        torch.set_default_dtype(original)
+    assert actual["attention_mask"][0, 0, 3, 0].item() == torch.finfo(torch.float32).min
+    assert packed_input_sha256(actual) == packed_input_sha256(expected)
+
+
 @pytest.mark.parametrize(
     "change", ["tokens", "labels", "positions", "mask", "boundary_loss"]
 )

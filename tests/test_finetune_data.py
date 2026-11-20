@@ -367,6 +367,15 @@ def test_paths_and_missing_tokenizer_fail_explicitly(tmp_path):
         profile_finetune_dataset([], sequence_length=4)
 
 
+def test_native_profile_keeps_pytorch_subset_order():
+    torch = pytest.importorskip("torch")
+    rows = [{"input_ids": [1]}, {"input_ids": [2, 3]}, {"input_ids": [4, 5, 6]}]
+    split = torch.utils.data.Subset(rows, [2, 0])
+    assert profile_tokenized_records(split, sequence_length=4) == profile_tokenized_records(
+        [rows[2], rows[0]], sequence_length=4
+    )
+
+
 def test_native_records_are_scanned_once_and_match_file_statistics(tmp_path):
     rows = [
         {"input_ids": [1, 2, 3], "labels": [-100, 2, 3]},

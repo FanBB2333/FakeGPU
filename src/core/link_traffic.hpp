@@ -75,7 +75,8 @@ private:
         double busy_until = 0.0;
         uint64_t bytes = 0;
 
-        void add(double now, uint64_t amount, double seconds);
+        void add(double start, uint64_t amount, double seconds);
+        void prune(double cutoff);
         uint64_t delivered(double now) const;
         uint64_t rate(double now, double window);
     };
@@ -85,7 +86,6 @@ private:
         Schedule rx[kTransferLinkCount];
     };
 
-    DeviceState* device(std::size_t index);
     std::vector<DeviceState> devices_;
 };
 

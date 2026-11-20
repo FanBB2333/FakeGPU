@@ -246,8 +246,15 @@ def _sampler_configuration(trainer, loader, torch):
     return sampler, "seedable_random", seed
 
 
+def _collate_indices(loader, indices):
+    # PyTorch's map-style loader gives datasets a batched fetch before collation.
+    fetch = getattr(loader.dataset, "__getitems__", None)
+    rows = fetch(indices) if fetch else [loader.dataset[index] for index in indices]
+    return loader.collate_fn(deepcopy(rows))
+
+
 def _collated_batch(loader, indices):
-    inputs = loader.collate_fn([deepcopy(loader.dataset[index]) for index in indices])
+    inputs = _collate_indices(loader, indices)
     input_sha256 = batch_input_sha256(inputs)
     if any(
         value is not None and value.device.type != "cpu" for value in inputs.values()

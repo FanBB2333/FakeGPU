@@ -19,6 +19,7 @@ from ._finetune_packed_batches import (
 )
 from ._finetune_sampler import (
     _class_name,
+    _collate_indices,
     _digest,
     _integer,
     _sha256,
@@ -518,18 +519,11 @@ def inspect_packed_epochs(
                 flattened = [index for group in bins for index in group]
                 if not bins or any(not group for group in bins):
                     raise FinetuneEstimateError("native packing emitted an empty bin")
-                features = (
-                    [
-                        [deepcopy(loader.dataset[index]) for index in group]
-                        for group in bins
-                    ]
-                    if framework == "axolotl"
-                    else [deepcopy(loader.dataset[index]) for index in flattened]
-                )
-                inputs = loader.collate_fn(deepcopy(features))
+                keys = bins if framework == "axolotl" else flattened
+                inputs = _collate_indices(loader, keys)
                 descriptor = describe_packed_batch(inputs)
                 if (
-                    describe_packed_batch(loader.collate_fn(deepcopy(features)))
+                    describe_packed_batch(_collate_indices(loader, keys))
                     != descriptor
                 ):
                     raise FinetuneEstimateError(

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections import deque
+from collections import defaultdict, deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -193,11 +193,10 @@ class _LinkSchedule:
         self.busy_until = 0.0
         self.bytes = 0
 
-    def add(self, now: float, nbytes: int, seconds: float) -> None:
+    def add(self, start: float, nbytes: int, seconds: float) -> None:
         self.bytes += nbytes
         if seconds <= 0:
             return
-        start = max(now, self.busy_until)
         end = start + seconds
         self.busy_until = end
         if self.segments:
@@ -210,8 +209,8 @@ class _LinkSchedule:
                 return
         self.segments.append([start, end, float(nbytes)])
 
-    def _prune(self, now: float, window: float) -> None:
-        while self.segments and self.segments[0][1] <= now - window:
+    def prune(self, cutoff: float) -> None:
+        while self.segments and self.segments[0][1] <= cutoff:
             self.segments.popleft()
 
     def pending(self, now: float) -> float:
@@ -221,7 +220,7 @@ class _LinkSchedule:
         for start, end, nbytes in reversed(self.segments):
             if end <= now:
                 break
-            remaining += nbytes * (end - max(start, now)) / (end - start)
+            remaining += nbytes if start >= now else nbytes * (end - now) / (end - start)
         return remaining
 
     def delivered(self, now: float) -> int:
@@ -230,12 +229,15 @@ class _LinkSchedule:
     def rate(self, now: float, window: float) -> int:
         """Average bytes per second delivered over the last ``window``."""
 
-        self._prune(now, window)
         low = now - window
+        self.prune(low)
         total = 0.0
         for start, end, nbytes in self.segments:
-            if start >= now:
+            if start > now:
                 break
+            if low <= start and end <= now:
+                total += nbytes
+                continue
             overlap = min(end, now) - max(start, low)
             if overlap > 0:
                 total += nbytes * overlap / (end - start)
@@ -263,7 +265,7 @@ class LinkTraffic:
         self._lock = threading.Lock()
         self._routes: dict[tuple[int | None, int | None], Route] = {}
         self._copies: dict[int, dict[str, list[float]]] = {}
-        self._links: dict[tuple[int, str, str], _LinkSchedule] = {}
+        self._links: dict[tuple[int, str, str], _LinkSchedule] = defaultdict(_LinkSchedule)
 
     @property
     def topology(self) -> LinkTopology:
@@ -287,14 +289,6 @@ class LinkTraffic:
         row[1] += nbytes
         row[2] += seconds
 
-    def _schedule(self, device: int, link: str | None, direction: str, now: float, nbytes: int, seconds: float) -> None:
-        if link is None:
-            return
-        schedule = self._links.get((device, link, direction))
-        if schedule is None:
-            schedule = self._links[(device, link, direction)] = _LinkSchedule()
-        schedule.add(now, nbytes, seconds)
-
     def record(self, source: int | None, target: int | None, nbytes: int) -> float:
         """Record one copy; ``None`` stands for host memory.
 
@@ -312,17 +306,20 @@ class LinkTraffic:
             path = self._route(source, target)
             seconds = modeled_seconds(nbytes, path.bandwidth_gbps)
             now = self._clock()
-            if source is None:
-                self._count(target, "host_to_device", nbytes, seconds)
-                self._schedule(target, path.target_link, "rx", now, nbytes, seconds)
-            elif target is None:
-                self._count(source, "device_to_host", nbytes, seconds)
-                self._schedule(source, path.source_link, "tx", now, nbytes, seconds)
-            else:
-                self._count(source, "peer_send", nbytes, seconds)
-                self._count(target, "peer_receive", nbytes, seconds)
-                self._schedule(source, path.source_link, "tx", now, nbytes, seconds)
-                self._schedule(target, path.target_link, "rx", now, nbytes, seconds)
+            if source is not None:
+                self._count(source, "device_to_host" if target is None else "peer_send", nbytes, seconds)
+            if target is not None:
+                self._count(target, "host_to_device" if source is None else "peer_receive", nbytes, seconds)
+
+            endpoints = ((source, path.source_link, "tx"), (target, path.target_link, "rx"))
+            schedules = [
+                self._links[device, link, direction]
+                for device, link, direction in endpoints if link is not None
+            ]
+            start = max([now] + [schedule.busy_until for schedule in schedules])
+            for schedule in schedules:
+                schedule.prune(now - self._window)
+                schedule.add(start, nbytes, seconds)
             return seconds
 
     def snapshot(self) -> dict[int, dict[str, Any]]:

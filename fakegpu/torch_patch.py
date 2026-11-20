@@ -47,7 +47,8 @@ import traceback
 import types
 import weakref
 import warnings
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -143,6 +144,7 @@ _MEMORY_TRACKING = os.environ.get("FAKEGPU_MEMORY_TRACKING", "1") != "0"
 _DISPATCH_MEMORY_TRACKING = (
     os.environ.get("FAKEGPU_DISPATCH_MEMORY_TRACKING", "1") != "0"
 )
+_saved_tensor_device: ContextVar[int | None] = ContextVar("fakegpu_saved_tensor_device", default=None)
 # ---------------------------------------------------------------------------
 # Architecture name lookup (mirrors C++ gpu_profile.cpp)
 # ---------------------------------------------------------------------------
@@ -460,15 +462,11 @@ def _install_upstream_dispatch_memory_tracking(
     torch_mod: Any,
 ) -> None:
     fake_tensor_cls = getattr(upstream, "FakeCudaTensor", None)
-    if (
-        fake_tensor_cls is None
-        or not _MEMORY_TRACKING
-        or not _DISPATCH_MEMORY_TRACKING
-    ):
+    if fake_tensor_cls is None or not _MEMORY_TRACKING:
         _reset_dispatch_tracking_stats(enabled=False)
         return
     if getattr(fake_tensor_cls, "_fakegpu_dispatch_tracking", False):
-        _reset_dispatch_tracking_stats(enabled=True)
+        _reset_dispatch_tracking_stats(enabled=_DISPATCH_MEMORY_TRACKING)
         return
 
     try:
@@ -557,8 +555,14 @@ def _install_upstream_dispatch_memory_tracking(
         device_index = upstream._infer_device_index(args, call_kwargs)
         cpu_args = upstream._tree_map(upstream.unwrap_tensor, args)
         cpu_kwargs = upstream._tree_map(upstream.unwrap_tensor, call_kwargs)
-        with _AllocationTrackingMode(device_index):
-            result = func(*cpu_args, **cpu_kwargs)
+        # Autograd saves CPU-backed tensors during this call. Only these
+        # temporaries belong to the simulated device; host graphs do not.
+        token = _saved_tensor_device.set(device_index)
+        try:
+            with _AllocationTrackingMode(device_index) if _DISPATCH_MEMORY_TRACKING else nullcontext():
+                result = func(*cpu_args, **cpu_kwargs)
+        finally:
+            _saved_tensor_device.reset(token)
         return upstream._tree_map(
             lambda obj: upstream._wrap_function_result(obj, device_index),
             result,
@@ -567,7 +571,7 @@ def _install_upstream_dispatch_memory_tracking(
     _tracked_torch_function._fakegpu_dispatch_tracking = True  # type: ignore[attr-defined]
     fake_tensor_cls.__torch_function__ = _tracked_torch_function
     fake_tensor_cls._fakegpu_dispatch_tracking = True
-    _reset_dispatch_tracking_stats(enabled=True)
+    _reset_dispatch_tracking_stats(enabled=_DISPATCH_MEMORY_TRACKING)
 
 
 def memory_snapshot() -> dict[str, Any]:
@@ -612,10 +616,6 @@ class _TrackedSavedTensor:
 _saved_tensors_hooks_cm: Any = None
 
 
-def _active_fake_device_index() -> int:
-    return int(_upstream_mod._CURRENT_DEVICE)
-
-
 def _pack_autograd_saved_tensor(tensor: Any) -> Any:
     tracker = _memory_tracker
     if tracker is None or not _MEMORY_TRACKING:
@@ -637,9 +637,6 @@ def _pack_autograd_saved_tensor(tensor: Any) -> Any:
         nbytes = int(storage.nbytes())
         if raw_data_ptr == 0 or nbytes == 0:
             return tensor
-        device_index = _active_fake_device_index()
-        if device_index < 0 or device_index >= len(tracker._total):
-            return tensor
         metadata = {
             "dtype": str(getattr(tensor, "dtype", None)),
             "shape": _safe_tensor_shape(tensor),
@@ -648,7 +645,7 @@ def _pack_autograd_saved_tensor(tensor: Any) -> Any:
         synthetic_ptr = tracker.allocate_saved_tensor(
             raw_data_ptr=raw_data_ptr,
             nbytes=nbytes,
-            device=device_index,
+            device=getattr(tensor, "device_index", _saved_tensor_device.get()),
             metadata=metadata,
         )
         if synthetic_ptr is None:

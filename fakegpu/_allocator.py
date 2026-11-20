@@ -172,13 +172,15 @@ def _build_memory_stats_dict(
     current: int,
     peak: int,
     *,
-    active_current: int | None = None,
-    active_peak: int | None = None,
-    reserved_current: int | None = None,
-    reserved_peak: int | None = None,
-    allocated_total: int | None = None,
+    active_current: int = 0,
+    active_peak: int = 0,
+    active_allocated_total: int = 0,
+    active_freed_total: int = 0,
+    reserved_current: int = 0,
+    reserved_peak: int = 0,
+    allocated_total: int = 0,
     freed_total: int = 0,
-    reserved_total: int | None = None,
+    reserved_total: int = 0,
     reserved_freed_total: int = 0,
     inactive_split_current: int = 0,
     inactive_split_peak: int = 0,
@@ -189,63 +191,31 @@ def _build_memory_stats_dict(
     num_alloc_retries: int = 0,
     num_ooms: int = 0,
 ) -> dict[str, Any]:
-    current_i = int(current)
-    peak_i = int(max(current, peak))
-    active_current_i = int(
-        max(current_i, active_current if active_current is not None else current_i)
-    )
-    active_peak_i = int(
-        max(
-            active_current_i,
-            active_peak if active_peak is not None else peak_i,
-        )
-    )
-    reserved_current_i = int(
-        max(
-            active_current_i,
-            reserved_current if reserved_current is not None else current_i,
-        )
-    )
-    reserved_peak_i = int(
-        max(
-            reserved_current_i,
-            reserved_peak if reserved_peak is not None else peak_i,
-        )
-    )
-    allocated_total_i = int(
-        max(current_i, allocated_total if allocated_total is not None else peak_i)
-    )
-    reserved_total_i = int(
-        max(
-            reserved_current_i,
-            reserved_total if reserved_total is not None else reserved_peak_i,
-        )
-    )
     return {
-        "active_bytes.all.current": active_current_i,
-        "active_bytes.all.peak": active_peak_i,
-        "active_bytes.all.allocated": allocated_total_i,
-        "active_bytes.all.freed": int(freed_total),
-        "allocated_bytes.all.current": current_i,
-        "allocated_bytes.all.peak": peak_i,
-        "allocated_bytes.all.allocated": allocated_total_i,
-        "allocated_bytes.all.freed": int(freed_total),
-        "requested_bytes.all.current": current_i,
-        "requested_bytes.all.peak": peak_i,
-        "requested_bytes.all.allocated": allocated_total_i,
-        "requested_bytes.all.freed": int(freed_total),
-        "reserved_bytes.all.current": reserved_current_i,
-        "reserved_bytes.all.peak": reserved_peak_i,
-        "reserved_bytes.all.allocated": reserved_total_i,
-        "reserved_bytes.all.freed": int(reserved_freed_total),
-        "inactive_split_bytes.all.current": int(inactive_split_current),
-        "inactive_split_bytes.all.peak": int(inactive_split_peak),
-        "segment.all.current": int(segment_current),
-        "segment.all.peak": int(segment_peak),
-        "allocation.all.current": int(allocation_current),
-        "allocation.all.peak": int(max(allocation_current, allocation_peak)),
-        "num_alloc_retries": int(num_alloc_retries),
-        "num_ooms": int(num_ooms),
+        "active_bytes.all.current": active_current,
+        "active_bytes.all.peak": active_peak,
+        "active_bytes.all.allocated": active_allocated_total,
+        "active_bytes.all.freed": active_freed_total,
+        "allocated_bytes.all.current": current,
+        "allocated_bytes.all.peak": peak,
+        "allocated_bytes.all.allocated": allocated_total,
+        "allocated_bytes.all.freed": freed_total,
+        "requested_bytes.all.current": current,
+        "requested_bytes.all.peak": peak,
+        "requested_bytes.all.allocated": allocated_total,
+        "requested_bytes.all.freed": freed_total,
+        "reserved_bytes.all.current": reserved_current,
+        "reserved_bytes.all.peak": reserved_peak,
+        "reserved_bytes.all.allocated": reserved_total,
+        "reserved_bytes.all.freed": reserved_freed_total,
+        "inactive_split_bytes.all.current": inactive_split_current,
+        "inactive_split_bytes.all.peak": inactive_split_peak,
+        "segment.all.current": segment_current,
+        "segment.all.peak": segment_peak,
+        "allocation.all.current": allocation_current,
+        "allocation.all.peak": allocation_peak,
+        "num_alloc_retries": num_alloc_retries,
+        "num_ooms": num_ooms,
     }
 
 
@@ -265,6 +235,8 @@ class _DeviceMemoryTracker:
         self._reserved_peak = [0] * len(per_device_bytes)
         self._active = [0] * len(per_device_bytes)
         self._active_peak = [0] * len(per_device_bytes)
+        self._active_allocated_total = [0] * len(per_device_bytes)
+        self._active_freed_total = [0] * len(per_device_bytes)
         self._inactive_split = [0] * len(per_device_bytes)
         self._inactive_split_peak = [0] * len(per_device_bytes)
         self._segment_peak = [0] * len(per_device_bytes)
@@ -378,6 +350,7 @@ class _DeviceMemoryTracker:
             categories[category] = categories.get(category, 0) + nbytes
             self._used[device] += nbytes
             self._active[device] += block_size
+            self._active_allocated_total[device] += block_size
             self._allocation_current[device] += 1
             self._allocated_bytes_total[device] += nbytes
             self._peak[device] = max(self._peak[device], self._used[device])
@@ -414,10 +387,9 @@ class _DeviceMemoryTracker:
             else:
                 categories.pop(category, None)
             self._used[dev] = max(0, self._used[dev] - nbytes)
-            self._active[dev] = max(
-                0,
-                self._active[dev] - int(rec.get("block_bytes", nbytes)),
-            )
+            block_size = rec["block_bytes"]
+            self._active[dev] -= block_size
+            self._active_freed_total[dev] += block_size
             self._allocation_current[dev] = max(
                 0,
                 self._allocation_current[dev] - 1,
@@ -432,7 +404,7 @@ class _DeviceMemoryTracker:
         *,
         raw_data_ptr: int,
         nbytes: int,
-        device: int,
+        device: int | None,
         metadata: dict[str, Any] | None = None,
     ) -> int | None:
         """Track an autograd-saved raw tensor that is hidden behind a high-level op."""
@@ -446,6 +418,8 @@ class _DeviceMemoryTracker:
             if existing is not None:
                 existing["refs"] += 1
                 return int(existing["synthetic_data_ptr"])
+            if device is None:
+                return None
 
             synthetic_data_ptr = self._next_synthetic_data_ptr
             self._next_synthetic_data_ptr -= 1
@@ -538,9 +512,11 @@ class _DeviceMemoryTracker:
         with self._lock:
             if device < 0 or device >= len(self._total):
                 return
-            self._allocated_bytes_total[device] = self._used[device]
+            self._active_allocated_total[device] = 0
+            self._active_freed_total[device] = 0
+            self._allocated_bytes_total[device] = 0
             self._freed_bytes_total[device] = 0
-            self._reserved_bytes_total[device] = self._reserved[device]
+            self._reserved_bytes_total[device] = 0
             self._released_reserved_bytes_total[device] = 0
             self._num_alloc_retries[device] = 0
             self._num_ooms[device] = 0
@@ -689,6 +665,8 @@ class _DeviceMemoryTracker:
                 self._peak[device],
                 active_current=active_bytes,
                 active_peak=self._active_peak[device],
+                active_allocated_total=self._active_allocated_total[device],
+                active_freed_total=self._active_freed_total[device],
                 reserved_current=self._reserved[device],
                 reserved_peak=self._reserved_peak[device],
                 allocated_total=self._allocated_bytes_total[device],
@@ -760,10 +738,10 @@ class _DeviceMemoryTracker:
         selected = self._take_free_allocator_block(device, block_size)
         if selected is None:
             segment_size, segment_type = _allocator_segment_size(block_size)
-            segment_size = max(
-                block_size,
-                min(segment_size, self._total[device]),
-            )
+            if self._caching_allocator:
+                segment_size = max(block_size, min(segment_size, self._total[device]))
+            else:
+                segment_size = block_size
             if self._reserved[device] + segment_size > self._total[device]:
                 return None
             segment = {
@@ -836,6 +814,9 @@ class _DeviceMemoryTracker:
         segment = self._segments_by_id.get(segment_id)
         if segment is None or int(segment.get("device", -1)) != device:
             return
+        if not self._caching_allocator:
+            self._remove_segment(device, segment_id)
+            return
         inactive_before = _segment_inactive_split_bytes(segment)
         for free_block in segment["blocks"]:
             if free_block.get("data_ptr") is None:
@@ -863,10 +844,6 @@ class _DeviceMemoryTracker:
             + _segment_inactive_split_bytes(segment)
             - inactive_before,
         )
-        if not self._caching_allocator and all(
-            block.get("data_ptr") is None for block in segment["blocks"]
-        ):
-            self._remove_segment(device, segment_id)
 
     def _release_empty_segments(self, device: int) -> int:
         released = 0

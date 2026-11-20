@@ -110,6 +110,45 @@ def test_copies_on_one_link_run_back_to_back() -> None:
     assert snapshot[1]["copies"]["peer_receive"]["modeled_seconds"] == pytest.approx(1 / GEN4_X16)
 
 
+@pytest.mark.parametrize("first,second", [((0, 1), (0, 2)), ((0, 1), (2, 1))])
+def test_peer_copies_queue_at_both_ends(first, second) -> None:
+    now = [0.0]
+    model = LinkTraffic(lambda: _topology(["a100"] * 4), clock=lambda: now[0])
+    duration = model.record(*first, 10**9)
+    model.record(*second, 10**9)
+    now[0] = duration / 2
+    links = [record["links"]["nvlink"] for record in model.snapshot().values()]
+
+    assert sum(link["tx_bytes"] for link in links) == 500_000_000
+    assert sum(link["rx_bytes"] for link in links) == 500_000_000
+    assert links[2]["tx_bytes"] == links[2]["rx_bytes"] == 0
+
+
+def test_queued_scalar_copy_is_counted_at_clock_resolution() -> None:
+    now = [float(2**22)]
+    model = LinkTraffic(lambda: _topology(["a100"] * 4), clock=lambda: now[0])
+    duration = model.record(0, 1, 10**9)
+    model.record(0, 2, 4)
+    now[0] += duration / 2
+    assert model.snapshot()[2]["links"]["nvlink"]["rx_bytes"] == 0
+    now[0] += duration
+    receiver = model.snapshot()[2]["links"]["nvlink"]
+    assert receiver["rx_bytes"] == receiver["rx_bytes_per_second"] == 4
+
+
+def test_recording_keeps_only_recent_samples_and_all_time_totals() -> None:
+    now = [0.0]
+    model = LinkTraffic(lambda: LinkTopology((GpuSlot(host_gbps=1.0),)), clock=lambda: now[0])
+    for second in range(10):
+        now[0] = float(second)
+        model.record(None, 0, 1000)
+    assert len(model._links[0, "pcie", "rx"].segments) == 2
+    now[0] += 0.5
+    link = model.snapshot()[0]["links"]["pcie"]
+    assert link["rx_bytes"] == 10_000
+    assert link["rx_bytes_per_second"] == 1000
+
+
 def test_records_normalize_merge_and_format() -> None:
     record = empty_record("c2c", 450.0)
     record["copies"]["host_to_device"] = {"calls": 1, "bytes": 3 * 2**30, "modeled_seconds": 0.007}
