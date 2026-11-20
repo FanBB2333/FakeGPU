@@ -51,6 +51,13 @@ run_smoke() {
     --build-dir "$BUILD_DIR"
   "$PYTHON_BIN" tests/native/monitor_telemetry.py --lib-dir "$BUILD_DIR"
 
+  c++ -std=c++17 -fPIC -shared -DFAKEGPU_TEST_INCOMPLETE_NCCL \
+    tests/native/nccl_loader.cpp -o "$BUILD_DIR/incomplete-nccl.so"
+  c++ -std=c++17 tests/native/nccl_loader.cpp -o "$BUILD_DIR/nccl_loader" \
+    -L "$BUILD_DIR" -lnccl
+  FAKEGPU_REAL_NCCL_PATH="$BUILD_DIR/incomplete-nccl.so" \
+    run_fakegpu "$BUILD_DIR" "$BUILD_DIR/nccl_loader"
+
   local collective_probe="$BUILD_DIR/collective_executor"
   c++ -std=c++17 tests/native/collective_executor.cpp -o "$collective_probe" \
     -I src/distributed -L "$BUILD_DIR" -lnvidia-ml
@@ -122,6 +129,15 @@ run_smoke() {
     FAKEGPU_FAULT_EVENTS="0:XID_79:critical;1:NVLINK_CRC:error:3" \
     FAKEGPU_MIG_LAYOUT="0:1g.10gb:10240:2;1:2g.20gb:20480" \
     run_fakegpu "$BUILD_DIR" "$PYTHON_BIN" tests/native/memory_types.py
+  # The probe closes NVML before it frees its CUDA allocations.
+  "$PYTHON_BIN" - "$BUILD_DIR/fake_gpu_report_memory_types.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as report:
+    summary = json.load(report)["summary"]
+assert summary["alloc"]["calls"] > 0 and summary["free"] == summary["alloc"], summary
+PY
   # Native NVML/CUDA answers and SMI state must match the Python platform model.
   local layout devices platform bridges
   for layout in "v100:8 auto -" "a100:8 auto -" "a100-pcie-80gb:8 auto -" \

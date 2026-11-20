@@ -408,7 +408,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _print_capability_report(report)
 
     audit_failed = any(
-        str(report[name].get("status")) == "failed"
+        report[name].get("status") in {"failed", "no_libraries"}
         for name in ("source_audit", "export_audit")
     )
     return 2 if args.strict and audit_failed else 0

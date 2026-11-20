@@ -208,7 +208,10 @@ def test_removed_device_alerts_and_history_expire_when_its_process_exits(service
     assert service.status()["summary"]["alerts"] == 4
     service.update_config({"devices": "h100:2"})
     # Old devices remain while their workload is alive, with their alerts.
-    assert service.status()["summary"]["alerts"] == 4
+    status = service.status()
+    assert status["summary"]["alerts"] == 4
+    assert status["summary"]["memory_used_bytes"] == 0
+    assert status["processes"][0]["memory_bytes"] == 162 * GIB
     publish(service, child.pid, running=False)
     service.poll()
     assert service.status()["summary"]["alerts"] == 0
@@ -273,12 +276,14 @@ def test_client_timeout_is_recoverable_by_the_console(tmp_path):
         assert not worker.is_alive()
 
 
-def test_events_survive_a_restart(tmp_path):
+def test_events_survive_rotation_and_restart(tmp_path, monkeypatch):
     first = MachineService(MachinePaths(tmp_path))
+    monkeypatch.setattr("fakegpu.machine.service.EVENT_LOG_MAX_BYTES", 1)
     first.emit("daemon.started", "one")
+    first.emit("daemon.stopped", "two")
     second = MachineService(MachinePaths(tmp_path))
-    assert second.emit("daemon.started", "two")["seq"] == 2
-    assert [event["message"] for event in second.events()] == ["one", "two"]
+    assert second.emit("daemon.started", "three")["seq"] == 3
+    assert [event["message"] for event in second.events()] == ["one", "two", "three"]
 
 
 def test_attach_requires_a_running_daemon(tmp_path):

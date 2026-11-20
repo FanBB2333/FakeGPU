@@ -1,7 +1,6 @@
 {
-"privacy_redaction":{"hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
   "checkpoint_config_sha256": "b90b86f35c8e6925ef74ee04d0e758f0a845c83a42089ad82bbaa948de9b4204",
-  "host": "406",
+  "host": "historical-host-a",
   "limitations": [
     "Synthetic fixed-length text and single-GPU Hugging Face Trainer only.",
     "Each method has 6 independent process runs; measured updates within a process are not independent process observations.",
@@ -3952,6 +3951,12 @@
     }
   },
   "model": "Qwen/Qwen3.5-0.8B",
+  "privacy_redaction": {
+    "hardware_identity": "Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.",
+    "personal_identity": "Historical machine labels are replaced with neutral host aliases; original digests and byte counts are unchanged.",
+    "provenance": "Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.",
+    "usage": "Redacted review material, not an unmodified calibration input or a hardware identity attestation."
+  },
   "profile_id": "blackwell",
   "recorded_on": "2026-10-13",
   "reproduce_arguments": [

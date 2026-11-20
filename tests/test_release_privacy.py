@@ -29,6 +29,14 @@ def test_private_files_and_credentials_are_rejected():
     assert check_payload("key.pem", b"-----BEGIN " + b"PRIVATE KEY-----") == ["private-key"]
 
 
+def test_evidence_hardware_uuid_is_redacted_without_rejecting_synthetic_tests():
+    identifier = b"12345678-1234-1234-1234-123456789abc"
+    payload = b'{"environment": {"gpu_uuid": "' + identifier + b'"}}'
+    assert check_payload("tests/data/native_evidence.json", payload) == ["hardware-uuid"]
+    assert check_payload("tests/test_native.py", payload) == []
+    assert check_payload("tests/data/native_evidence.json", payload.replace(identifier, b"withheld")) == []
+
+
 def test_distribution_members_and_links_are_checked_without_extraction(tmp_path):
     wheel = tmp_path / "test.whl"
     with zipfile.ZipFile(wheel, "w") as archive:

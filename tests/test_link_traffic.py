@@ -259,6 +259,38 @@ def test_fakecuda_records_copies_over_the_platform_links() -> None:
     assert snapshot[0]["links"]["nvlink"]["tx_bytes"] == mib
 
 
+def test_fakecuda_layout_refresh_resets_copy_counters_and_routes() -> None:
+    code = textwrap.dedent(
+        """
+        import os
+        os.environ["FAKEGPU_TERMINAL_REPORT"] = "0"
+        import fakegpu
+        fakegpu.init(devices="a100:2", platform="auto")
+        import torch
+        from fakegpu import torch_patch
+
+        host = torch.ones(16)
+        host.cuda(1)
+        assert torch_patch._transfer_snapshot()[1]["copies"]["host_to_device"]["calls"] == 1
+
+        fakegpu.init(devices="gb10:1", platform="auto")
+        refreshed = torch_patch._transfer_snapshot()
+        assert list(refreshed) == [0]
+        assert refreshed[0]["host_link"] == "unified"
+        assert refreshed[0]["copies"]["host_to_device"]["calls"] == 0
+        host.cuda(0)
+        assert torch_patch._transfer_snapshot()[0]["copies"]["host_to_device"]["bytes"] == 64
+        """
+    )
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("FAKEGPU_")}
+    environment.update(PYTHONPATH=str(ROOT), FAKEGPU_MACHINE="off")
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=ROOT, env=environment,
+        text=True, capture_output=True, timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def _library(name: str) -> Path:
     suffix = {"darwin": ".dylib"}.get(sys.platform, ".so.1")
     return BUILD_DIR / f"{name}{suffix}"

@@ -31,7 +31,7 @@ from fakegpu.operator_profiles import (
     match_operator_profile,
 )
 from fakegpu.repository_analyzer import analyze_repository
-from fakegpu.topology import Topology, TopologyError, simulate_collective
+from fakegpu.topology import Link, Topology, TopologyError, simulate_collective, simulate_point_to_point
 from fakegpu.trace_replay import _resilience_summary, replay_trace
 from fakegpu.training_plan import (
     estimate_training_plan,
@@ -1153,6 +1153,18 @@ def test_training_plan_maps_hybrid_shard_zero2_to_shard_grad_op() -> None:
     assert report["rank_local_storage"]["gradient_bytes"] == 1_000
 
 
+def test_multihop_transfer_takes_at_least_its_path_time():
+    topology = Topology(
+        links=[Link("a", "b", 100, 2, "fabric"), Link("b", "c", 100, 3, "fabric")],
+        ranks={0: ["a"], 1: ["c"]}, rank_nodes={0: "n0", 1: "n1"},
+        node_racks={"n0": "r", "n1": "r"}, ecmp=False,
+    )
+    result = simulate_point_to_point(topology, src_rank=0, dst_rank=1, payload_bytes=100)
+    transfer = result["transfers"][0]
+    assert result["summary"]["estimated_time_us"] == pytest.approx(5.016)
+    assert transfer["scheduled_time_us"] == transfer["ideal_time_us"]
+
+
 def test_hierarchical_topology_routes_across_racks_and_reports_links() -> None:
     topology = Topology.from_mapping(_topology_config())
     report = simulate_collective(
@@ -1296,6 +1308,26 @@ def test_trace_replay_reports_overlap_pairs_memory_and_recovery() -> None:
     assert report["operator_profile_summary"]["matched_event_count"] == 1
     assert report["resilience"]["elastic_restart_observed"] is True
     assert len(report["events"]) == 5
+
+
+def test_trace_replay_keeps_profiler_memory_instants() -> None:
+    samples = [
+        {
+            "ph": "i",
+            "name": "[memory]",
+            "ts": ts,
+            "args": {"Total Allocated": allocated, "Total Reserved": 512},
+        }
+        for ts, allocated in [(10, 256), (20, 0)]
+    ]
+    report = replay_trace(
+        {"traceEvents": [*samples, {"ph": "i", "name": "Iteration Start", "ts": 30}]}
+    )
+    timeline = report["memory_timeline"]
+    assert [sample["allocated_bytes"] for sample in timeline["samples"]] == [256, 0]
+    assert timeline["peak_allocated_bytes"] == 256
+    assert timeline["peak_reserved_bytes"] == 512
+    assert report["summary"]["event_count"] == 2
 
 
 def test_trace_replay_deduplicates_fused_operator_profile_summary() -> None:

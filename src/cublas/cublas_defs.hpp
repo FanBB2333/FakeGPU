@@ -265,7 +265,11 @@ typedef struct cublasLtMatmulPreferenceOpaque *cublasLtMatmulPreference_t;
 
 // Algorithm heuristic structures
 typedef struct {
-    int algo;
+    uint64_t data[8];
+} cublasLtMatmulAlgo_t;
+
+typedef struct {
+    cublasLtMatmulAlgo_t algo;
     size_t workspaceSize;
     int state;
     float wavesCount;

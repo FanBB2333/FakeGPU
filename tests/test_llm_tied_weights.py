@@ -59,6 +59,28 @@ def test_tied_embedding_runtime_storage_preserves_checkpoint_payload(
     assert serving["weight_storage"]["base_model_runtime_bytes"] == 320 * element_bytes
 
 
+def test_default_checkpoint_ignores_other_weight_families(tmp_path):
+    from fakegpu.phase_memory_runner import _model_inputs
+
+    root = model(tmp_path)
+    _write_safetensors(root, filename="model.fp16.safetensors", header={
+        "model.embed_tokens.weight": {"dtype": "F16", "shape": [32, 8]},
+        "lm_head.weight": {"dtype": "F16", "shape": [32, 8]},
+    })
+    (root / "model.safetensors.index.json").write_text(json.dumps({
+        "weight_map": {"lm_head.weight": "model.fp16.safetensors"},
+    }))
+    report = estimate_decoder_inference(root, prompt_tokens=8)
+    assert report["checkpoint"]["parameter_count"] == 576
+    assert report["memory"]["parameter_bytes"] == 640
+    serving = estimate_serving_plan(
+        root, prompt_tokens=8, active_sequences=1, max_batch_size=1,
+        target_profile="a100", kv_cache_strategy="dynamic",
+    )
+    _, _, _, paths = _model_inputs(serving)
+    assert [p.name for p in paths if p.suffix == ".safetensors"] == ["model.safetensors"]
+
+
 @pytest.mark.parametrize(
     "overrides,header_change",
     [

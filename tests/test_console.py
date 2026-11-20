@@ -120,6 +120,19 @@ def test_console_survives_a_stopped_machine(service):
     assert app.return_value == "stop"
 
 
+def test_console_opens_with_supported_daemon_platform_settings(service):
+    service.update_config({"devices": "l4:2", "platform": "PCIE-SERVER", "pcie_generation": 2})
+    app = ConsoleApp(LocalClient(service))
+
+    async def scenario():
+        async with app.run_test() as pilot:
+            assert app.query_one("#cfg-platform", Select).value == "pcie-server"
+            assert app.query_one("#cfg-pcie", Select).value == 2
+            await pilot.press("q")
+
+    asyncio.run(scenario())
+
+
 def text(renderable, width=160):
     recorder = Console(width=width, record=True, color_system=None, file=io.StringIO())
     recorder.print(renderable)

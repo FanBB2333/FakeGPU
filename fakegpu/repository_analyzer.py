@@ -467,7 +467,7 @@ def _python_aliases(tree: ast.AST) -> dict[str, str]:
         if isinstance(node, ast.Import):
             for item in node.names:
                 local = item.asname or item.name.split(".", 1)[0]
-                aliases[local] = item.name
+                aliases[local] = item.name if item.asname else local
         elif isinstance(node, ast.ImportFrom) and node.module:
             for item in node.names:
                 if item.name == "*":

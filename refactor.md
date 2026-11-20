@@ -1,9 +1,79 @@
 # FakeGPU 重构分析报告
 
-> 公开资料已隐藏实机型号及 UUID，仅保留架构描述。脱敏归档用于审阅；其中原始签名、源码摘要和字节数仍对应私有原件，不能把公开副本当作未经修改的校准输入，也不能按架构直接复用校准。
+> 公开资料已隐藏实机型号、UUID 及主机标识，仅保留架构描述。脱敏归档用于审阅；其中原始签名、源码摘要和字节数仍对应私有原件，不能把公开副本当作未经修改的校准输入，也不能按架构直接复用校准。
 
-> 最新进度见下方 **2026-10-15 / 连续推进验收清单**；此前交付见 **可复现长度分组与 packing 隔离边界**、**随机采样、跨数据规模与自动校准工作区**、**完整原生训练预算、缓存条件与显存边界**等阶段；实施前承诺审计与后续路线见 **功能闭环计划**；重构结果见 **406**。历史章节的行号、规模和待办状态不能直接代表当前代码。
+> 最新维护见下方 **2026-11-20 / 完整项目深入复核**；此前交付见 **核心模块逐文件复核**、**已实现功能收束**、**2026-10-15 / 连续推进验收清单**及后续历史章节。实施前承诺审计与后续路线见 **功能闭环计划**。历史章节的行号、规模和待办状态不能直接代表当前代码。
 > **约束：重构保持既有功能；经复现的 bug 单独修复、单独提交。**
+
+## 2026-11-20 / 完整项目深入复核
+
+继续由四位审阅者按职责检查上一轮核心范围之外的项目内容，最终覆盖全部 **821 个 Git 受控文件**及本轮新增的三个审阅输入。逐文件方法与最终公开文件 SHA256 见 [完整项目审阅清单](docs/en/project-review-2026-11-20.json)；清单自身不参与自身摘要。
+
+源码、测试、原生探针、脚本、CI、三语指南、示例和历史规划均已通读。**307 份 profile YAML**做全量解析、约束及吞吐派生核验；生成目录逐项对照。**45 份证据／清单文件（含 16 份 gzip）**做完整结构、关联、计数及隐私审计，嵌入日志不标记为人工逐行阅读。官网完整解析并检查正文、CSS、JavaScript、锚点与目录统计；三张文档截图已目视检查。
+
+本轮修复：
+
+- FakeCUDA 从 catalog 读取各设备 SM 数，BF16 支持判断跟随当前设备并接受标准 `including_emulation` 参数；名称与计算能力查询共用已有设备属性校验，删去重复回退。
+- 原生库目录检查、初始化和 preload 共用已有文件名解析，修复目录通过检查但启动时指向不存在版本文件的问题。
+- 验证清单复用 `structured_io.load_mapping`，支持 `.json.gz`，删除独立 JSON／TOML／YAML 解析器。
+- catalog 更新器兼容 Python 3.10；Linux 管理脚本支持绝对虚拟环境路径；hybrid 探针的真实基线直接使用原始环境。
+- checkpoint 测试补齐终止步数恰好整除保存间隔的常见分支，纠正测试将最后一次保存重复计数的问题。
+- 三语文档及 CLI 帮助明确 `preflight --stage` 仅标记报告目标，命令执行至结束；官网安装包含 PyTorch，并注明 Linux 默认 PTX/SASS 后端的 C++20 要求。真实 serving 校准使用用户指定的 `TARGET_GPU_PROFILE`，目录吞吐说明与实现一致。
+- 修正公开摘要、审阅归档及历史规划遗漏的 UUID／主机标签。首次修改前的字节已私有保全；嵌入的私有原件摘要及字节数保持原义，公开副本摘要单独记录。现有发布检查增加一条证据 UUID 规则。
+
+累计生产实现新增 **220 行**、删除 **735 行**，净减少 **515 行**；没有增加重试或兜底框架。
+
+最终 Python 回归 **2086 passed／3 skipped，208.78 秒，无失败**。跳过两项可选 TensorFlow 依赖及一项 CPU-only PyTorch 专用测试。原生 smoke、CPU 数值及禁用 CPU 模拟分支通过；两份 strict 验证清单 **7＋39 项通过**；示例九次 CPU 实验、离线比较和八设备监控单轮通过。
+
+另以已校验固定摘要的上游源码独立构建并实际运行 Linux PTX/SASS 后端：Driver PTX、镜像选择、五种编译目标的 cubin/fatbin 数值与全局变量、cuBLAS 互操作、六种程序／策略组合、父／子／孙内核均通过。nvcc 12.4 不支持的 `sm_100`／`sm_120` 未编译；未使用真实 GPU。
+
+PTX 关闭与启用的两份 wheel 各有 **129 个 Python 文件、307 份 profiles、7 个 JSON 及六个原生产物**逐字节对应源码／构建，仓库外安装后的原生内存往返、coordinator、FakeCUDA 前后向及优化器更新通过。Ruff、差异格式、目录生成一致性及发布隐私检查通过。历史归档继续是脱敏审阅材料，不作为未经修改的校准原件；本轮不新增物理 GPU 精度结论。
+
+## 2026-11-20 / 核心模块逐文件复核
+
+接续上一轮重点检查，四个并行审阅者按文件连续分段通读核心实现，并交叉复核修复。合并阅读区间后核对文件集合，覆盖 **129 个 Python 模块、69 个原生源码／头文件、8 个 CMake 文件、7 个运行时 JSON 和 3 个构建打包入口，共 216 个文件、当前快照 102,653 行**。逐文件路径、行数和最终源码 SHA256 见 [核心审阅覆盖清单](docs/en/core-review-2026-11-20.json)。307 份 profile YAML 另做全量自动校验，未计入逐份人工阅读范围。
+
+本轮新增修复与清理：
+
+- FakeCUDA：保留 `Module.to(cuda, dtype=...)` 的位置／关键字精度及 layout 参数，覆盖参数、buffer、前向及反向。
+- LLM：默认单文件权重优先于旧索引及其他变体；共享 embedding 和 phase 采样选择同步。关闭逐 token 报告时，缓存解码直接使用已有解析求和，避免构造全部步骤。
+- 静态显存：图指纹按张量在图中首次出现的顺序生成，避免内存地址变化使相同图的指纹不同。
+- 工具入口：LLM／serving 的 stdout JSON 保持单一文档；修复 dotted import 对静态调用分析的干扰、strict capability 检查对空构建目录误报成功，以及实验相对可执行文件忽略工作目录的问题。
+- 分布式：多跳传输调度时间至少覆盖完整路由时间；普通对端断开返回发送错误，避免 SIGPIPE 终止进程；移除 payload 解析中的整块额外复制。
+- CUDA／NVML：统一 PCI 查询及反查，修复驱动入口查询成功状态；切片指针的属性与设备归属使用所属分配。
+- 原生 ABI：EncoderStats 使用三个 32 位输出；cuBLASLt heuristic 使用正确的 64 字节 algorithm 与 96 字节结果布局。
+- NCCL：缺少必需符号的真实库初始化失败后释放 handle，后续初始化继续正确报告失败。
+- 删除无调用的旧 Driver 报告写入器、空注册函数、不可达分支和不可能触发的重复校验；复用 memcpy dispatch 与 CLI 字节换算。
+
+包含上一轮保留改动，生产实现累计新增 193 行、删除 661 行，净减少 **468 行**。新增测试集中于已复现问题及常用分支，没有增加重试或兜底框架。
+
+最终验收：**2076 passed／3 skipped，261.88 秒，无失败**。跳过原因是两项可选 TensorFlow 依赖缺失及一项 CPU-only PyTorch 专用测试。原生 smoke、八组 BLAS、六组数值对照、整数类型拒绝、PyTorch matmul、禁用 CPU 模拟的构建分支通过；两份现有 manifests 在 strict 下 **7＋39 项通过**。断连用例在沙箱外复现修复前 SIGPIPE 退出码 -13，修复后通过。Ruff、差异格式及源码／wheel 隐私检查通过。
+
+最终 wheel 的 129 个 Python 文件、307 个 profiles、7 个数据文件及六个原生产物与当前源码／构建逐字节一致；仓库外隔离安装的 native 内存往返、coordinator 与 FakeCUDA 训练步通过。本轮仍使用 PTX-disabled 原生构建，未进行 PTX／SASS 和真实 GPU 验证。
+
+## 2026-11-20 / 已实现功能收束
+
+扫描当前 Python 模块、原生 C++、构建及发布入口，并对照已有规划与维护测试。本轮只修复已实现功能和清理重复代码，不扩展历史路线中的硬件验收范围。
+
+- FakeCUDA 重复初始化：平台派生槽位不再写回进程环境；更新设备布局时重建传输路由和计数，避免旧拓扑污染后续复制。
+- 微调配置：展开嵌套字段后再自动识别框架，统一嵌套与平铺的 Hugging Face／LLaMA-Factory 配置行为。
+- 训练规划：识别 Accelerate 的 `fsdp_version` 与 `fsdp_reshard_after_forward`，保留已有显式分片策略优先级，沿用既有分片峰值模型。
+- 原生数值：修复 GEMV 在 `beta=0` 时读取旧输出产生 NaN，以及 FP16 次正规数解码指数偏差。
+- NVML：修复 legacy PCI bus ID 截断，并让 v3 共用基础 PCI 字段填充。
+- 简化实现：合并微调步数计算和 trace 区间合并，删除传输统计的宽异常吞噬，以及 cuBLAS 中 14 组无效果的指针模式查询和锁。
+
+新增六个 Python 回归用例，覆盖嵌套配置、训练分片配置、重复初始化后的布局及计数；原生用例补充 GEMV 输出、FP16 次正规数及普通 GPU／NVLink 对端 PCI 字段检查。生产实现新增 71 行、删除 185 行，净减少 **114 行**，没有增加兜底层。
+
+本轮验证：
+
+- 全量 Python：**2068 passed／3 skipped，222.73 秒**。两项跳过因未安装可选 TensorFlow，另一项只适用于 CPU-only PyTorch 构建。
+- 原生 smoke：通过，覆盖 307 个合成 profiles、CUDA C++、collectives、五组平台拓扑和 coordinator。
+- CPU 数值：八组 BLAS、六组 research numerics、十五项整数类型拒绝及 PyTorch matmul 均通过；research numerics 最大绝对误差为零。禁用 CPU 模拟的构建及 API 策略检查也通过。
+- 两份现有 validation manifests：**7＋39 项通过**。
+- Wheel：129 个 Python 文件、307 个 profiles 和六个原生产物与源码／构建一致；仓库外安装后的原生内存往返、FakeCUDA 训练步及全部 **46 个 CLI help** 通过。
+- Ruff、差异格式及源码／wheel 发布隐私检查通过。
+
+本轮原生构建关闭 PTX 执行，未验证 PTX／SASS 或真实 GPU。FSDP2 的 `reshard_after_forward=False` 沿用既有 `shard_grad_op` 峰值预算近似，不代表精确的分阶段持久显存模型，也不新增真机精度结论。
 
 ## 2026-10-15 / 连续推进验收清单
 
@@ -908,7 +978,7 @@ P3 首批原生文本 SFT 流程交付后，优先扩展较长序列、microbatc
 
 ### Qwen3.5-0.8B 真实 CUDA 证据
 
-本轮使用 406 的物理 GPU 1 **Blackwell GPU**，Qwen3.5-0.8B 本地预训练权重的 **text-only backbone**（752,393,024 个参数），合成定长算术问答。运行栈为 PyTorch **2.8.0+cu128**、Transformers **5.12.1**、Accelerate **1.14.0**、PEFT **0.19.1**，QLoRA 使用 bitsandbytes **0.50.2**。未安装 `flash-linear-attention` 与 `causal-conv1d`，不能将此结果直接迁移到启用这些快速 kernel 的栈。
+本轮使用 历史主机A 的物理 GPU 1 **Blackwell GPU**，Qwen3.5-0.8B 本地预训练权重的 **text-only backbone**（752,393,024 个参数），合成定长算术问答。运行栈为 PyTorch **2.8.0+cu128**、Transformers **5.12.1**、Accelerate **1.14.0**、PEFT **0.19.1**，QLoRA 使用 bitsandbytes **0.50.2**。未安装 `flash-linear-attention` 与 `causal-conv1d`，不能将此结果直接迁移到启用这些快速 kernel 的栈。
 
 统一配置：BF16 参数与计算、SDPA、microbatch **1**、gradient accumulation **2**、sequence length **128**、AdamW、learning rate **2e-5**、不启用 checkpointing/packing。LoRA 为 `q_proj/v_proj`、rank **8**、alpha **16**、dropout **0**，可训练参数 **319,488**；QLoRA 为 NF4、double quantization、BF16 compute、uint8 storage。QLoRA 的非量化张量/adapter 实际精度还受到 PEFT k-bit preparation 影响，不能只按 BF16 权重总量推算显存。
 
@@ -1044,13 +1114,13 @@ P4 的 diffusion 与多机工作在 P2 协议稳定后可并行；P5 中实验�
 
 本机可立即开展 P0/P1 的 CPU 归一与公式验证、P2 的 Blackwell GPU 单卡小模型真实训练，以及 R24 的单卡 Transformers 长序列采样。P3 需要逐一验证安装栈和实际启动命令；R26 的真实多机/多栈证据不能仅靠本机增加逻辑 rank 补齐。当前机器另一张 secondary GPU 卡与 Blackwell GPU 属于不同设备环境，不能未经对应校准就当作同构多卡吞吐测试。
 
-## 2026-10-13 / 406：完成度、逐部件检查与实施结果
+## 2026-10-13 / 历史主机A：完成度、逐部件检查与实施结果
 
 ### 基线选择
 
 在 `<home>/repos/fakeGPU` 执行 `git pull --ff-only origin main` 后确认分叉：本地独有 `8b7a7ec3`，远端独有 107 个提交，远端顶端为 `3ba1dcaf`。本地提交是较早的快照合入，远端已经有模块拆分、功能扩展和后续 CUDA/cuBLAS 修复，因此以 `origin/main` 为基线更合理。
 
-先创建 `backup/406-main-before-refactor-20261013` 保存本地原始提交，再 rebase。冲突处保留远端已经演进的实现，本地独有且仍适用的运行时配置回归测试迁移到 `tests/test_runtime_config.py`，形成 `e6f15727`。没有把旧快照覆盖回新代码，也没有推送远端。旧目录下本机已有的 Shakespeare 数据保留在原处，不纳入提交。
+先创建 `backup/历史主机A-main-before-refactor-20261013` 保存本地原始提交，再 rebase。冲突处保留远端已经演进的实现，本地独有且仍适用的运行时配置回归测试迁移到 `tests/test_runtime_config.py`，形成 `e6f15727`。没有把旧快照覆盖回新代码，也没有推送远端。旧目录下本机已有的 Shakespeare 数据保留在原处，不纳入提交。
 
 ### 项目完成度
 
@@ -1092,7 +1162,7 @@ P4 的 diffusion 与多机工作在 P2 协议稳定后可并行；P5 中实验�
 
 ### 验证证据与复现
 
-环境：406，Linux，Python **3.12.12**，PyTorch **2.9.1+cu128**；真实计算使用物理 GPU 1 **Blackwell GPU**，驱动 **580.178.04**。构建目录为 `build-refactor-20261013`，本轮日志/JSON 在 `/tmp/fakegpu-refactor-20261013/`（临时本机产物，不作为仓库资产提交）。
+环境：历史主机A，Linux，Python **3.12.12**，PyTorch **2.9.1+cu128**；真实计算使用物理 GPU 1 **Blackwell GPU**，驱动 **580.178.04**。构建目录为 `build-refactor-20261013`，本轮日志/JSON 在 `/tmp/fakegpu-refactor-20261013/`（临时本机产物，不作为仓库资产提交）。
 
 | 验证 | 结果 |
 |---|---|
@@ -1135,7 +1205,7 @@ python tests/native/hybrid_visibility.py --build-dir build-refactor-20261013 --d
 | `91243b8` | §5.2 | workspace catalog 每 FX 节点重载 → 每图一次；torch 版本串 lru_cache |
 | `f6891c8` | §3.4+§5.4 | `structured_io.emit_json` 收敛 8 处 print-or-write `--json` 块并消除双重序列化；dtype 表与 `_iter_tensor_leaves` 各去重一份 |
 
-**验证矩阵**：每阶段本地全量 `pytest`（222 passed）+ ruff；`scripts/test.sh smoke` 完整通过（含 native C++ 重建，覆盖 `native_smi.cpp` 改动）；CI 同款 manifest 校验（7+39 cases）通过；远端真机单测——**406**（Python 3.12 + torch 2.9.1+cu128，`~/refactor-test/FakeGPU`）与 **gem12**（torch 2.12.1+cu130）均 221 passed + 1 skipped（skip 为 CPU-only 构建专属测试，预期）。
+**验证矩阵**：每阶段本地全量 `pytest`（222 passed）+ ruff；`scripts/test.sh smoke` 完整通过（含 native C++ 重建，覆盖 `native_smi.cpp` 改动）；CI 同款 manifest 校验（7+39 cases）通过；远端真机单测——**历史主机A**（Python 3.12 + torch 2.9.1+cu128，`~/refactor-test/FakeGPU`）与 **历史主机B**（torch 2.12.1+cu130）均 221 passed + 1 skipped（skip 为 CPU-only 构建专属测试，预期）。
 
 **2026-08-17 第二批落地**：§8 第 3 步（公共设施）剩余项之一完成。
 
@@ -1143,7 +1213,7 @@ python tests/native/hybrid_visibility.py --build-dir build-refactor-20261013 --d
 |---|---|---|
 | `a9da7f8` | §3.3 | 新增 `_api._FakeGpuRuntimeConfig`（frozen dataclass，10 个 FAKEGPU_* 配置字段）收敛 `_api.py`/`_runtime.py` 内部转发；`init()`/`env()`/`run()` 三个公开入口的关键字签名保持逐字不变（外部调用方零感知），仅内部把 10 个散装 kwarg 换成一个 `config` 对象；新增 `_build_env()` 消除 `run()`→`env()` 的整段 10-kwarg 转发；`_apply_env_inplace`/`_apply_config_env_inplace`/`_apply_config_env`/`_runtime._init_native_runtime` 四处签名同步收敛。净减约 **77 行**（220 处/− 变化集中在 `_api.py`），行为不变 |
 
-验证：本地全量 `pytest`（222 passed，与改动前一致）+ ruff clean；CI 同款 manifest 校验（7+39 cases）通过；`scripts/test.sh smoke`（含 native 重建）通过；额外手工冒烟——`fakegpu.env()`/`fakegpu.init(runtime="native")`/`fakegpu.run()` 三个公开入口直接调用验证派生的 `FAKEGPU_*` 环境变量、`device_count` 校验报错、子进程环境注入均与改动前一致。远端 406/gem12 真机复测见第一批的验证矩阵说明；`f6891c8`（emit_json，改动了 CLI `--json` 输出代码路径）与 `a9da7f8` 已于 2026-08-17 在两台机器上复跑通过（各 221 passed + 1 skipped）。
+验证：本地全量 `pytest`（222 passed，与改动前一致）+ ruff clean；CI 同款 manifest 校验（7+39 cases）通过；`scripts/test.sh smoke`（含 native 重建）通过；额外手工冒烟——`fakegpu.env()`/`fakegpu.init(runtime="native")`/`fakegpu.run()` 三个公开入口直接调用验证派生的 `FAKEGPU_*` 环境变量、`device_count` 校验报错、子进程环境注入均与改动前一致。远端 历史主机A/历史主机B 真机复测见第一批的验证矩阵说明；`f6891c8`（emit_json，改动了 CLI `--json` 输出代码路径）与 `a9da7f8` 已于 2026-08-17 在两台机器上复跑通过（各 221 passed + 1 skipped）。
 
 **2026-08-17 §7 bug 批量修复**：12 项中 10 项确认为真实缺陷并修复（各一个 `fix:` commit），1 项（#6）在修复过程中发现是**未完成且有 bug 的半成品**（假设了 catalog schema 里不存在的 `"group"` 字段，`native_capability_report()` 一调用就 `KeyError`）——已改正为正确实现；1 项（#12）复核后判定**不是 bug，未改**。
 
@@ -1162,7 +1232,7 @@ python tests/native/hybrid_visibility.py --build-dir build-refactor-20261013 --d
 
 **#12 复核结论（未改）**：`_validate_collector_environment_contract` 只在校验的 `FAKEGPU_SERVING_*` 环境变量已设置时才比对，起初怀疑"未设置应报错"。但 `build_cuda_serving_sample` 是文档化的公开 API（README "The same adapter is available as `fakegpu.build_cuda_serving_sample(...)` for use inside a Python benchmark"），供 vLLM/自定义 runner **在 FakeGPU 自身采集子进程之外直接调用**；`tests/test_analysis_extensions.py:757` 就是在这些环境变量全部未设置的情况下调用并断言成功。若改成"未设置即报错"会直接打破这个文档化用例和对应测试。当前"仅在存在时比对"是该函数**双重用途设计下的正确行为**，不是缺陷，保留不动。
 
-验证：本轮改动后本地全量 `pytest`（222 passed）+ ruff clean + CI 同款 manifest 校验（7+39 cases）通过；`_process_name`/`native_capability_report` 过滤逻辑另有手工冒烟验证。**本轮未做远端 406/gem12 复测**——多数改动是纯逻辑修正（正则、计数器时序、assert→raise、字符串校验）或范围明确的行为收紧，本地+CI 已提供等价确认；如需更保险可再补一次远端跑。
+验证：本轮改动后本地全量 `pytest`（222 passed）+ ruff clean + CI 同款 manifest 校验（7+39 cases）通过；`_process_name`/`native_capability_report` 过滤逻辑另有手工冒烟验证。**本轮未做远端 历史主机A/历史主机B 复测**——多数改动是纯逻辑修正（正则、计数器时序、assert→raise、字符串校验）或范围明确的行为收紧，本地+CI 已提供等价确认；如需更保险可再补一次远端跑。
 
 **2026-08-20 第三批落地**：§8 第 1 步（待决策项）全部拍板，第 3 步（公共设施）收尾，第 6 步（兜底收敛与性能）剩余项完成。
 
@@ -1183,7 +1253,7 @@ python tests/native/hybrid_visibility.py --build-dir build-refactor-20261013 --d
 
 **§3.6 中有意保留的差异**：`--json` 的两种形态（可选路径 vs 布尔开关）不合并——布尔那组命令的全部输出就是 JSON 文档本身，改成可选路径会让紧跟的位置参数被 argparse 吞掉；`--strict` 的退出码各命令不同（1/2/3），都写在各自 `--help` 里，统一会破坏已声明的行为，只把声明方式收敛到一处。`capabilities --strict` 的 2 与"用法错误"的 2 重合，是既有取值，未动。
 
-验证：本地全量 `pytest`（233 passed，含 3 个新增测试）+ ruff clean；CI 同款 manifest 校验（7+39 cases）通过。**本轮尚未跑 `scripts/test.sh smoke`/`cpu` 与远端 406/gem12 复测**——改动集中在 Python 侧 CLI 与纯逻辑路径，未触碰 `src/`；如需最终确认可按 §3 建议补一次。
+验证：本地全量 `pytest`（233 passed，含 3 个新增测试）+ ruff clean；CI 同款 manifest 校验（7+39 cases）通过。**本轮尚未跑 `scripts/test.sh smoke`/`cpu` 与远端 历史主机A/历史主机B 复测**——改动集中在 Python 侧 CLI 与纯逻辑路径，未触碰 `src/`；如需最终确认可按 §3 建议补一次。
 
 **2026-08-20 第四批落地**：§8 第 4 步（大合并）与第 5 步（机械拆分）完成主体。
 
@@ -1212,7 +1282,7 @@ python tests/native/hybrid_visibility.py --build-dir build-refactor-20261013 --d
 - `torch_patch` 的 `_NUM_DEVICES`/`_DEVICE_PROFILES`/`_DEVICE_NAME`/`_TOTAL_MEMORY` 是 `_refresh_runtime_profile_state` 会重新绑定的可变模块状态，**不能**随 profile 解析函数一起搬走（搬走后 from-import 拿到的是旧值副本，刷新不可见），已刻意留在 `torch_patch`。
 - 移动私有函数会让 monkeypatch 目标失效：`tests/test_analysis_extensions.py` 对 `_transformers_serving_workload` 的 patch 已改指新模块（继续 patch 旧名字不会报错，只会静默失去拦截）。
 
-验证：本地全量 `pytest`（234 passed）+ ruff clean + CI 同款 manifest 校验（7+39 cases）+ `scripts/test.sh smoke`（含 native 重建）+ `scripts/test.sh cpu` 全部通过。**远端 406/gem12 尚未复测**。
+验证：本地全量 `pytest`（234 passed）+ ruff clean + CI 同款 manifest 校验（7+39 cases）+ `scripts/test.sh smoke`（含 native 重建）+ `scripts/test.sh cpu` 全部通过。**远端 历史主机A/历史主机B 尚未复测**。
 
 **2026-08-22 第五批落地**：继续完成 §4.2 的 `torch_patch` 机械拆分，保持旧私有导入路径可用。
 
@@ -1220,7 +1290,7 @@ python tests/native/hybrid_visibility.py --build-dir build-refactor-20261013 --d
 |---|---|---|
 | `b1916fe` | §4.2 | 将 Accelerate、distributed、FSDP 兼容补丁移到 `_ecosystem_compat.py`；将架构名、字节格式化和终端内存报告移到 `_torch_reporting.py`。`torch_patch.py` 从 2,087 行降至 1,753 行；原模块保留 `_patch_*`、`_arch_name`、`_fmt_bytes`、`_dump_terminal_summary` 兼容入口，参数、异常和报告文本不变。 |
 
-验证：本地全量 `pytest`（262 passed）+ `ruff` clean + `scripts/test.sh smoke` + `scripts/test.sh cpu` 全部通过；抽出的 6 个兼容函数与拆分前 AST 源码逐字一致。推送 `00a6c4d` 后按 nvidb 队列复测：406（job 1486，Blackwell GPU，torch 2.8.0+cu128）真实 CUDA/FakeGPU 集成探针通过；gem12（job 1485，Ampere GPU，torch 2.12.1+cu130）全量 `pytest` 为 **261 passed + 1 skipped**，随后 patch probe 通过。406 环境没有 pytest，因此采用同一 CUDA/torch 环境的集成探针，未改动远端环境。
+验证：本地全量 `pytest`（262 passed）+ `ruff` clean + `scripts/test.sh smoke` + `scripts/test.sh cpu` 全部通过；抽出的 6 个兼容函数与拆分前 AST 源码逐字一致。推送 `00a6c4d` 后按 nvidb 队列复测：历史主机A（job 1486，Blackwell GPU，torch 2.8.0+cu128）真实 CUDA/FakeGPU 集成探针通过；历史主机B（job 1485，Ampere GPU，torch 2.12.1+cu130）全量 `pytest` 为 **261 passed + 1 skipped**，随后 patch probe 通过。历史主机A 环境没有 pytest，因此采用同一 CUDA/torch 环境的集成探针，未改动远端环境。
 
 **§4/§5 剩余未做**：`preflight.py`（1362 行，四个关注点未分离）；`calibration` 的比较/验证/bundle 与 CLI 未再分；`serving_plan` 的两个 pool model（约 1,100 行）与 CLI 未再分；`smi`/各 CLI 的 `main` 仍是大函数（§4.1 的超大函数清单只处理了其中一部分）。§3.6 遗留：`llm_cli` 与 `serving_plan` 约 12 个同名 flag 默认值不同，本轮只统一了声明方式。另注意 `diffusion_estimator` 的 `_local_profile` 产物绕过 `_validate_profile` 的漂移风险（§4.2 提到）现在两者同在 `_diffusion_pipeline.py`，修它会改变行为，属独立事项。
 
@@ -1427,7 +1497,7 @@ ruff（F401/F811/F841）检查是干净的——没有未使用的 import / 变�
 ### 4.2 模块拆分方案（均为机械移动，不改行为）
 
 - **`torch_patch.py`（4346 → ~6 个模块）**：`_profiles.py`（profile 解析，无 torch 依赖，`:63-226`）；`_cross_device.py`（`:228-368`）；`_allocator.py`（`_DeviceMemoryTracker` 及其自由函数，约 810 行，`:371-1184`，是最干净的一刀）；`_reporting.py`（`:1187-1332`，注意 `_dump_terminal_summary` 直接摸 tracker 私有字段，先给 tracker 一个公开 `report_rows()`）；`_ecosystem_compat.py`（HF/accelerate/FSDP/NCCL 第三方 shim，`:2777-3330`）；standalone 部分按 §1.1 处置。
-- **`smi.py`（4353 → ~6 个模块）**：查询 schema（`:53-403` + `:3845-3961`）；modeled 环境解析（`:406-1146`，纯函数）；publisher（`:1149-1500`，`torch_patch` 唯一依赖的部分）；inventory/归一化（`:1841-2046` + `:3042-3833`，`metrics.py` 真正需要的部分——现在 `metrics.py:18-23` 在 import `smi` 的私有函数，是缺共享模块的最明确信号）；renderers（约 900 行）；CLI。
+- **`smi.py`（4353 → ~6 个模块）**：查询 schema（`:53-403` + `:3845-3961`）；modeled 环境解析（`:历史主机A-1146`，纯函数）；publisher（`:1149-1500`，`torch_patch` 唯一依赖的部分）；inventory/归一化（`:1841-2046` + `:3042-3833`，`metrics.py` 真正需要的部分——现在 `metrics.py:18-23` 在 import `smi` 的私有函数，是缺共享模块的最明确信号）；renderers（约 900 行）；CLI。
 - **`calibration.py`（2873 → 4 个模块）**：比较/验证/bundle；serving observation 协议；transformers real-CUDA 适配器（唯一 import torch/transformers 的部分，现在为躲循环 import 在 `:2131` 懒加载 `llm_estimator`——强烈暗示它本就该在别处）；CLI。
 - **`serving_plan.py`（3722 → ~5 个模块）**：KV-pool 数学、vLLM 预算、speculative decoding、request manifest、CLI（详见 §3.2 合并后再拆）。
 - **`diffusion_estimator.py`（2327 → 4 个模块）**：pipeline inspection、profile 加载/校验（注意 `_local_profile` 产物绕过 `_validate_profile`，两套 schema 编码会漂移）、activation 模型、CLI。

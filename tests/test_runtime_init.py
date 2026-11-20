@@ -155,6 +155,32 @@ def test_native_mode_preload_boundaries() -> None:
     assert passthrough == ()
 
 
+def test_fakecuda_properties_follow_each_selected_profile() -> None:
+    code = """
+import fakegpu
+fakegpu.init(devices=['gtx1080ti', 'l4'])
+import torch
+from fakegpu.profile_catalog import get_profile
+for index, profile_id in enumerate(('gtx1080ti', 'l4')):
+    expected = get_profile(profile_id)
+    torch.cuda.set_device(index)
+    properties = torch.cuda.get_device_properties()
+    assert properties.multi_processor_count == expected.sm_count
+    assert torch.cuda.get_device_name() == expected.torch_name
+    assert torch.cuda.get_device_capability() == expected.compute_capability
+    assert torch.cuda.is_bf16_supported() == (expected.compute_major >= 8)
+    assert torch.cuda.is_bf16_supported(including_emulation=False) == (expected.compute_major >= 8)
+for query in (torch.cuda.get_device_name, torch.cuda.get_device_capability, torch.cuda.get_device_properties):
+    try:
+        query(2)
+    except RuntimeError as error:
+        assert 'invalid device ordinal' in str(error)
+    else:
+        raise AssertionError('device queries must agree on the configured device count')
+"""
+    _assert_ok(_run(code), "per-device profile properties")
+
+
 def test_unsupported_api_policy_environment() -> None:
     from fakegpu._api import _apply_config_env, _FakeGpuRuntimeConfig
 

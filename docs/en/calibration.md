@@ -72,7 +72,7 @@ python3 -m fakegpu plan-serving \
   --dtype bfloat16 \
   --attention-implementation sdpa \
   --kv-cache-strategy dynamic \
-  --target-profile a100 \
+  --target-profile "$TARGET_GPU_PROFILE" \
   --json build/transformers-serving-plan.json
 
 python3 -m fakegpu calibrate collect-serving \

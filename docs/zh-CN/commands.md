@@ -14,7 +14,7 @@
 |---|---|
 | `fakegpu doctor` | 检查安装、原生库、PyTorch 和 profiles |
 | `fakegpu demo` | 在 CPU 上执行一个小型训练步骤，程序能看到 CUDA 设备 |
-| `fakegpu preflight` | 将工作负载执行到指定阶段，判断能放下还是会 OOM |
+| `fakegpu preflight` | 执行工作负载，判断跟踪到的显存能放下还是会 OOM |
 | `fakegpu capabilities` | 列出或严格检查原生 API 分类 |
 | `fakegpu validate` | 执行 JSON、TOML 或 YAML 声明式验证矩阵 |
 

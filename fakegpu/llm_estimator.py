@@ -331,6 +331,9 @@ def inspect_safetensors_checkpoint(
                     f"not a safetensors file: {shard_name}"
                 )
         indexed_total = 0
+    elif (root / "model.safetensors").is_file():
+        shard_names = ["model.safetensors"]
+        indexed_total = 0
     elif index_path.is_file():
         index = json.loads(index_path.read_text(encoding="utf-8"))
         weight_map = index.get("weight_map")
@@ -547,7 +550,7 @@ def estimate_decoder_inference(
     decode_step_count = max(0, generated_tokens - 1)
     decode_steps: list[dict[str, int]] = []
     decode_step_specs: list[tuple[int, int, int, int]] = []
-    for step in range(decode_step_count):
+    for step in range(decode_step_count if include_decode_steps or not use_cache else 0):
         logical_key_tokens = prompt_tokens + step + 1
         key_tokens = _effective_context_tokens(
             logical_key_tokens,
@@ -974,7 +977,9 @@ def _tied_embedding_storage(
     input_name, output_name = "model.embed_tokens.weight", "lm_head.weight"
     names = (input_name, output_name)
     index_path = root / "model.safetensors.index.json"
-    if index_path.is_file():
+    if (root / "model.safetensors").is_file():
+        paths = [root / "model.safetensors"]
+    elif index_path.is_file():
         weight_map = json.loads(index_path.read_text(encoding="utf-8"))["weight_map"]
         if any(name not in weight_map for name in names):
             return None

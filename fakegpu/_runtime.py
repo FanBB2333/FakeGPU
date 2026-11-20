@@ -190,7 +190,12 @@ def _init_fakecuda_runtime(
     if platform is not None or os.environ.get("FAKEGPU_PLATFORM"):
         from .platforms import export_platform
 
-        export_platform(os.environ, platform)
+        # Keep derived slots out of the process environment: a later init()
+        # must resolve them from its new devices, rather than treat our old
+        # export as an explicit topology override.
+        if platform is not None:
+            os.environ["FAKEGPU_PLATFORM"] = platform
+        export_platform(dict(os.environ), platform)
 
     patch_result = patch_torch(num_devices=effective_device_count)
     return RuntimeInitResult(runtime="fakecuda", backend=patch_result.backend)

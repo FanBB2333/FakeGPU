@@ -576,7 +576,10 @@ def _simulate_flows(
             link_id: link_objects[link_id].transfer_time_us(payload)
             for link_id, payload in round_link_bytes.items()
         }
-        round_duration = max(link_service_times.values(), default=0.0)
+        round_duration = max(
+            max(link_service_times.values(), default=0.0),
+            max(ideal_time for _flow, _path, ideal_time in routed),
+        )
         total_time_us += round_duration
         round_entries.append(
             {

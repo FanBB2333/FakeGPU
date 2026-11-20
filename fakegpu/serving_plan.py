@@ -923,9 +923,10 @@ def _serving_admission(
         kv_cache_capacity_bytes = runtime_report["kv_cache"][
             "allocatable_bytes"
         ]
-        if kv_cache_capacity_bytes is None:
+        initialization_fits = runtime_report["memory"]["initialization_fits"]
+        if initialization_fits is None:
             memory_limited_count = None
-        elif runtime_report["memory"]["initialization_fits"] is False:
+        elif not initialization_fits:
             memory_limited_count = 0
         else:
             memory_limited_count = _maximum_fitting(
@@ -1005,7 +1006,9 @@ def _serving_limiting_factor(
     if not fits_configured_limit:
         return "configured_max_batch_size"
     if runtime == "vllm" and runtime_report is not None:
-        if runtime_report["memory"]["initialization_fits"] is False:
+        memory = runtime_report["memory"]
+        limit = memory["memory_limit_bytes"]
+        if limit is not None and memory["initialization_required_bytes"] > limit:
             return "vllm_model_executor_budget"
         if fits_memory is False:
             return "vllm_kv_cache_capacity"
@@ -1442,124 +1445,67 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ", ".join(configured_speculative_flags)
                 + " require --draft-model-dir"
             )
-    speculative_tokens = (
-        DEFAULT_SPECULATIVE_TOKENS
-        if args.speculative_tokens is None
-        else args.speculative_tokens
-    )
-    speculative_acceptance_rate = args.speculative_acceptance_rate
-
+    options = {
+        "max_batch_size": args.max_batch_size,
+        "dtype": args.dtype,
+        "attention_implementation": args.attention_implementation,
+        "prefill_chunk_tokens": args.prefill_chunk_tokens,
+        "kv_cache_strategy": args.kv_cache_strategy,
+        "kv_cache_bits": args.kv_cache_bits,
+        "kv_cache_residual_tokens": args.kv_cache_residual_tokens,
+        "kv_cache_block_tokens": args.kv_cache_block_tokens,
+        "kv_cache_max_tokens": args.kv_cache_max_tokens,
+        "kv_cache_window_tokens": args.kv_cache_window_tokens,
+        "runtime_overhead_bytes": args.runtime_overhead_bytes,
+        "scheduler_overhead_bytes_per_sequence": (
+            args.scheduler_overhead_bytes_per_sequence
+        ),
+        "adapter_dirs": args.adapter_dir,
+        "draft_model_dir": args.draft_model_dir,
+        "draft_dtype": args.draft_dtype or "auto",
+        "speculative_tokens": (
+            DEFAULT_SPECULATIVE_TOKENS
+            if args.speculative_tokens is None
+            else args.speculative_tokens
+        ),
+        "speculative_acceptance_rate": args.speculative_acceptance_rate,
+        "target_profile": args.target_profile,
+        "device_capacity_bytes": device_capacity_bytes,
+        "memory_utilization": args.memory_utilization,
+        "runtime": args.runtime,
+        "vllm_kv_cache_memory_bytes": args.vllm_kv_cache_memory_bytes,
+        "vllm_non_kv_cache_memory_bytes": args.vllm_non_kv_cache_memory_bytes,
+    }
     try:
         if args.requests:
             request_manifest = load_serving_requests(args.requests)
             report = estimate_serving_request_set(
                 args.model_dir,
                 request_manifest["requests"],
-                max_batch_size=args.max_batch_size,
-                dtype=args.dtype,
-                attention_implementation=(
-                    args.attention_implementation
-                ),
-                prefill_chunk_tokens=args.prefill_chunk_tokens,
                 prefill_concurrency=args.prefill_concurrency,
-                kv_cache_strategy=args.kv_cache_strategy,
-                kv_cache_bits=args.kv_cache_bits,
-                kv_cache_residual_tokens=(
-                    args.kv_cache_residual_tokens
-                ),
-                kv_cache_block_tokens=args.kv_cache_block_tokens,
-                kv_cache_max_tokens=args.kv_cache_max_tokens,
-                kv_cache_window_tokens=(
-                    args.kv_cache_window_tokens
-                ),
-                runtime_overhead_bytes=args.runtime_overhead_bytes,
-                scheduler_overhead_bytes_per_sequence=(
-                    args.scheduler_overhead_bytes_per_sequence
-                ),
-                adapter_dirs=args.adapter_dir,
-                draft_model_dir=args.draft_model_dir,
-                draft_dtype=args.draft_dtype or "auto",
-                speculative_tokens=speculative_tokens,
-                speculative_acceptance_rate=(
-                    speculative_acceptance_rate
-                ),
-                target_profile=args.target_profile,
-                device_capacity_bytes=device_capacity_bytes,
-                memory_utilization=args.memory_utilization,
-                runtime=args.runtime,
-                vllm_kv_cache_memory_bytes=(
-                    args.vllm_kv_cache_memory_bytes
-                ),
-                vllm_non_kv_cache_memory_bytes=(
-                    args.vllm_non_kv_cache_memory_bytes
-                ),
+                **options,
             )
-            report["inputs"]["request_manifest"] = (
-                request_manifest["source"]
-            )
+            report["inputs"]["request_manifest"] = request_manifest["source"]
         else:
             report = estimate_serving_plan(
                 args.model_dir,
                 active_sequences=args.active_sequences,
-                max_batch_size=args.max_batch_size,
                 prompt_tokens=args.prompt_tokens,
                 generated_tokens=(
-                    1
-                    if args.generated_tokens is None
-                    else args.generated_tokens
+                    1 if args.generated_tokens is None else args.generated_tokens
                 ),
-                dtype=args.dtype,
-                attention_implementation=(
-                    args.attention_implementation
-                ),
-                prefill_chunk_tokens=args.prefill_chunk_tokens,
-                shared_prefix_tokens=(
-                    0
-                    if args.shared_prefix_tokens is None
-                    else args.shared_prefix_tokens
-                ),
-                kv_cache_strategy=args.kv_cache_strategy,
-                kv_cache_bits=args.kv_cache_bits,
-                kv_cache_residual_tokens=(
-                    args.kv_cache_residual_tokens
-                ),
-                kv_cache_block_tokens=args.kv_cache_block_tokens,
-                kv_cache_max_tokens=args.kv_cache_max_tokens,
-                kv_cache_window_tokens=(
-                    args.kv_cache_window_tokens
-                ),
-                runtime_overhead_bytes=args.runtime_overhead_bytes,
-                scheduler_overhead_bytes_per_sequence=(
-                    args.scheduler_overhead_bytes_per_sequence
-                ),
-                adapter_dirs=args.adapter_dir,
-                draft_model_dir=args.draft_model_dir,
-                draft_dtype=args.draft_dtype or "auto",
-                speculative_tokens=speculative_tokens,
-                speculative_acceptance_rate=(
-                    speculative_acceptance_rate
-                ),
-                target_profile=args.target_profile,
-                device_capacity_bytes=device_capacity_bytes,
-                memory_utilization=args.memory_utilization,
-                runtime=args.runtime,
-                vllm_kv_cache_memory_bytes=(
-                    args.vllm_kv_cache_memory_bytes
-                ),
-                vllm_non_kv_cache_memory_bytes=(
-                    args.vllm_non_kv_cache_memory_bytes
-                ),
+                shared_prefix_tokens=args.shared_prefix_tokens or 0,
+                **options,
             )
-    except (
-            OSError,
-            ValueError,
-           ) as exc:
+    except (OSError, ValueError) as exc:
         usage_error(parser, exc)
 
     if args.json_path:
         output = emit_json(args.json_path, report)
         if output is not None:
             print(f"Serving plan: {output}")
+        else:
+            return 0
 
     scheduler = report["scheduler"]
     timeline = report["memory_timeline"]
@@ -1614,6 +1560,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "  admissible sequences: "
             f"{scheduler['admissible_active_sequences']}"
         )
+    if scheduler["requested_fits"] is not None:
         print(
             "  requested fit: "
             f"{'yes' if scheduler['requested_fits'] else 'no'}"

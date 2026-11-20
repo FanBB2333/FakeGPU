@@ -19,6 +19,10 @@ import zipfile
 _URL = re.compile(rb"https?://[^\s\"'<>]+")
 _HOME = re.compile(rb"/(?:Users|home)/([A-Za-z0-9_.-]+)")
 _PYTEST_HOME = re.compile(rb"/pytest-of-([A-Za-z0-9_.-]+)")
+_HARDWARE_UUID = re.compile(
+    rb'"(?:gpu_uuid|device_uuid)\\*"\s*:\s*\\*"(?:GPU-)?'
+    rb'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'
+)
 _SAFE_HOME = {b"user", b"example", b"runner", b"redacted"}
 _SECRETS = {
     "private-key": re.compile(
@@ -52,6 +56,8 @@ def check_payload(name: str, payload: bytes) -> list[str]:
         problems.append("personal-home-path")
     if any(match[1].lower() not in _SAFE_HOME for match in _PYTEST_HOME.finditer(payload)):
         problems.append("personal-test-path")
+    if "tests/data/" in name and _HARDWARE_UUID.search(payload):
+        problems.append("hardware-uuid")
     for rule, pattern in _SECRETS.items():
         if pattern.search(payload):
             problems.append(rule)

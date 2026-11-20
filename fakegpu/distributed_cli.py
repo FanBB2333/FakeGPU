@@ -973,9 +973,8 @@ def bandwidth_main(argv: Sequence[str] | None = None) -> int:
                     cluster_report=None,
                 )
 
-        if args.json_path:
-            emit_json(args.json_path, report)
-        _print_bandwidth_summary(report)
+        if not args.json_path or emit_json(args.json_path, report) is not None:
+            _print_bandwidth_summary(report)
         return 0
     except (
             argparse.ArgumentTypeError,

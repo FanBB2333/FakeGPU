@@ -123,6 +123,15 @@ torch.ones(2).cuda()
     ]
 
 
+def test_dotted_import_preserves_the_top_level_torch_binding(tmp_path):
+    (tmp_path / "train.py").write_text(
+        "import torch.nn\ncompiled = torch.compile(lambda x: x)\n"
+    )
+    report = analyze_repository(tmp_path)
+    assert report["python"]["call_markers"]["torch.compile"] == 1
+    assert report["readiness"]["requires_targeted_validation"] is True
+
+
 def test_repository_analyzer_respects_git_ignored_files(tmp_path: Path) -> None:
     repository = tmp_path / "project"
     _write_basic_repository(repository)

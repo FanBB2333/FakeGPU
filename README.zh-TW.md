@@ -56,7 +56,7 @@ FakeGPU 讓沒有 GPU 的機器看起來像有 GPU。應用程式會看到可設
 ### 能做什麼
 
 - **租用 GPU 前先選好硬體。** 用 `estimate-llm` 估算 checkpoint、KV cache、
-  activation 與 optimizer 記憶體，或用 `preflight` 把工作負載執行到指定階段。
+  activation 與 optimizer 記憶體，或用 `preflight` 檢查工作負載實際追蹤到的記憶體。
 - **規劃 LLM 服務容量。** `plan-serving` 檢查記憶體能容納多少 chat、RAG 或
   speculative decoding 請求，也支援 vLLM 風格的預算。
 - **在筆記型電腦或無 GPU 的 CI 中開發 CUDA 程式。** 在腳本中呼叫
@@ -90,6 +90,8 @@ FakeGPU 讓沒有 GPU 的機器看起來像有 GPU。應用程式會看到可設
 需要 Linux 或 macOS、Python 3.10+、CMake 3.14+、支援 C++17 的編譯器，Python
 runtime 另需 PyTorch。Debian 或 Ubuntu 請安裝 `build-essential`，macOS 請安裝
 Xcode Command Line Tools。
+Linux 預設啟用的 PTX/SASS 後端需要支援 C++20 的編譯器與標準函式庫（如 GCC 12+），
+詳見[建置選項](docs/zh-TW/development.md#原生-ptxsass-後端)。
 
 ```bash
 git clone https://github.com/FanBB2333/FakeGPU.git
@@ -149,7 +151,7 @@ python3 -m fakegpu --build-dir build --devices "a100:2,h100:2" \
 ### 執行前檢查記憶體
 
 ```bash
-# 將 train.py 執行到 forward 階段，並回報是否放得下。
+# 執行 train.py，回報追蹤到的記憶體是否放得下，並將目標階段標為 forward。
 python3 -m fakegpu preflight --runtime fakecuda --profile a100 \
   --stage forward --report-dir build/preflight -- python3 train.py
 

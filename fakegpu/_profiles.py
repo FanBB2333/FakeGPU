@@ -90,6 +90,7 @@ def _profile_entry(profile_id: str) -> dict[str, Any]:
         "total_memory": _PROFILE_TOTAL_MEMORY.get(profile_id, 80 * 1024**3),
         "compute_major": major,
         "compute_minor": minor,
+        "multi_processor_count": _PROFILE_CATALOG[profile_id].sm_count if profile_id in _PROFILE_CATALOG else 108,
     }
 
 

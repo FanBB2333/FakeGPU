@@ -22,6 +22,7 @@ from ._cli import (
     command_prog,
     usage_error,
 )
+from .structured_io import StructuredDataError, load_mapping
 
 
 MANIFEST_SCHEMA_VERSION = "fakegpu.validation_manifest.v1"
@@ -38,10 +39,10 @@ def load_validation_manifest(path: str | os.PathLike[str]) -> dict[str, Any]:
     resolved = Path(path).expanduser().resolve()
     if not resolved.is_file():
         raise ValidationManifestError(f"manifest not found: {resolved}")
-    payload = _read_structured_file(resolved)
-    if not isinstance(payload, Mapping):
-        raise ValidationManifestError("manifest root must be an object")
-    manifest = dict(payload)
+    try:
+        manifest = load_mapping(resolved)
+    except StructuredDataError as exc:
+        raise ValidationManifestError(str(exc)) from exc
     if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
         raise ValidationManifestError(
             f"expected schema_version {MANIFEST_SCHEMA_VERSION!r}"
@@ -621,43 +622,6 @@ def _compare_value(
     if operator == "approx":
         return abs(float(observed) - float(expected)) <= tolerance
     return False
-
-
-def _read_structured_file(path: Path) -> Any:
-    text = path.read_text(encoding="utf-8")
-    suffix = path.suffix.lower()
-    if suffix == ".json":
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise ValidationManifestError(f"invalid JSON: {exc}") from exc
-    if suffix == ".toml":
-        try:
-            import tomllib
-        except ModuleNotFoundError:  # pragma: no cover - Python 3.10 only
-            try:
-                import tomli as tomllib
-            except ModuleNotFoundError as exc:
-                raise ValidationManifestError(
-                    "TOML manifests on Python 3.10 require tomli"
-                ) from exc
-        try:
-            return tomllib.loads(text)
-        except tomllib.TOMLDecodeError as exc:
-            raise ValidationManifestError(f"invalid TOML: {exc}") from exc
-    if suffix in {".yaml", ".yml"}:
-        try:
-            import yaml
-        except ImportError as exc:
-            raise ValidationManifestError(
-                "YAML manifests require PyYAML; install "
-                "'fakegpu[validation]' or use JSON/TOML"
-            ) from exc
-        try:
-            return yaml.safe_load(text)
-        except yaml.YAMLError as exc:
-            raise ValidationManifestError(f"invalid YAML: {exc}") from exc
-    raise ValidationManifestError("manifest must use .json, .toml, .yaml, or .yml")
 
 
 def _format_value(value: Any, context: Mapping[str, Any]) -> Any:

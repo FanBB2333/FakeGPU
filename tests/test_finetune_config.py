@@ -68,6 +68,26 @@ def test_huggingface_flat_defaults_do_not_invent_dataset_size() -> None:
     assert result["lora_rank"] is None
 
 
+@pytest.mark.parametrize(
+    "nested",
+    [
+        {
+            "model_args": {"model_name_or_path": "Qwen/Qwen3.5-0.8B"},
+            "data_args": {"sequence_length": 128, "num_samples": 16},
+        },
+        {
+            "model_args": {"model_name_or_path": "Qwen/Qwen3.5-0.8B"},
+            "training_args": {"finetuning_type": "lora", "bf16": True},
+            "data_args": {"cutoff_len": 128, "num_samples": 16},
+        },
+    ],
+    ids=["huggingface-model-and-data", "llamafactory-with-training-args"],
+)
+def test_framework_detection_uses_nested_configuration_fields(nested) -> None:
+    flat = {key: value for section in nested.values() for key, value in section.items()}
+    assert normalize_finetune_config(nested) == normalize_finetune_config(flat)
+
+
 def test_llamafactory_qlora_preserves_cap_and_defaults() -> None:
     result = normalize_finetune_config(
         hf_config(

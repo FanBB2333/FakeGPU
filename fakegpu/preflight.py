@@ -73,9 +73,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stage",
         default="completed",
-        help="Target stage name, e.g. import, model_load, forward, backward, optimizer_step, n_steps.",
+        help="Report target stage label (does not stop the command), e.g. forward or optimizer_step.",
     )
-    parser.add_argument("--steps", type=int, default=None, help="Target number of steps for n_steps preflights.")
+    parser.add_argument("--steps", type=int, default=None, help="Report target step count (does not limit execution).")
     parser.add_argument("--report-dir", default="preflight-report", help="Directory for preflight outputs.")
     add_strict_argument(parser, help="Treat incomplete tracking as a failing result.")
     parser.add_argument(

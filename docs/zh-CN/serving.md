@@ -59,6 +59,8 @@ python3 -m fakegpu plan-serving \
   非 KV 显存，再向下取整为完整 block。报告给出 `num_gpu_blocks`、cache token
   容量、初始化能否放下，以及 `max_model_len` 下的并发量，并与请求实际需要的
   逻辑 KV 分开列出。
+- 每个最大长度请求占用整数个缓存块。对于滑动窗口注意力，启动估算用预填充分块大小
+  作为单次调度的 token 预算，另留一个块用于页对齐。预填充未分块时，预算取完整的建模上下文长度。
 - `--vllm-non-kv-cache-memory-bytes` 用 vLLM 启动 profile 中的值（权重、activation
   峰值、非 torch 显存和 CUDA graph）替代建模的非 KV 值。
 - `--vllm-kv-cache-memory-bytes` 指定每张 GPU 的精确 cache 大小。与 vLLM 一致，

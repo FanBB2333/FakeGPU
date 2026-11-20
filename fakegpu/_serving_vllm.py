@@ -56,6 +56,16 @@ def _build_vllm_runtime_report(
 ) -> dict[str, Any]:
     kv_cache = requested_memory["kv_cache"]
     block_tokens = int(kv_cache["block_tokens"])
+    window_tokens = kv_cache["window_tokens"]
+    startup_tokens = max_model_len_tokens
+    if window_tokens is not None:
+        chunk_tokens = profiled_memory["optimizations"]["chunked_prefill"]["requested_chunk_tokens"]
+        retained_and_scheduled = min(
+            max_model_len_tokens, window_tokens - 1 + (chunk_tokens or max_model_len_tokens)
+        )
+        # vLLM also reserves a page when the retained window straddles a block boundary.
+        startup_tokens = retained_and_scheduled + block_tokens
+    blocks_per_request = (startup_tokens + block_tokens - 1) // block_tokens
     bytes_per_token = int(
         kv_cache["bytes_per_token_per_sequence_at_compute_dtype"]
     )
@@ -133,18 +143,12 @@ def _build_vllm_runtime_report(
         if allocatable_kv_cache_bytes is not None
         else None
     )
-    if memory_limit_bytes is None:
-        initialization_fits = None
-    elif not explicit_kv_cache and (
-        selected_non_kv_peak > memory_limit_bytes
-    ):
+    if num_gpu_blocks is not None and num_gpu_blocks < blocks_per_request:
         initialization_fits = False
+    elif memory_limit_bytes is None:
+        initialization_fits = None
     else:
-        initialization_fits = (
-            initialization_required_bytes <= memory_limit_bytes
-            if initialization_required_bytes is not None
-            else None
-        )
+        initialization_fits = initialization_required_bytes <= memory_limit_bytes
     if requested_kv_cache_fits is False or initialization_fits is False:
         requested_fits_memory = False
     elif requested_kv_cache_fits is True and initialization_fits is True:
@@ -197,8 +201,8 @@ def _build_vllm_runtime_report(
             "num_gpu_blocks": num_gpu_blocks,
             "size_tokens": kv_cache_size_tokens,
             "max_model_len_concurrency": (
-                kv_cache_size_tokens / max_model_len_tokens
-                if kv_cache_size_tokens is not None
+                num_gpu_blocks / blocks_per_request
+                if num_gpu_blocks is not None
                 else None
             ),
             "logical_requested_peak_bytes": (
@@ -227,6 +231,10 @@ def _build_vllm_runtime_report(
                 "A supplied non-KV value should come from the matching vLLM "
                 "startup profile and include weights, activations, non-torch "
                 "allocations, and CUDA graph memory."
+            ),
+            (
+                "For sliding-window startup, the configured prefill chunk size models the "
+                "scheduler token budget. Unchunked prefill uses the full modeled context."
             ),
         ],
     }

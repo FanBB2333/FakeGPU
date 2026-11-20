@@ -177,10 +177,7 @@ def _transfer_snapshot() -> dict[int, dict[str, Any]]:
     traffic = _link_traffic
     if traffic is None:
         return {}
-    try:
-        return traffic.snapshot()
-    except Exception:
-        return {}
+    return traffic.snapshot()
 
 
 def _smi_memory_snapshot() -> dict[str, Any]:
@@ -1012,7 +1009,7 @@ class _FakeDeviceProperties:
         self.major = prof.get("compute_major", _COMPUTE_MAJOR)
         self.minor = prof.get("compute_minor", _COMPUTE_MINOR)
         self.total_memory = prof.get("total_memory", _TOTAL_MEMORY)
-        self.multi_processor_count = 108
+        self.multi_processor_count = prof.get("multi_processor_count", 108)
         self.is_multi_gpu_board = False
         self.is_integrated = False
         self.max_threads_per_multi_processor = 2048
@@ -1033,8 +1030,11 @@ class _FakeDeviceProperties:
 # ---------------------------------------------------------------------------
 # torch.cuda module‑level stubs
 # ---------------------------------------------------------------------------
-def _stub_is_bf16_supported(device: Any = None) -> bool:
-    return _COMPUTE_MAJOR >= 8
+def _stub_is_bf16_supported(including_emulation: bool = True) -> bool:
+    """Report the selected profile's support, independent of CPU emulation."""
+    import torch
+
+    return torch.cuda.get_device_capability()[0] >= 8
 def _cpu_rng_state():
     import torch
 
@@ -1328,10 +1328,7 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
         if traffic is None or source is False or target is False or source == target:
             return
         raw = upstream.unwrap_tensor(tensor)
-        try:
-            nbytes = int(raw.numel()) * int(raw.element_size())
-        except Exception:
-            return
+        nbytes = int(raw.numel()) * int(raw.element_size())
         traffic.record(source, target, nbytes)
 
     def module_tensors(module: Any) -> list[Any]:
@@ -1384,13 +1381,21 @@ def _install_transfer_recording(upstream: Any, torch_mod: Any) -> None:
 
         @functools.wraps(module_to)
         def _counted_module_to(self: Any, *args: Any, **kwargs: Any) -> Any:
-            target = kwargs.get("device")
-            if target is None and args:
-                target = args[0]
+            target, dtype, non_blocking, memory_format = torch_mod._C._nn._parse_to(*args, **kwargs)
             if upstream._normalize_cuda_device(target, allow_none=True) is None:
                 # Moves to the host go through Tensor.to, which records them.
                 return module_to(self, *args, **kwargs)
-            return record_module(self, lambda: module_to(self, *args, **kwargs))
+
+            def convert():
+                # The upstream CUDA conversion clones parameters and buffers;
+                # apply the requested dtype/layout before making those clones.
+                if dtype is not None or memory_format is not None:
+                    upstream._ORIG_MODULE_TO(
+                        self, dtype=dtype, non_blocking=non_blocking, memory_format=memory_format,
+                    )
+                return module_to(self, device=target)
+
+            return record_module(self, convert)
 
         @functools.wraps(module_cuda)
         def _counted_module_cuda(self: Any, device: Any = None) -> Any:
@@ -1603,29 +1608,14 @@ def _apply_enhancements_over_upstream(upstream: Any, torch_mod: Any) -> None:
 
     # ---- 3. Per-device GPU profiles ----
     def _profiled_get_device_name(device=None):
-        idx = _normalize_device_index(device)
-        if idx < len(_DEVICE_PROFILES):
-            return _DEVICE_PROFILES[idx].get("name", _DEVICE_NAME)
-        return _DEVICE_NAME
+        return _profiled_get_device_properties(device).name
 
     def _profiled_get_device_capability(device=None):
-        idx = _normalize_device_index(device)
-        if idx < len(_DEVICE_PROFILES):
-            prof = _DEVICE_PROFILES[idx]
-            return (
-                prof.get("compute_major", _COMPUTE_MAJOR),
-                prof.get("compute_minor", _COMPUTE_MINOR),
-            )
-        return (_COMPUTE_MAJOR, _COMPUTE_MINOR)
+        properties = _profiled_get_device_properties(device)
+        return (properties.major, properties.minor)
 
     def _profiled_get_device_properties(device=None):
-        idx = _normalize_device_index(device)
-        if idx < 0 or idx >= _NUM_DEVICES:
-            raise RuntimeError(
-                f"CUDA error: invalid device ordinal "
-                f"(requested {idx}, available: {_NUM_DEVICES})"
-            )
-        return _FakeDeviceProperties(idx)
+        return _FakeDeviceProperties(_checked_normalize_device_index(device))
 
     torch.cuda.get_device_name = _profiled_get_device_name
     torch.cuda.get_device_capability = _profiled_get_device_capability
@@ -1860,7 +1850,8 @@ def patch(
         _NUM_DEVICES, \
         _DEVICE_NAME, \
         _patch_result, \
-        _memory_tracker
+        _memory_tracker, \
+        _link_traffic
 
     os.environ["FAKEGPU_RUNTIME"] = "fakecuda"
     import torch
@@ -1881,6 +1872,7 @@ def patch(
         _reset_dispatch_tracking_stats(
             enabled=bool(_MEMORY_TRACKING and _DISPATCH_MEMORY_TRACKING)
         )
+        _link_traffic = _new_link_traffic()
         _refresh_smi_publisher()
         _patch_transformers_utils()
         _patch_accelerate_utils()

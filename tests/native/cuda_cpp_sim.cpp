@@ -1,5 +1,6 @@
 // CUDA Runtime and cuBLAS application flow, compiled without a CUDA toolkit.
 #include "../../src/cuda/cudart_defs.hpp"
+#include "../../src/cuda/cuda_driver_defs.hpp"
 #include "../../src/cublas/cublas_defs.hpp"
 
 #include <atomic>
@@ -7,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 
 namespace {
@@ -66,7 +68,44 @@ void test_numerical_pipeline() {
     int count = 0;
     CUDA_CHECK(cudaGetDeviceCount(&count));
     check(count > 0, "simulated device discovery");
+    void* entry = nullptr;
+    int status = -1;
+    CUDA_CHECK(cudaGetDriverEntryPointByVersion("cuDeviceGetCount", &entry, 12000, 0, &status));
+    check(entry != nullptr && status == 0, "driver entry point success status");
+    CUDA_CHECK(cudaGetDriverEntryPointByVersion("cuFakeGPUUnknown", &entry, 12000, 0, &status));
+    check(entry == nullptr && status == 1, "missing driver entry point status");
+    for (int device = 0; device < count; ++device) {
+        char runtime_bus[32], driver_bus[32], expected_bus[32];
+        CUDA_CHECK(cudaDeviceGetPCIBusId(runtime_bus, sizeof(runtime_bus), device));
+        check(cuDeviceGetPCIBusId(driver_bus, sizeof(driver_bus), device) == CUDA_SUCCESS,
+              "driver PCI bus query");
+        std::snprintf(expected_bus, sizeof(expected_bus), "0000:%02x:00.0", device + 1);
+        check(std::strcmp(runtime_bus, expected_bus) == 0 &&
+              std::strcmp(runtime_bus, driver_bus) == 0, "runtime/driver PCI bus identity");
+        int resolved = -1;
+        CUDA_CHECK(cudaDeviceGetByPCIBusId(&resolved, runtime_bus));
+        check(resolved == device, "runtime PCI device round trip");
+        check(cuDeviceGetByPCIBusId(&resolved, runtime_bus) == CUDA_SUCCESS && resolved == device,
+              "driver PCI device round trip");
+        cudaDevicePropV2 properties{};
+        CUDA_CHECK(cudaGetDeviceProperties_v2(&properties, device));
+        check(properties.pciBusID == device + 1 && properties.pciDeviceID == 0,
+              "runtime PCI property components");
+    }
     CUDA_CHECK(cudaSetDevice(0));
+    float* slice_base = nullptr;
+    CUDA_CHECK(cudaSetDevice(count - 1));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&slice_base), 64));
+    CUDA_CHECK(cudaSetDevice(0));
+    cudaPointerAttributes slice{};
+    CUDA_CHECK(cudaPointerGetAttributes(&slice, slice_base + 4));
+    check(slice.type == cudaMemoryTypeDevice && slice.device == count - 1,
+          "tensor slice retains its allocation device");
+    CUdevice owner = -1;
+    check(cuPointerGetAttribute(&owner, CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL,
+          reinterpret_cast<CUdeviceptr>(slice_base + 4)) == CUDA_SUCCESS && owner == count - 1,
+          "driver tensor slice device attribute");
+    CUDA_CHECK(cudaFree(slice_base));
     struct {
         cudaDeviceProp properties;
         uint64_t sentinel = UINT64_C(0x12345678abcdef01);

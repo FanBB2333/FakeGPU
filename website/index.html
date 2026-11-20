@@ -582,7 +582,7 @@ footer ul a:hover{color:var(--text)}
 
     <!-- storyboard: animated walkthrough (static final frame without JS or with reduced motion) -->
     <figure class="sb" id="story" aria-label="Walkthrough of a FakeGPU preflight run">
-      <figcaption class="sr-only">Walkthrough: pick the a100 profile, run python3 -m fakegpu preflight on train.py up to the forward stage, watch the progress steps complete, read the preflight report, then see four simulated devices from --devices "a100:2,h100:2".</figcaption>
+      <figcaption class="sr-only">Walkthrough: pick the a100 profile, run python3 -m fakegpu preflight on train.py with forward as the report target label, watch the progress steps complete, read the preflight report, then see four simulated devices from --devices "a100:2,h100:2".</figcaption>
       <button class="sb-ctl" type="button" aria-pressed="false" aria-label="Pause animation">
         <svg class="i-pause" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><rect x="3" y="2.5" width="2.6" height="9" rx=".8"/><rect x="8.4" y="2.5" width="2.6" height="9" rx=".8"/></svg>
         <svg class="i-play" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true"><path d="M4 2.6v8.8a.6.6 0 0 0 .9.5l7-4.4a.6.6 0 0 0 0-1L4.9 2.1a.6.6 0 0 0-.9.5Z"/></svg>
@@ -627,7 +627,7 @@ footer ul a:hover{color:var(--text)}
             <div class="pcard-h"><span>Progress</span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m4 6 4 4 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
             <ol class="steps">
               <li class="si done"><span class="si-m"><b>1</b><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="si-t">Start FakeCUDA with the <code>a100</code> profile</span></li>
-              <li class="si done"><span class="si-m"><b>2</b><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="si-t">Run <code>train.py</code> up to the forward stage</span></li>
+              <li class="si done"><span class="si-m"><b>2</b><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="si-t">Run <code>train.py</code>; label the target forward</span></li>
               <li class="si done"><span class="si-m"><b>3</b><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="si-t">Track memory on the path that actually ran</span></li>
               <li class="si done"><span class="si-m"><b>4</b><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="si-t">Check whether the selected profile fits the workload</span></li>
               <li class="si done"><span class="si-m"><b>5</b><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2"><path d="m2.5 6.2 2.3 2.3 4.7-5" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="si-t">Write reports to <code>build/preflight</code></span></li>
@@ -763,7 +763,7 @@ loss.<span class="t-f">backward</span>()
 
         <div class="code-panel" id="p-est" role="tabpanel" aria-labelledby="tab-est">
           <div class="cp-h"><p class="cp-cap"><b class="nojs-title">Estimate. </b>Check memory before a run.</p><button class="copy" type="button">Copy</button></div>
-<pre><code><span class="t-c"># Run train.py up to the forward pass and report whether it fits.</span>
+<pre><code><span class="t-c"># Run train.py and report whether its tracked memory fits; label the target forward.</span>
 <span class="t-p">$ </span>python3 -m fakegpu preflight --runtime fakecuda --profile a100 <span class="t-o">\</span>
   --stage forward --report-dir build/preflight -- python3 train.py
 
@@ -840,7 +840,7 @@ loss.<span class="t-f">backward</span>()
       <article class="card uc s4 big">
         <span class="num">01</span>
         <h3>Choose a GPU before renting one</h3>
-        <p>Estimate checkpoint, KV-cache, activation, and optimizer memory, or run a workload to a chosen stage.</p>
+        <p>Estimate checkpoint, KV-cache, activation, and optimizer memory, or check a workload’s tracked memory with preflight.</p>
         <div class="snip"><pre><code><span class="t-p">$ </span>python3 -m fakegpu estimate-llm --model-dir /models/example --target-profile a100</code></pre></div>
         <div class="cmds"><span class="cmd">estimate-llm</span><span class="cmd">preflight</span></div>
       </article>
@@ -910,7 +910,7 @@ loss.<span class="t-f">backward</span>()
         <div>
           <span class="step-n">1</span>
           <h3>Requirements</h3>
-          <p>Linux or macOS, Python 3.10+, CMake 3.14+, a C++17 compiler, and PyTorch for the Python runtime.</p>
+          <p>Linux or macOS, Python 3.10+, CMake 3.14+, a C++17 compiler, and PyTorch for the Python runtime. The default Linux PTX/SASS backend needs C++20 and a compatible standard library, such as GCC 12+.</p>
         </div>
         <div>
           <div class="req"><span class="chip">Linux or macOS</span><span class="chip">Python 3.10+</span><span class="chip">CMake 3.14+</span><span class="chip">C++17 compiler</span><span class="chip">PyTorch</span></div>
@@ -928,7 +928,7 @@ loss.<span class="t-f">backward</span>()
 <pre><code>git clone https://github.com/FanBB2333/FakeGPU.git
 <span class="t-k">cd</span> FakeGPU
 scripts/build.sh
-FAKEGPU_BUILD_DIR=<span class="t-s">"$PWD/build"</span> python3 -m pip install .</code></pre>
+FAKEGPU_BUILD_DIR=<span class="t-s">"$PWD/build"</span> python3 -m pip install <span class="t-s">'.[torch]'</span></code></pre>
         </div>
       </div>
       <div class="step">

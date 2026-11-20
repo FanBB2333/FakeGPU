@@ -634,7 +634,11 @@ def _normalize_accelerate(config: Mapping[str, Any]) -> dict[str, Any]:
         merged.setdefault("world_size", world_size)
         normalized = _normalize_fsdp(
             merged,
-            framework="fsdp2" if "2" in distributed_type else "fsdp",
+            framework=(
+                "fsdp2"
+                if "2" in distributed_type or str(merged.get("fsdp_version", 1)) == "2"
+                else "fsdp"
+            ),
         )
     else:
         normalized = {
@@ -662,11 +666,21 @@ def _normalize_fsdp(
     *,
     framework: str,
 ) -> dict[str, Any]:
-    raw_strategy = str(
-        config.get("sharding_strategy")
-        or config.get("fsdp_sharding_strategy")
-        or "FULL_SHARD"
-    ).upper()
+    configured_strategy = config.get("sharding_strategy") or config.get("fsdp_sharding_strategy")
+    if not configured_strategy and framework == "fsdp2" and (
+        "reshard_after_forward" in config or "fsdp_reshard_after_forward" in config
+    ):
+        reshard = config.get(
+            "reshard_after_forward", config.get("fsdp_reshard_after_forward", True)
+        )
+        raw_strategy = "FULL_SHARD" if _bool_value(reshard) else "SHARD_GRAD_OP"
+    else:
+        raw_strategy = str(
+            configured_strategy
+            or config.get("reshard_after_forward")
+            or config.get("fsdp_reshard_after_forward")
+            or "FULL_SHARD"
+        ).upper()
     strategy = {
         "1": "full_shard",
         "FULL_SHARD": "full_shard",

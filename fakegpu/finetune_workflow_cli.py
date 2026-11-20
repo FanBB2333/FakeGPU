@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import math
 import subprocess
 
 from ._cli import add_json_path_argument, command_prog, usage_error
+from .finetune_pipeline_cli import _bytes
 from .structured_io import emit_json
 
 
@@ -25,14 +25,6 @@ def _arguments(parser):
         help="Import an existing native report into the work-cost pool; setup remains tied to this workspace.",
     )
     add_json_path_argument(parser)
-
-
-def _bytes(value, field):
-    if value is None:
-        return None
-    if not math.isfinite(value) or value < 0:
-        raise ValueError(f"{field} must be finite and nonnegative")
-    return math.ceil(value * 1024**3)
 
 
 def _budget_options(args):

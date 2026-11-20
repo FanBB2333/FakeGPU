@@ -3,13 +3,13 @@
 [Documentation index](README.md) · [简体中文](../zh-CN/estimation.md) ·
 [繁體中文](../zh-TW/estimation.md)
 
-FakeGPU can check memory in two ways. `preflight` runs your code on FakeCUDA up
-to a chosen stage. The static estimators read model metadata and never load the
+FakeGPU can check memory in two ways. `preflight` runs your code on FakeCUDA
+and tracks its memory. The static estimators read model metadata and never load the
 weights. For online serving, see [Online LLM serving](serving.md).
 
 ## Check memory before a run
 
-Run a command to a target stage and write reports under an ignored build
+Run a command and write reports under an ignored build
 directory:
 
 ```bash
@@ -24,6 +24,10 @@ python3 -m fakegpu preflight \
 
 Preflight tracks the memory used on the path that actually ran and reports
 whether the selected profile fits the workload.
+
+`--stage` labels the report's target; the command runs to completion. To check
+only the forward pass, have `train.py` stop after that pass. Mark its measured
+sections with `with fakegpu.stage("forward"):` to record per-stage peaks.
 
 ## Analyze a repository
 

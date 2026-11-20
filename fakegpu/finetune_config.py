@@ -67,11 +67,11 @@ def normalize_finetune_config(
     declared = _framework(config.get("framework", "auto"))
     if requested != "auto" and declared not in {"auto", requested}:
         raise FinetuneConfigError("framework argument conflicts with configuration")
+    values = _flatten(config)
     source = declared if requested == "auto" else requested
     if source == "auto":
-        source = _detect_framework(config)
+        source = _detect_framework(values)
     root = Path(base_dir).expanduser().resolve() if base_dir is not None else Path.cwd()
-    values = _flatten(config)
     peft = _mapping_alias(values, "peft", "peft_config")
     assumptions: list[str] = []
     _check_strategies(values, peft)
@@ -326,7 +326,7 @@ def _detect_framework(config: Mapping[str, Any]) -> str:
         for k in ("finetuning_type", "cutoff_len", "lora_target", "template")
     ):
         candidates.add("llamafactory")
-    if any(k in config for k in ("training_args", "peft", "peft_config")):
+    if any(k in config for k in ("peft", "peft_config")):
         candidates.add("huggingface")
     if not candidates and any(
         k in config for k in ("model_name_or_path", "per_device_train_batch_size")

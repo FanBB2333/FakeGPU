@@ -1,5 +1,4 @@
 {
-"privacy_redaction":{"personal_identity":"Personal home directories are replaced with <home>; original digests and byte counts are unchanged.","hardware_identity":"Public copy: physical GPU model and UUID are withheld; architecture labels do not identify a particular supported profile.","provenance":"Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.","usage":"Redacted review material, not an unmodified calibration input or a hardware identity attestation."},
   "artifact_root": "/tmp/fakegpu-research-validation-20261015",
   "audit": {
     "errors": [],
@@ -483,7 +482,7 @@
       "environment": {
         "device": "cuda",
         "gpu_name": "Blackwell GPU",
-        "gpu_uuid": "60bc12ae-4ba5-045e-428b-c582260ca743",
+        "gpu_uuid": "withheld",
         "physical_gpu_used": true,
         "torch": "2.9.1+cu128",
         "transformers": "4.57.3"
@@ -545,6 +544,12 @@
         "surface": "cudaLaunchKernel / cuLaunchKernel"
       }
     ]
+  },
+  "privacy_redaction": {
+    "hardware_identity": "Public copy: physical GPU model and UUID are withheld, including nested environment metadata; architecture labels do not identify a particular supported profile.",
+    "personal_identity": "Personal home directories are replaced with <home>; original digests and byte counts are unchanged.",
+    "provenance": "Measurements are retained. Embedded signatures, source digests and byte counts describe the private original records unless explicitly labeled as public-copy digests.",
+    "usage": "Redacted review material, not an unmodified calibration input or a hardware identity attestation."
   },
   "record_count": 45,
   "records": "tests/data/research_native_records.json.gz",

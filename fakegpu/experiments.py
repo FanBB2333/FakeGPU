@@ -185,19 +185,21 @@ def _prepare(config, workspace):
         raise ValueError("environment must map valid names to strings")
     resource_env = {k: os.environ.get(k) for k in _ENVIRONMENT}
     resource_env.update(environment)
+    cwd = (config.parent / spec.get("working_directory", ".")).resolve()
+    if not cwd.is_dir():
+        raise ValueError(f"working_directory does not exist: {cwd}")
     executable = (
         sys.executable
         if command[0] == "{python}"
         else shutil.which(
-            command[0], path=environment.get("PATH", os.environ.get("PATH"))
+            str(cwd / command[0]) if "/" in command[0] else command[0],
+            path=os.pathsep.join(
+                str(cwd / entry) for entry in os.get_exec_path(resource_env)
+            ),
         )
     )
     if not executable:
         raise ValueError(f"executable not found: {command[0]}")
-    executable = str(Path(executable).resolve())
-    cwd = (config.parent / spec.get("working_directory", ".")).resolve()
-    if not cwd.is_dir():
-        raise ValueError(f"working_directory does not exist: {cwd}")
     resolved_inputs = {}
     for name, value in inputs.items():
         if not isinstance(value, str):

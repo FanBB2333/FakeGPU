@@ -55,6 +55,34 @@ def test_tensorflow_adapter_import_is_optional():
     assert result.returncode == 0, result.stderr
 
 
+def test_fakecuda_module_to_preserves_requested_dtype():
+    pytest.importorskip("torch")
+    result = _run("""
+import copy
+import fakegpu
+fakegpu.init(device_count=1)
+import torch
+torch.manual_seed(7)
+source = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.BatchNorm1d(4)).eval()
+reference = copy.deepcopy(source).to(dtype=torch.float64)
+inputs = torch.randn(2, 4, dtype=torch.float64)
+expected = reference(inputs)
+for positional in (False, True):
+    model = copy.deepcopy(source)
+    if positional:
+        model.to('cuda', torch.float64)
+    else:
+        model.to(device='cuda', dtype=torch.float64)
+    assert all(p.dtype == torch.float64 and p.is_cuda for p in model.parameters())
+    assert model[1].running_mean.dtype == torch.float64
+    actual = model(inputs.cuda())
+    torch.testing.assert_close(actual.cpu(), expected)
+    actual.sum().backward()
+    assert all(p.grad is not None and p.grad.dtype == torch.float64 for p in model.parameters())
+""")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_tensorflow_scope_validation_and_restoration():
     if importlib.util.find_spec("tensorflow") is None:
         pytest.skip("optional TensorFlow dependency is not installed")

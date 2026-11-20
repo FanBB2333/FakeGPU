@@ -3,13 +3,13 @@
 [文件索引](README.md) · [English](../en/estimation.md) ·
 [简体中文](../zh-CN/estimation.md)
 
-FakeGPU 有兩種方式檢查記憶體。`preflight` 在 FakeCUDA 上把程式執行到指定階段。
+FakeGPU 有兩種方式檢查記憶體。`preflight` 在 FakeCUDA 上執行程式並追蹤記憶體。
 靜態估算器只讀取模型中繼資料，不會載入權重。線上 serving 請參閱
 [線上 LLM serving](serving.md)。
 
 ## 執行前檢查 GPU 記憶體
 
-將指令執行到指定階段，並把報告寫入 Git 忽略的建置目錄：
+執行指令，並把報告寫入 Git 忽略的建置目錄：
 
 ```bash
 python3 -m fakegpu preflight \
@@ -23,6 +23,10 @@ python3 -m fakegpu preflight \
 
 Preflight 追蹤實際執行路徑上用到的 GPU 記憶體，並判斷選定的 profile 能否容納
 該工作負載。
+
+`--stage` 只標記報告的目標階段，指令會執行至結束。只檢查 forward 時，需要讓
+`train.py` 在 forward 後結束。以 `with fakegpu.stage("forward"):` 標記程式區段，
+可以記錄對應階段的記憶體峰值。
 
 ## 分析儲存庫
 

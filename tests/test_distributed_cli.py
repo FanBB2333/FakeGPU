@@ -1,6 +1,23 @@
 from __future__ import annotations
 
+import json
+
+from fakegpu import distributed_cli
 from fakegpu.distributed_cli import _print_bandwidth_summary
+
+
+def test_bandwidth_json_stdout_contains_one_report(tmp_path, capsys, monkeypatch):
+    (tmp_path / "libnccl.so").touch()
+    (tmp_path / "libnccl.dylib").touch()
+    monkeypatch.setattr(distributed_cli, "library_dir", lambda **kwargs: tmp_path)
+    monkeypatch.setattr(distributed_cli, "_run_workers", lambda **kwargs: [
+        {"rank": 0, "status": "success", "total_seconds": 0.25}
+    ])
+    assert distributed_cli.bandwidth_main([
+        "--connect", "localhost:29591", "--world-size", "1", "--ranks", "0",
+        "--session", "json-test", "--json",
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "success"
 
 
 def test_bandwidth_summary_does_not_print_pass_for_error(capsys) -> None:

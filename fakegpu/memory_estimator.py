@@ -8,11 +8,13 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from os import PathLike
 from typing import Any
 
+from .profile_catalog import GpuProfile
 from .workspace_profiles import (
     _iter_tensor_leaves,
+    _resolve_gpu_profile,
+    _summarize_workspace_profiles,
     load_workspace_profiles,
     match_workspace_profile,
-    workspace_profile_summary,
 )
 
 
@@ -868,6 +870,7 @@ def analyze_graph_memory(
         reverse=True,
     )[:20]
 
+    storage_order = {key: index for index, key in enumerate(storage_records)}
     fingerprint_payload = [
         {
             "op": node.op,
@@ -878,7 +881,7 @@ def analyze_graph_memory(
                     "dtype": storage_records[key]["dtype"],
                     "shape": storage_records[key]["shape"],
                 }
-                for key in sorted(node_storages.get(node, set()))
+                for key in sorted(node_storages.get(node, set()), key=storage_order.__getitem__)
             ],
         }
         for node in nodes
@@ -1034,6 +1037,7 @@ def _estimate_backend_workspace(
     unprofiled_workspace_calls: list[dict[str, Any]] = []
     # Load the catalog once for the whole graph instead of per node.
     workspace_catalog = load_workspace_profiles(workspace_profile_paths)
+    gpu_profile = _resolve_gpu_profile(target_profile, target_device)
 
     for node in graph_module.graph.nodes:
         if node.op not in {"call_function", "call_method", "call_module"}:
@@ -1043,7 +1047,7 @@ def _estimate_backend_workspace(
             node,
             target,
             target_device=target_device,
-            target_profile=target_profile,
+            target_profile=gpu_profile,
             workspace_profiles=workspace_catalog,
         )
         if profile is not None:
@@ -1090,7 +1094,7 @@ def _estimate_backend_workspace(
         "lifetime_model": "node_liveness.v1",
         "target_device": str(target_device),
         "target_profile": target_profile,
-        "catalog": workspace_profile_summary(workspace_profile_paths),
+        "catalog": _summarize_workspace_profiles(workspace_catalog),
         **summary,
         "profiles": profiles,
         "profiled_operator_count": len(profiles),
@@ -1198,7 +1202,7 @@ def _backend_workspace_profile(
     target: str,
     *,
     target_device: Any,
-    target_profile: str | None = None,
+    target_profile: str | GpuProfile | None = None,
     workspace_profiles: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     external = match_workspace_profile(

@@ -55,7 +55,7 @@ FakeGPU 让没有 GPU 的机器看起来像有 GPU 一样。应用能看到可�
 ### 能做什么
 
 - **租 GPU 之前先选型。** 用 `estimate-llm` 估算 checkpoint、KV cache、activation
-  和 optimizer 显存，或用 `preflight` 把工作负载跑到指定阶段。
+  和 optimizer 显存，或用 `preflight` 检查工作负载实际跟踪到的显存。
 - **规划 LLM 服务容量。** `plan-serving` 检查显存能容纳多少 chat、RAG 或
   speculative decoding 请求，也支持 vLLM 风格的预算。
 - **在笔记本或纯 CPU 的 CI 中开发 CUDA 代码。** 在脚本中调用
@@ -89,6 +89,8 @@ FakeGPU 让没有 GPU 的机器看起来像有 GPU 一样。应用能看到可�
 需要 Linux 或 macOS、Python 3.10+、CMake 3.14+、支持 C++17 的编译器，Python
 runtime 还需要 PyTorch。Debian 或 Ubuntu 请安装 `build-essential`，macOS 请安装
 Xcode Command Line Tools。
+Linux 默认启用的 PTX/SASS 后端需要支持 C++20 的编译器及标准库（如 GCC 12+），
+详见[构建选项](docs/zh-CN/development.md#原生-ptxsass-后端)。
 
 ```bash
 git clone https://github.com/FanBB2333/FakeGPU.git
@@ -148,7 +150,7 @@ python3 -m fakegpu --build-dir build --devices "a100:2,h100:2" \
 ### 运行前检查显存
 
 ```bash
-# 把 train.py 执行到 forward 阶段，报告能否放下。
+# 执行 train.py，报告跟踪到的显存能否放下，并将目标阶段标为 forward。
 python3 -m fakegpu preflight --runtime fakecuda --profile a100 \
   --stage forward --report-dir build/preflight -- python3 train.py
 

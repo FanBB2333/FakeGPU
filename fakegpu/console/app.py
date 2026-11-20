@@ -32,6 +32,7 @@ from textual.widgets import (
 
 from ..machine.client import MachineError
 from ..machine.config import layout_text, parse_devices
+from ..link_topology import platform_data
 from ..link_traffic import copies_summary, format_rate, throughput_summary
 from ..platforms import AUTO, load_platforms, resolve_platform
 from ..machine.service import EVENT_BUFFER
@@ -617,7 +618,10 @@ class ConsoleApp(App[str]):
                         with Horizontal(classes="row"):
                             yield Label("PCIe slot generation")
                             yield Select(
-                                [("Platform default", 0)] + [(f"Gen{gen}", gen) for gen in range(3, 7)],
+                                [("Platform default", 0)] + [
+                                    (f"Gen{row['generation']}", row["generation"])
+                                    for row in platform_data()["pcie_generations"]
+                                ],
                                 allow_blank=False,
                                 id="cfg-pcie",
                             )
@@ -974,7 +978,7 @@ class ConsoleApp(App[str]):
 
     def load_form(self, config: dict[str, Any]) -> None:
         self.query_one("#cfg-devices", Input).value = config["devices"]
-        self.query_one("#cfg-platform", Select).value = config["platform"]
+        self.query_one("#cfg-platform", Select).value = config["platform"].strip().lower()
         self.query_one("#cfg-pcie", Select).value = config["pcie_generation"]
         self.query_one("#cfg-bridges", Input).value = config["nvlink_bridges"]
         self.query_one("#cfg-telemetry", Select).value = config["telemetry"]

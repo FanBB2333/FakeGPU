@@ -235,6 +235,9 @@ bool RealNcclLoader::initialize(std::string& error) {
         return false;
     }
     if (!resolve_symbols(error)) {
+        ::dlclose(state.handle);
+        state.handle = nullptr;
+        state.loaded_path.clear();
         return false;
     }
     return true;

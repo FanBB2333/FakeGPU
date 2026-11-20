@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 import shutil
 import sys
 from pathlib import Path
@@ -177,11 +178,16 @@ def test_validation_manifest_rejects_unknown_placeholder(tmp_path: Path) -> None
         run_validation_manifest(manifest, report_dir=tmp_path / "report")
 
 
-def test_validation_cli_json_output(tmp_path: Path, capsys) -> None:
+@pytest.mark.parametrize("compressed", [False, True])
+def test_validation_cli_json_output(tmp_path: Path, capsys, compressed: bool) -> None:
     manifest = _write_manifest(
         tmp_path / "manifest.json",
         [{"name": "ok", "command": [sys.executable, "-c", "pass"]}],
     )
+    if compressed:
+        packed = tmp_path / "manifest.json.gz"
+        packed.write_bytes(gzip.compress(manifest.read_bytes()))
+        manifest = packed
     assert (
         main(
             [
@@ -196,6 +202,13 @@ def test_validation_cli_json_output(tmp_path: Path, capsys) -> None:
     )
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "passed"
+
+
+def test_invalid_compressed_manifest_keeps_public_error_type(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json.gz"
+    manifest.write_bytes(gzip.compress(b"{invalid"))
+    with pytest.raises(ValidationManifestError, match="cannot parse"):
+        load_validation_manifest(manifest)
 
 
 @pytest.mark.parametrize("case", [

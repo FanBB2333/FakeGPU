@@ -44,6 +44,18 @@ class _FieldValue(ctypes.Structure):
     ]
 
 
+class _PciInfo(ctypes.Structure):
+    _fields_ = [
+        ("busIdLegacy", ctypes.c_char * 16),
+        ("domain", ctypes.c_uint),
+        ("bus", ctypes.c_uint),
+        ("device", ctypes.c_uint),
+        ("pciDeviceId", ctypes.c_uint),
+        ("pciSubSystemId", ctypes.c_uint),
+        ("busId", ctypes.c_char * 32),
+    ]
+
+
 def _die(message: str) -> None:
     print(f"[platform_topology] ERROR: {message}", file=sys.stderr)
     raise SystemExit(2)
@@ -62,6 +74,19 @@ def _uint(function, *args) -> tuple[int, int]:
     value = ctypes.c_uint(0xFFFF)
     result = int(function(*args, ctypes.byref(value)))
     return result, int(value.value)
+
+
+def _check_pci(function, handle, *args) -> _PciInfo:
+    pci = _PciInfo()
+    result = int(function(handle, *args, ctypes.byref(pci)))
+    if result != NVML_SUCCESS:
+        _die(f"{function.__name__} failed: {result}")
+    suffix = f":{pci.bus:02x}:{pci.device:02x}.0"
+    if pci.busIdLegacy.decode() != f"{pci.domain:04x}{suffix}":
+        _die(f"{function.__name__} returned an incomplete legacy PCI bus ID")
+    if pci.busId.decode() != f"{pci.domain:08x}{suffix}":
+        _die(f"{function.__name__} returned an inconsistent PCI bus ID")
+    return pci
 
 
 def _copy_and_check_links(nvml, cudart, handles, model, count: int) -> dict:
@@ -177,6 +202,13 @@ def main() -> int:
 
     for index, handle in enumerate(handles):
         slot = model.slots[index]
+        pci = _check_pci(nvml.nvmlDeviceGetPciInfo, handle)
+        _check_pci(nvml.nvmlDeviceGetPciInfo_v3, handle)
+        for bus_id in (pci.busId, pci.busIdLegacy):
+            found = ctypes.c_void_p()
+            result = nvml.nvmlDeviceGetHandleByPciBusId_v2(ctypes.c_char_p(bus_id), ctypes.byref(found))
+            if result != NVML_SUCCESS or found.value != handle.value:
+                _die(f"GPU {index} PCI bus ID lookup did not return its device")
         for function, expected in (
             (nvml.nvmlDeviceGetCurrPcieLinkGeneration, slot.pcie and slot.pcie.generation),
             (nvml.nvmlDeviceGetCurrPcieLinkWidth, slot.pcie and slot.pcie.width),
@@ -199,6 +231,7 @@ def main() -> int:
                 expected = NVML_NVLINK_DEVICE_TYPE_GPU if ports[link].peer is not None else NVML_NVLINK_DEVICE_TYPE_SWITCH
                 if (result, remote) != (NVML_SUCCESS, expected):
                     _die(f"GPU {index} NVLink {link} remote type {remote}, expected {expected}")
+                _check_pci(nvml.nvmlDeviceGetNvLinkRemotePciInfo_v2, handle, ctypes.c_uint(link))
 
     for source in range(count):
         for target in range(count):

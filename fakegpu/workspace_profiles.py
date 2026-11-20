@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import fnmatch
-import json
 import math
 import os
 import re
+import sys
 import warnings
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from .profile_catalog import GpuProfile, ProfileCatalogError, get_profile
+from .structured_io import StructuredDataError, load_mapping
 
 
 SCHEMA_VERSION = "fakegpu.workspace_profiles.v1"
@@ -63,7 +65,7 @@ def load_workspace_profiles(
             int(stat.st_size),
         )
         for raw in catalog:
-            profile = dict(raw)
+            profile = deepcopy(raw)
             profile_id = str(profile["id"])
             previous = seen_ids.get(profile_id)
             if previous is not None:
@@ -96,7 +98,7 @@ def match_workspace_profile(
     device_type = str(
         getattr(target_device, "type", str(target_device).split(":", 1)[0])
     )
-    gpu_profile = _resolve_gpu_profile(target_profile)
+    gpu_profile = _resolve_gpu_profile(target_profile, target_device)
     stack = _software_stack(gpu_profile)
     inputs = _node_input_tensors(node)
     outputs = list(_iter_tensor_leaves(getattr(node, "meta", {}).get("val")))
@@ -155,7 +157,10 @@ def match_workspace_profile(
 def workspace_profile_summary(
     paths: Sequence[str | os.PathLike[str]] | None = None,
 ) -> dict[str, Any]:
-    profiles = load_workspace_profiles(paths)
+    return _summarize_workspace_profiles(load_workspace_profiles(paths))
+
+
+def _summarize_workspace_profiles(profiles: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "profile_count": len(profiles),
@@ -171,11 +176,14 @@ def _load_workspace_catalog_cached(
     _size: int,
 ) -> tuple[dict[str, Any], ...]:
     path = Path(path_text)
-    if not path.is_file():
-        raise WorkspaceProfileError(f"workspace profile catalog not found: {path}")
-    payload = _read_structured_file(path)
-    if not isinstance(payload, Mapping):
-        raise WorkspaceProfileError(f"{path}: catalog root must be an object")
+    if path.suffix.lower() not in {".json", ".yaml", ".yml"}:
+        raise WorkspaceProfileError(
+            f"{path}: expected a .json, .yaml, or .yml workspace catalog"
+        )
+    try:
+        payload = load_mapping(path)
+    except (OSError, StructuredDataError) as exc:
+        raise WorkspaceProfileError(str(exc)) from exc
     if payload.get("schema_version") != SCHEMA_VERSION:
         raise WorkspaceProfileError(
             f"{path}: expected schema_version {SCHEMA_VERSION!r}"
@@ -191,30 +199,6 @@ def _load_workspace_catalog_cached(
         profile["_source"] = str(path)
         validated.append(profile)
     return tuple(validated)
-
-
-def _read_structured_file(path: Path) -> Any:
-    text = path.read_text(encoding="utf-8")
-    if path.suffix.lower() == ".json":
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise WorkspaceProfileError(f"{path}: invalid JSON: {exc}") from exc
-    if path.suffix.lower() in {".yaml", ".yml"}:
-        try:
-            import yaml
-        except ImportError as exc:
-            raise WorkspaceProfileError(
-                "YAML workspace profiles require PyYAML; install "
-                "'fakegpu[validation]' or use JSON"
-            ) from exc
-        try:
-            return yaml.safe_load(text)
-        except yaml.YAMLError as exc:
-            raise WorkspaceProfileError(f"{path}: invalid YAML: {exc}") from exc
-    raise WorkspaceProfileError(
-        f"{path}: expected a .json, .yaml, or .yml workspace catalog"
-    )
 
 
 def _validate_profile(
@@ -356,6 +340,7 @@ def _validate_profile(
 
 def _resolve_gpu_profile(
     target_profile: str | GpuProfile | None,
+    target_device: Any,
 ) -> GpuProfile | None:
     if isinstance(target_profile, GpuProfile):
         return target_profile
@@ -363,7 +348,19 @@ def _resolve_gpu_profile(
     if not profile_id:
         profiles_env = os.environ.get("FAKEGPU_PROFILES", "")
         if profiles_env:
-            profile_id = profiles_env.split(",", 1)[0].split(":", 1)[0].strip()
+            from .machine.config import parse_devices
+
+            try:
+                profile_ids = parse_devices(profiles_env)
+            except ValueError as exc:
+                raise WorkspaceProfileError(str(exc)) from exc
+            kind, _, ordinal = str(target_device).partition(":")
+            index = int(ordinal or 0)
+            cuda = sys.modules.get("torch.cuda")
+            if kind == "cuda" and not ordinal and cuda is not None and cuda.is_initialized():
+                index = cuda.current_device()
+            # Like FakeCUDA, repeat the last profile when the layout is padded.
+            profile_id = profile_ids[min(index, len(profile_ids) - 1)]
         else:
             profile_id = os.environ.get("FAKEGPU_PROFILE", "").strip()
     if not profile_id:

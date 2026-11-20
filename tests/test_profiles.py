@@ -19,6 +19,7 @@ def test_every_catalog_profile_resolves_consistently(monkeypatch):
         assert _resolve_per_device_profiles(2) == uniform
         assert uniform[0]["total_memory"] == profile.memory_bytes
         assert uniform[0]["name"] == profile.torch_name
+        assert uniform[0]["multi_processor_count"] == profile.sm_count
         assert (uniform[0]["compute_major"], uniform[0]["compute_minor"]) == profile.compute_capability
         monkeypatch.delenv("FAKEGPU_PROFILES")
 

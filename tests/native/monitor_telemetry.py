@@ -11,6 +11,14 @@ from fakegpu.nvml import NvmlStateBridge
 from fakegpu.profile_catalog import load_profiles
 
 
+class _FieldValue(ctypes.Structure):
+    _fields_ = [
+        ("fieldId", ctypes.c_uint), ("scopeId", ctypes.c_uint),
+        ("timestamp", ctypes.c_int64), ("latencyUsec", ctypes.c_int64),
+        ("valueType", ctypes.c_int), ("nvmlReturn", ctypes.c_int), ("value", ctypes.c_uint64),
+    ]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lib-dir", required=True, type=Path)
@@ -43,12 +51,27 @@ def main():
     assert setter(3, len(devices), devices, len(processes), processes) == 0, "catalog telemetry rejected"
     library.nvmlDeviceGetHandleByIndex_v2.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)]
     library.nvmlDeviceGetPowerUsage.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+    library.nvmlDeviceGetFieldValues.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(_FieldValue)]
+    library.nvmlDeviceGetEncoderStats.argtypes = [ctypes.c_void_p, *[ctypes.POINTER(ctypes.c_uint)] * 3]
     for index, device in enumerate(devices):
         handle, power = ctypes.c_void_p(), ctypes.c_uint()
         assert library.nvmlDeviceGetHandleByIndex_v2(index, ctypes.byref(handle)) == 0
         assert library.nvmlDeviceGetPowerUsage(handle, ctypes.byref(power)) == 0
         assert power.value == device.telemetry.power_mw
         assert device.telemetry.valid == 1 and device.telemetry.gpu == 100
+        field = _FieldValue(fieldId=186)  # NVML_FI_DEV_POWER_INSTANT
+        assert library.nvmlDeviceGetFieldValues(handle, 1, ctypes.byref(field)) == 0
+        assert field.nvmlReturn == 0 and field.value == power.value and field.timestamp > 0
+    devices[-1].telemetry.valid = 0
+    assert setter(3, len(devices), devices, 0, None) == 0
+    assert library.nvmlDeviceGetFieldValues(handle, 1, ctypes.byref(field)) == 0
+    assert field.nvmlReturn == 3  # NVML_ERROR_NOT_SUPPORTED
+    # The SDK declares three uint32 outputs. Guard adjacent caller memory
+    # so a wider write cannot be hidden by pynvml's zero-initialized values.
+    stats = (ctypes.c_uint * 6)(1, 0xDEADBEEF, 1, 0xDEADBEEF, 1, 0xDEADBEEF)
+    outputs = [ctypes.cast(ctypes.byref(stats, offset), ctypes.POINTER(ctypes.c_uint)) for offset in (0, 8, 16)]
+    assert library.nvmlDeviceGetEncoderStats(handle, *outputs) == 0
+    assert list(stats) == [0, 0xDEADBEEF, 0, 0xDEADBEEF, 0, 0xDEADBEEF]
     print(f"PASS: full-load modeled telemetry for {len(devices)} catalog profiles via native NVML")
 
 

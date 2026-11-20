@@ -131,6 +131,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         output = emit_json(args.json_path, report)
         if output is not None:
             print(f"LLM estimate: {output}")
+        else:
+            return 0
 
     memory = report["memory"]
     compute = report["compute"]

@@ -79,13 +79,13 @@ if [[ ! -d "$VENV_DIR" ]]; then
   uv venv "$VENV_DIR"
 fi
 
-VENV_PY="$REPO_ROOT/$VENV_DIR/bin/python"
+VENV_PY="$VENV_DIR/bin/python"
 if [[ ! -x "$VENV_PY" ]]; then
   echo "error: venv python not found: $VENV_PY" >&2
   exit 1
 fi
 
-export PATH="$REPO_ROOT/$VENV_DIR/bin:$PATH"
+export PATH="$VENV_DIR/bin:$PATH"
 
 deps="$("$PYTHON_BIN" scripts/lib/fakegpu_uv_deps.py "$UV_GROUP" | tr '\n' ' ')"
 if [[ -n "$deps" ]]; then

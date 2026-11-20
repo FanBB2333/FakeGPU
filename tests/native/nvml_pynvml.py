@@ -86,6 +86,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             name = _to_str(pynvml.nvmlDeviceGetName(handle))
             uuid = _to_str(pynvml.nvmlDeviceGetUUID(handle))
             mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            mem_v2 = pynvml.nvmlDeviceGetMemoryInfo(handle, pynvml.nvmlMemory_v2)
+            assert mem_v2.version == pynvml.nvmlMemory_v2 and mem_v2.reserved == 0
+            assert (mem_v2.total, mem_v2.free, mem_v2.used) == (mem.total, mem.free, mem.used)
+            memory_clock = pynvml.nvmlDeviceGetMaxClockInfo(handle, pynvml.NVML_CLOCK_MEM)
+            graphics_clock = pynvml.nvmlDeviceGetMaxClockInfo(handle, pynvml.NVML_CLOCK_GRAPHICS)
+            assert pynvml.nvmlDeviceGetApplicationsClock(handle, pynvml.NVML_CLOCK_MEM) == memory_clock
+            assert pynvml.nvmlDeviceGetSupportedMemoryClocks(handle) == ([memory_clock] if memory_clock else [])
+            if memory_clock:
+                graphics = pynvml.nvmlDeviceGetSupportedGraphicsClocks(handle, memory_clock)
+                assert graphics == ([graphics_clock] if graphics_clock else [])
 
             print()
             print(f"[GPU {i}] {name}")

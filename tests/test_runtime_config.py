@@ -118,6 +118,16 @@ def test_mode_switch_removes_unversioned_preloads(native_directory: Path) -> Non
         assert environment[_api._PRELOAD_VAR] == "/other/profiler.so"
 
 
+def test_packaged_library_names_are_used_for_preloading(tmp_path: Path) -> None:
+    for library in _api._PRELOAD_LIBS:
+        (tmp_path / _api._fallback_name(library)).touch()
+    assert _api._check_dir(tmp_path) == (True, [])
+    environment = _api.env(lib_dir=tmp_path, base_env={})
+    preloaded = environment[_api._PRELOAD_VAR].split(":")
+    assert len(preloaded) == len(_api._PRELOAD_LIBS)
+    assert all(Path(path).is_file() for path in preloaded)
+
+
 def test_native_init_honors_physical_visibility(native_directory: Path, monkeypatch) -> None:
     monkeypatch.setattr(_api, "_initialized", False)
     monkeypatch.setattr(_api, "_loaded_dir", None)

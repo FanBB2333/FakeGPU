@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import venv
 
 import pytest
 
@@ -69,6 +70,44 @@ def test_grid_resume_compare_and_tamper(tmp_path):
     result.write_text('{"value": 999, "nested": [2]}')
     with pytest.raises(ValueError, match="changed"):
         compare_experiments([root])
+
+
+@pytest.mark.parametrize("command", ["./worker", "worker"])
+def test_relative_executable_uses_experiment_working_directory(tmp_path, command):
+    work = tmp_path / "work"
+    work.mkdir()
+    executable = work / "worker"
+    executable.write_text(f"#!{sys.executable}\n{SCRIPT}")
+    executable.chmod(0o755)
+    config, root = fixture(
+        tmp_path,
+        working_directory="work",
+        command=[command, "{size}", "{run_dir}/result.json"],
+        environment={"PATH": "."},
+        parameters={"size": [2]},
+        repetitions=1,
+    )
+    prepared = plan_experiments(config, root)
+    assert prepared["request"]["executable"]["path"] == str(executable)
+    assert run_experiments(config, root)["complete"]
+
+
+def test_python_worker_keeps_the_virtual_environment(tmp_path, monkeypatch):
+    env = tmp_path / "venv"
+    venv.EnvBuilder(symlinks=True).create(env)
+    monkeypatch.setattr(sys, "executable", str(env / "bin" / "python"))
+    config, root = fixture(
+        tmp_path,
+        command=["{python}", "{script}", "{run_dir}/result.json"],
+        parameters={},
+        repetitions=1,
+        metrics={},
+    )
+    (tmp_path / "worker.py").write_text(
+        "import pathlib, sys\npathlib.Path(sys.argv[1]).write_text(sys.prefix)\n"
+    )
+    assert run_experiments(config, root)["complete"]
+    assert next(root.glob("runs/*/attempt-*/result.json")).read_text() == str(env)
 
 
 def test_explicit_retry_preserves_failure_and_uses_new_attempt(tmp_path):

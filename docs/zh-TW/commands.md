@@ -14,7 +14,7 @@ JSON 路徑的位置都可以使用 `.json.gz`。壓縮輸出採用原子寫入�
 |---|---|
 | `fakegpu doctor` | 檢查安裝、原生函式庫、PyTorch 與 profiles |
 | `fakegpu demo` | 執行小型 CPU FakeCUDA 訓練步驟，程式可看到 CUDA 裝置 |
-| `fakegpu preflight` | 將工作負載執行到指定階段並判斷 fit 或 OOM |
+| `fakegpu preflight` | 執行工作負載，依追蹤到的記憶體判斷 fit 或 OOM |
 | `fakegpu capabilities` | 列出或嚴格檢查原生 API 分類 |
 | `fakegpu validate` | 執行 JSON、TOML 或 YAML 宣告式驗證矩陣 |
 

@@ -84,7 +84,7 @@ typedef struct nvmlMemory_v2_st {
     unsigned long long used;
 } nvmlMemory_v2_t;
 
-#define nvmlMemory_v2 2
+#define nvmlMemory_v2 (sizeof(nvmlMemory_v2_t) | (2U << 24))
 
 typedef struct nvmlUtilization_st {
     unsigned int gpu;

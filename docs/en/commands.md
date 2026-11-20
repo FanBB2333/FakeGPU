@@ -15,7 +15,7 @@ output is written atomically and reproducibly.
 |---|---|
 | `fakegpu doctor` | Check the installation, native libraries, PyTorch, and profiles |
 | `fakegpu demo` | Run a small CPU-backed, CUDA-visible training step |
-| `fakegpu preflight` | Execute a workload to a target stage and classify fit or OOM |
+| `fakegpu preflight` | Execute a workload and classify tracked memory as fit or OOM |
 | `fakegpu capabilities` | List or strictly audit native API classifications |
 | `fakegpu validate` | Run a declarative JSON, TOML, or YAML validation matrix |
 

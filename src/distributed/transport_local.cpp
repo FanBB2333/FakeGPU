@@ -73,9 +73,17 @@ bool parse_payload_size_header(
 }
 
 bool send_all_bytes(int fd, const char* data, std::size_t size, std::string& error) {
+#ifdef SO_NOSIGPIPE
+    const int no_sigpipe = 1;
+    ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
+#endif
     std::size_t offset = 0;
     while (offset < size) {
+#ifdef MSG_NOSIGNAL
+        const ssize_t rc = ::send(fd, data + offset, size - offset, MSG_NOSIGNAL);
+#else
         const ssize_t rc = ::send(fd, data + offset, size - offset, 0);
+#endif
         if (rc < 0) {
             if (errno == EINTR) {
                 continue;
@@ -402,9 +410,9 @@ bool send_message_packet(
 }
 
 bool parse_message_line(const std::string& line, CoordinatorMessage& message, std::string& error) {
-    const std::vector<char> existing_payload = std::move(message.payload);
+    std::vector<char> existing_payload = std::move(message.payload);
     message = CoordinatorMessage{};
-    message.payload = existing_payload;
+    message.payload = std::move(existing_payload);
     std::istringstream stream(line);
     if (!(stream >> message.command)) {
         error = "missing command";
@@ -424,9 +432,9 @@ bool parse_message_line(const std::string& line, CoordinatorMessage& message, st
 }
 
 bool parse_response_line(const std::string& line, CoordinatorResponse& response, std::string& error) {
-    const std::vector<char> existing_payload = std::move(response.payload);
+    std::vector<char> existing_payload = std::move(response.payload);
     response = CoordinatorResponse{};
-    response.payload = existing_payload;
+    response.payload = std::move(existing_payload);
 
     std::istringstream stream(line);
     std::string status;

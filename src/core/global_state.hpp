@@ -213,6 +213,7 @@ private:
 
     std::unordered_map<void*, AllocationRecord> allocations;
 
+    const AllocationRecord* allocation_for_ptr_nolock(const void* ptr, size_t& offset) const;
     int resolve_device_for_ptr_nolock(const void* ptr, int fallback_device) const;
     DeviceRuntimeStats* stats_for_device_nolock(int device);
     const DeviceRuntimeStats* stats_for_device_nolock(int device) const;

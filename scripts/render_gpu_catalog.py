@@ -89,7 +89,7 @@ def render() -> str:
         "- `reference` means public specification or an explicitly documented derivation; it does not mean physical calibration. "
         "`measured` and `synthetic` retain their existing meanings. Catalog support does not imply a matching CUDA toolkit or framework still supports an old GPU.",
         "- `—` and a numeric zero in a reference specification mean unknown/unverified, not a hardware capacity of zero. "
-        "`doctor --json` exposes `unavailable_fields`. Timing estimates reject profiles missing SM count, core clock, bus width, or memory clock.",
+        "`doctor --json` exposes `unavailable_fields`. Timing estimates require known compute throughput and memory bandwidth.",
         "- Memory capacity is expressed in GiB (nominal vendor GB is represented as binary capacity unless notes specify otherwise). "
         "Multi-GPU boards and superchips are represented per CUDA GPU, not by adding memory across devices.",
         "- Memory MHz follows the existing analytical convention: half the effective per-pin data rate, "

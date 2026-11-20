@@ -66,10 +66,10 @@ def main() -> None:
     base = dict(os.environ, CUDA_VISIBLE_DEVICES=args.device, FAKEGPU_TERMINAL_REPORT="0")
     results = {}
     for mode in ("real", "passthrough", "hybrid"):
-        environment = native_env(
+        environment = base if mode == "real" else native_env(
             build_dir=args.build_dir,
             base_env=base,
-            mode="passthrough" if mode == "real" else mode,
+            mode=mode,
             oom_policy="clamp",
             device_count=1,
         )

@@ -411,20 +411,16 @@ def _workload(config: Mapping[str, Any]) -> dict[str, Any]:
     max_steps = config.get("max_steps")
     if max_steps is not None:
         optimizer_steps = _positive_int(max_steps, "max_steps")
-        complete_epochs, remainder = divmod(optimizer_steps, updates_per_epoch)
-        microsteps = complete_epochs * per_epoch + min(
-            remainder * accumulation, per_epoch
-        )
         stop_rule = "max_steps"
     else:
         # Finish optimizer updates rather than stopping halfway through an
         # accumulation window; the last update of each epoch can be shorter.
         optimizer_steps = math.ceil(float(epochs) * updates_per_epoch)
-        complete_epochs, remainder = divmod(optimizer_steps, updates_per_epoch)
-        microsteps = complete_epochs * per_epoch + min(
-            remainder * accumulation, per_epoch
-        )
         stop_rule = "epochs"
+    complete_epochs, remainder = divmod(optimizer_steps, updates_per_epoch)
+    microsteps = complete_epochs * per_epoch + min(
+        remainder * accumulation, per_epoch
+    )
     full_epochs, partial_microsteps = divmod(microsteps, per_epoch)
     samples_per_epoch = min(samples, per_epoch * batch)
     processed_samples = full_epochs * samples_per_epoch + min(

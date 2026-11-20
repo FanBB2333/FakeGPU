@@ -61,8 +61,8 @@ A physical GPU is only needed for passthrough, hybrid, and calibration runs.
 ### What you can do
 
 - **Choose a GPU before renting one.** Estimate checkpoint, KV-cache,
-  activation, and optimizer memory with `estimate-llm` or run a workload to a
-  chosen stage with `preflight`.
+  activation, and optimizer memory with `estimate-llm` or check a workload's
+  tracked memory with `preflight`.
 - **Size an LLM service.** `plan-serving` checks how many chat, RAG, or
   speculative-decoding requests fit in memory, including a vLLM-style budget.
 - **Develop CUDA code on a laptop or in CPU-only CI.** Call
@@ -98,6 +98,8 @@ Qwen SFT cases. These results cover fixed workloads only. See
 You need Linux or macOS, Python 3.10+, CMake 3.14+, a C++17 compiler, and
 PyTorch for the Python runtime. On Debian or Ubuntu, install
 `build-essential`. On macOS, install the Xcode Command Line Tools.
+The default Linux PTX/SASS backend needs a C++20 compiler and standard library
+such as GCC 12+; see [build options](docs/en/development.md#native-ptxsass-backend).
 
 ```bash
 git clone https://github.com/FanBB2333/FakeGPU.git
@@ -157,7 +159,7 @@ More options are in [Native interception](docs/en/native-interception.md).
 ### Check memory before a run
 
 ```bash
-# Run train.py up to the forward pass and report whether it fits.
+# Run train.py and report whether its tracked memory fits; label the target forward.
 python3 -m fakegpu preflight --runtime fakecuda --profile a100 \
   --stage forward --report-dir build/preflight -- python3 train.py
 

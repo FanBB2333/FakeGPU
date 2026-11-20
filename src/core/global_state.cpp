@@ -291,23 +291,24 @@ bool GlobalState::release_host_allocation(void* ptr, size_t& size, int& device) 
 
 bool GlobalState::get_allocation_info(void* ptr, size_t& size, int& device) const {
     std::lock_guard<std::mutex> lock(mutex);
-    auto it = allocations.find(ptr);
-    if (it == allocations.end()) return false;
-    if (it->second.kind == AllocationKind::Host) return false;
+    size_t offset = 0;
+    const AllocationRecord* record = allocation_for_ptr_nolock(ptr, offset);
+    if (!record || record->kind == AllocationKind::Host) return false;
 
-    size = it->second.size;
-    device = it->second.device;
+    size = record->size - offset;
+    device = record->device;
     return true;
 }
 
 bool GlobalState::get_allocation_info_ex(void* ptr, size_t& size, int& device, AllocationKind& kind) const {
     std::lock_guard<std::mutex> lock(mutex);
-    auto it = allocations.find(ptr);
-    if (it == allocations.end()) return false;
+    size_t offset = 0;
+    const AllocationRecord* record = allocation_for_ptr_nolock(ptr, offset);
+    if (!record) return false;
 
-    size = it->second.size;
-    device = it->second.device;
-    kind = it->second.kind;
+    size = record->size - offset;
+    device = record->device;
+    kind = record->kind;
     return true;
 }
 
@@ -673,12 +674,25 @@ void GlobalState::stop_native_smi_publisher() {
     }
 }
 
-int GlobalState::resolve_device_for_ptr_nolock(const void* ptr, int fallback_device) const {
-    if (!ptr) return fallback_device;
+const GlobalState::AllocationRecord* GlobalState::allocation_for_ptr_nolock(const void* ptr, size_t& offset) const {
+    offset = 0;
     auto it = allocations.find(const_cast<void*>(ptr));
-    if (it == allocations.end()) return fallback_device;
-    if (it->second.kind == AllocationKind::Host) return fallback_device;
-    return it->second.device;
+    if (it != allocations.end()) return &it->second;
+    const auto address = reinterpret_cast<uintptr_t>(ptr);
+    for (const auto& [base, record] : allocations) {
+        const auto start = reinterpret_cast<uintptr_t>(base);
+        if (address >= start && address - start < record.size) {
+            offset = address - start;
+            return &record;
+        }
+    }
+    return nullptr;
+}
+
+int GlobalState::resolve_device_for_ptr_nolock(const void* ptr, int fallback_device) const {
+    size_t offset = 0;
+    const AllocationRecord* record = allocation_for_ptr_nolock(ptr, offset);
+    return record && record->kind != AllocationKind::Host ? record->device : fallback_device;
 }
 
 int GlobalState::resolve_device_for_ptr(const void* ptr, int fallback_device) const {

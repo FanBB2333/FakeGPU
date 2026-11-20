@@ -477,33 +477,7 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count, cudaMemcpy
         return last_error;
     }
 
-    // Simplified: execute synchronously after validating the stream handle.
-    CUresult result = CUDA_SUCCESS;
-
-    switch (kind) {
-        case cudaMemcpyHostToDevice:
-            result = cuMemcpyHtoD((CUdeviceptr)dst, src, count);
-            break;
-        case cudaMemcpyDeviceToHost:
-            result = cuMemcpyDtoH(dst, (CUdeviceptr)src, count);
-            break;
-        case cudaMemcpyDeviceToDevice:
-            result = cuMemcpyDtoD((CUdeviceptr)dst, (CUdeviceptr)src, count);
-            break;
-        case cudaMemcpyDefault:
-            result = cuMemcpy((CUdeviceptr)dst, (CUdeviceptr)src, count);
-            break;
-        case cudaMemcpyHostToHost:
-            memcpy(dst, src, count);
-            fake_gpu::GlobalState::instance().record_memcpy_h2h(count);
-            result = CUDA_SUCCESS;
-            break;
-        default:
-            last_error = cudaErrorInvalidMemcpyDirection;
-            return last_error;
-    }
-
-    last_error = convertDriverError(result);
+    cudaMemcpy(dst, src, count, kind);
     if (last_error == cudaSuccess && !submitAsyncStreamOperation(stream)) {
         return last_error;
     }
@@ -1000,12 +974,7 @@ cudaError_t cudaGetDriverEntryPointByVersion(const char *symbol, void **funcPtr,
         return last_error;
     }
 
-    // Use cuGetProcAddress to get the driver function
-    CUresult result = cuGetProcAddress(symbol, funcPtr, cudaVersion, flags);
-
-    if (driverStatus) {
-        *driverStatus = (result == CUDA_SUCCESS) ? 1 : 0;
-    }
+    CUresult result = cuGetProcAddress_v2(symbol, funcPtr, cudaVersion, flags, driverStatus);
 
     last_error = convertDriverError(result);
     return last_error;
@@ -2154,20 +2123,12 @@ cudaError_t cudaDeviceGetByPCIBusId(int *device, const char *pciBusId) {
         return last_error;
     }
 
-    // Simplified: always return device 0
-    *device = 0;
-    last_error = cudaSuccess;
+    last_error = convertDriverError(cuDeviceGetByPCIBusId(device, pciBusId));
     return last_error;
 }
 
 cudaError_t cudaDeviceGetPCIBusId(char *pciBusId, int len, int device) {
-    if (!pciBusId || len < 13) {
-        last_error = cudaErrorInvalidValue;
-        return last_error;
-    }
-
-    snprintf(pciBusId, len, "0000:00:00.0");
-    last_error = cudaSuccess;
+    last_error = convertDriverError(cuDeviceGetPCIBusId(pciBusId, len, device));
     return last_error;
 }
 

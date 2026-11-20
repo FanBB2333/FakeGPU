@@ -1,10 +1,13 @@
 #include "collective_executor.hpp"
 #include "staging_buffer.hpp"
+#include "transport.hpp"
 
 #include <algorithm>
+#include <csignal>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <sys/socket.h>
 #include <unistd.h>
 
 using namespace fake_gpu::distributed;
@@ -17,6 +20,18 @@ namespace {
 
 void require(bool condition, const std::string& detail) {
     if (!condition) throw std::runtime_error(detail);
+}
+
+void check_disconnected_peer() {
+    int sockets[2];
+    require(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0, "socketpair failed");
+    ::close(sockets[1]);
+    const auto previous = std::signal(SIGPIPE, SIG_DFL);
+    std::string error;
+    const bool sent = send_message_packet(sockets[0], "PING", {}, error);
+    std::signal(SIGPIPE, previous);
+    ::close(sockets[0]);
+    require(!sent && !error.empty(), "disconnected peer must return a send error");
 }
 
 void check_collective(
@@ -126,6 +141,7 @@ void check_transport(BufferTransport transport) {
 
 int main() {
     try {
+        check_disconnected_peer();
         check_transport(BufferTransport::SocketPayload);
         check_transport(BufferTransport::SharedMemory);
         std::cout << "PASS: 28 collective cases and 28 size errors across socket/shared memory\n";

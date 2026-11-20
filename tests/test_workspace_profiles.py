@@ -99,6 +99,46 @@ def test_workspace_profile_matches_stack_dtype_shape_and_formula(
     assert profile["declared_interval"] is True
 
 
+def test_workspace_matches_the_requested_device_in_a_mixed_layout(monkeypatch) -> None:
+    torch = pytest.importorskip("torch")
+    monkeypatch.setenv("FAKEGPU_PROFILES", "a100:2,h100")
+    profile = {
+        "id": "hopper-mm",
+        "operator": "aten.mm.default",
+        "lifetime": "operator_local",
+        "match": {"profile_ids": ["h100"]},
+        "bytes": 512,
+    }
+    node = _node(torch)
+    assert match_workspace_profile(
+        node, "aten.mm.default", target_device=torch.device("cuda:1"), profiles=[profile]
+    ) is None
+    matched = match_workspace_profile(
+        node, "aten.mm.default", target_device=torch.device("cuda:2"), profiles=[profile]
+    )
+    assert matched is not None
+    assert matched["signature"]["profile_id"] == "h100"
+    monkeypatch.setattr(torch.cuda, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 2)
+    assert match_workspace_profile(
+        node, "aten.mm.default", target_device="cuda", profiles=[profile]
+    ) == matched
+
+
+def test_loaded_workspace_profiles_can_be_edited_independently(tmp_path: Path) -> None:
+    path = _write_catalog(
+        tmp_path / "workspace.json",
+        [{
+            "id": "fixed",
+            "operator": "mm",
+            "lifetime": "operator_local",
+            "formula": {"kind": "fixed", "fixed_bytes": 512},
+        }],
+    )
+    load_workspace_profiles([path])[-1]["formula"]["fixed_bytes"] = 1024
+    assert load_workspace_profiles([path])[-1]["formula"]["fixed_bytes"] == 512
+
+
 def test_highest_priority_profile_shadows_generic_match(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
     catalog = _write_catalog(

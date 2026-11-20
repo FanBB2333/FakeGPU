@@ -39,7 +39,7 @@ def replay_trace(
     events = _normalize_trace(trace)
     if not events:
         raise TraceReplayError("trace contains no complete replayable events")
-    enriched, _ = _apply_profiles(events, operator_profiles)
+    enriched = _apply_profiles(events, operator_profiles)
     events = _remove_fusion_double_counts(enriched)
     profile_summary = _profile_summary(events, len(operator_profiles))
     topology_cache: dict[tuple[int, int, int], Mapping[str, Any]] = {}
@@ -175,10 +175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             _print_report(report)
         return 0
-    except (
-            OSError,
-            ValueError,
-           ) as exc:
+    except (OSError, ValueError) as exc:
         usage_error(parser, exc)
 
 
@@ -205,7 +202,11 @@ def _normalize_chrome_events(
 ) -> list[dict[str, Any]]:
     events = []
     for index, raw in enumerate(raw_events):
-        if not isinstance(raw, Mapping) or raw.get("ph") not in {"X", None}:
+        if not isinstance(raw, Mapping):
+            continue
+        phase = raw.get("ph")
+        memory_instant = phase in {"i", "I"} and raw.get("name") == "[memory]"
+        if phase not in {"X", None} and not memory_instant:
             continue
         duration = _number(raw.get("dur", raw.get("duration_us", 0)), 0.0)
         if duration < 0:
@@ -408,7 +409,7 @@ def _normalize_cluster_events(
 def _apply_profiles(
     events: Sequence[Mapping[str, Any]],
     profiles: Sequence[Mapping[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+) -> list[dict[str, Any]]:
     output = []
     for raw in events:
         event = dict(raw)
@@ -431,7 +432,7 @@ def _apply_profiles(
             if event["duration_us"] <= 0 and "latency_us" in evaluated:
                 event["duration_us"] = float(evaluated["latency_us"])
         output.append(event)
-    return output, {}
+    return output
 
 
 def _profile_summary(
@@ -745,15 +746,7 @@ def _intervals(
 def _interval_union_length(
     intervals: Sequence[tuple[float, float]],
 ) -> float:
-    if not intervals:
-        return 0.0
-    merged = []
-    for start, end in sorted(intervals):
-        if not merged or start > merged[-1][1]:
-            merged.append([start, end])
-        else:
-            merged[-1][1] = max(merged[-1][1], end)
-    return sum(end - start for start, end in merged)
+    return sum(end - start for start, end in _merge_intervals(intervals))
 
 
 def _interval_intersection_length(

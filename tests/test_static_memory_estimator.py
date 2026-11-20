@@ -39,6 +39,31 @@ def test_graph_liveness_deduplicates_view_storage() -> None:
     assert report["warnings"] == []
 
 
+def test_graph_fingerprint_does_not_depend_on_storage_addresses(monkeypatch):
+    from types import SimpleNamespace
+    from torch.fx import Graph
+    from fakegpu import memory_estimator
+
+    tensors = (torch.empty(2), torch.empty(3))
+    graph = Graph()
+    pair = graph.placeholder("pair")
+    pair.meta["val"] = tensors
+    graph.output(pair)
+    fingerprints = []
+    for addresses in ((100, 200), (200, 100)):
+        records = {
+            id(tensor): (address, tensor.untyped_storage().nbytes())
+            for tensor, address in zip(tensors, addresses)
+        }
+        monkeypatch.setattr(
+            memory_estimator, "_tensor_storage_identity", lambda tensor: records[id(tensor)]
+        )
+        fingerprints.append(
+            memory_estimator.analyze_graph_memory(SimpleNamespace(graph=graph))["graph_fingerprint"]
+        )
+    assert fingerprints[0] == fingerprints[1]
+
+
 def test_forward_estimate_uses_fx_storage_liveness() -> None:
     from fakegpu.memory_estimator import estimate_module_memory
 

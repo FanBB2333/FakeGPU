@@ -179,14 +179,9 @@ def init(
 
         handles: dict[str, ctypes.CDLL] = {}
         for lib in _preload_libs_for_mode(os.environ.get("FAKEGPU_MODE")):
-            path = resolved_dir / lib
+            path = _library_path(resolved_dir, lib)
             if not path.exists():
-                # Try common unversioned fallbacks (useful when packaging).
-                alt_path = resolved_dir / _fallback_name(lib)
-                if alt_path.exists():
-                    path = alt_path
-                else:
-                    raise FileNotFoundError(f"Missing required FakeGPU library: {path}")
+                raise FileNotFoundError(f"Missing required FakeGPU library: {path}")
             handles[lib] = ctypes.CDLL(str(path), mode=dlopen_mode)
 
         _handles.clear()
@@ -302,8 +297,13 @@ def run(
 def _check_dir(path: Path) -> tuple[bool, list[str]]:
     if not path.is_dir():
         return False, list(_PRELOAD_LIBS)
-    missing = [lib for lib in _PRELOAD_LIBS if not (path / lib).exists() and not (path / _fallback_name(lib)).exists()]
+    missing = [lib for lib in _PRELOAD_LIBS if not _library_path(path, lib).exists()]
     return len(missing) == 0, missing
+
+
+def _library_path(directory: Path, libname: str) -> Path:
+    path = directory / libname
+    return path if path.exists() else directory / _fallback_name(libname)
 
 
 def _fallback_name(libname: str) -> str:
@@ -443,7 +443,7 @@ def _apply_env(env_map: dict[str, str], resolved_dir: Path) -> None:
             env_map.pop(_LIBRARY_PATH_VAR, None)
 
     preload_paths = [
-        str(resolved_dir / name)
+        str(_library_path(resolved_dir, name))
         for name in _preload_libs_for_mode(env_map.get("FAKEGPU_MODE"), environ=env_map)
     ]
     existing_preload = env_map.get(_PRELOAD_VAR, "")

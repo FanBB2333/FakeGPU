@@ -5,10 +5,16 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <random>
 #include <vector>
 
 namespace {
+
+static_assert(sizeof(cublasLtMatmulAlgo_t) == 64, "cuBLASLt algorithm ABI");
+static_assert(offsetof(cublasLtMatmulHeuristicResult_t, workspaceSize) == 64, "cuBLASLt workspace ABI");
+static_assert(sizeof(cublasLtMatmulHeuristicResult_t) == 96, "cuBLASLt heuristic ABI");
 
 void check_cuda(cudaError_t err, const char* what) {
     if (err == cudaSuccess) return;
@@ -273,9 +279,20 @@ int main() {
         check_cublas(cublasLtMatrixLayoutSetAttribute(d_desc, CUBLASLT_MATRIX_LAYOUT_ORDER, &CUBLASLT_ORDER_ROW, sizeof(CUBLASLT_ORDER_ROW)),
                      "cublasLtMatrixLayoutSetAttribute D order");
 
+        cublasLtMatmulHeuristicResult_t heuristic;
+        std::memset(&heuristic, 0xa5, sizeof(heuristic));
+        int algorithm_count = 0;
+        check_cublas(cublasLtMatmulAlgoGetHeuristic(
+            lt, op, a_desc, b_desc, c_desc, d_desc, nullptr, 1, &heuristic, &algorithm_count
+        ), "cublasLtMatmulAlgoGetHeuristic");
+        if (algorithm_count != 1 || heuristic.workspaceSize != 0 || heuristic.state != CUBLAS_STATUS_SUCCESS ||
+            heuristic.wavesCount != 1.0f || heuristic.algo.data[7] != 0) {
+            std::fprintf(stderr, "cuBLASLt heuristic returned invalid ABI fields\n");
+            return 3;
+        }
         check_cublas(
             cublasLtMatmul(
-                lt, op, &alpha, dA, a_desc, dB, b_desc, &beta, dC, c_desc, dD, d_desc, nullptr, nullptr, 0, nullptr
+                lt, op, &alpha, dA, a_desc, dB, b_desc, &beta, dC, c_desc, dD, d_desc, &heuristic.algo, nullptr, 0, nullptr
             ),
             "cublasLtMatmul"
         );
@@ -705,6 +722,27 @@ int main() {
             return 1;
         }
 
+        // beta=0 overwrites the output without reading its previous contents.
+        const float zero = 0.0f;
+        std::fill(hy.begin(), hy.end(), std::numeric_limits<float>::quiet_NaN());
+        check_cuda(cudaMemcpy(dY, hy.data(), hy.size() * sizeof(float), cudaMemcpyHostToDevice), "H2D uninitialized Y");
+        check_cublas(
+            cublasSgemv_v2(handle, CUBLAS_OP_N, m, n, &alpha, dA, lda, dX, 1, &zero, dY, 1),
+            "cublasSgemv_v2 beta=0"
+        );
+        for (int row = 0; row < m; ++row) {
+            double acc = 0.0;
+            for (int col = 0; col < n; ++col) {
+                acc += static_cast<double>(hA[idx_col_major(row, col, lda)]) * hx[col];
+            }
+            expected_y[row] = static_cast<float>(alpha * acc);
+        }
+        check_cuda(cudaMemcpy(got_y.data(), dY, got_y.size() * sizeof(float), cudaMemcpyDeviceToHost), "D2H overwritten Y");
+        if (!allclose(got_y, expected_y, 1e-5f, 1e-5f)) {
+            std::fprintf(stderr, "Test7 failed: cublasSgemv_v2 beta=0 mismatch\n");
+            return 1;
+        }
+
         std::vector<float> hGerX = {1.0f, -2.0f, 0.5f};
         std::vector<float> hGerY = {3.0f, -1.0f};
         check_cuda(cudaFree(dX), "cudaFree X");
@@ -751,8 +789,8 @@ int main() {
         std::vector<__half> hB(4);
         std::vector<__half> hC(4);
         hA[0].x = 0x3C00; // 1
-        hA[1].x = 0x4200; // 3
-        hA[2].x = 0x4000; // 2
+        hA[1].x = 0x0200; // positive subnormal
+        hA[2].x = 0x8001; // negative subnormal
         hA[3].x = 0x4400; // 4
         hB[0].x = 0x3C00; // identity
         hB[1].x = 0x0000;

@@ -23,7 +23,6 @@ using namespace fake_gpu;
 // Track current context (simplified - just track device)
 static thread_local int current_context_device = 0;
 static thread_local std::vector<int> context_stack;
-static bool driver_initialized = false;
 
 namespace {
 CUresult load_kernel_image(CUmodule* module, const void* image, size_t size = 0) {
@@ -40,337 +39,6 @@ CUresult load_kernel_image(CUmodule* module, const void* image, size_t size = 0)
     const int result = kernel::load(code, &loaded);
     if (result == CUDA_SUCCESS) *module = static_cast<CUmodule>(loaded);
     return static_cast<CUresult>(result);
-}
-
-uint64_t saturating_add_u64(uint64_t a, uint64_t b) {
-    const uint64_t max_value = std::numeric_limits<uint64_t>::max();
-    if (a >= max_value - b) return max_value;
-    return a + b;
-}
-
-void dump_terminal_summary(const std::vector<fake_gpu::DeviceReportStats>& devices,
-                           const fake_gpu::HostIoStats& host_io) {
-    const char* env = std::getenv("FAKEGPU_TERMINAL_REPORT");
-    if (env && std::string(env) == "0") {
-        return;
-    }
-
-    auto fmt_bytes = [](uint64_t bytes) -> std::string {
-        char buf[32];
-        if (bytes >= 1024ULL * 1024 * 1024) {
-            std::snprintf(buf, sizeof(buf), "%.1f GB", bytes / (1024.0 * 1024.0 * 1024.0));
-        } else if (bytes >= 1024ULL * 1024) {
-            std::snprintf(buf, sizeof(buf), "%.1f MB", bytes / (1024.0 * 1024.0));
-        } else {
-            std::snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)bytes);
-        }
-        return buf;
-    };
-
-    std::fprintf(stderr, "\n");
-    std::fprintf(stderr, "======================================================\n");
-    std::fprintf(stderr, "             FakeGPU Report Summary\n");
-    std::fprintf(stderr, "======================================================\n");
-
-    for (const auto& dev : devices) {
-        const double peak_pct = dev.total_memory > 0
-            ? (100.0 * static_cast<double>(dev.used_memory_peak) / static_cast<double>(dev.total_memory))
-            : 0.0;
-        std::fprintf(stderr, " Device %d: %s", dev.index, dev.name.c_str());
-        if (!dev.architecture.empty()) {
-            std::fprintf(stderr, " (%s, cc %d.%d)",
-                         dev.architecture.c_str(), dev.compute_major, dev.compute_minor);
-        }
-        std::fprintf(stderr, "\n");
-        std::fprintf(stderr, "   Memory: %s / %s peak (%.1f%%)\n",
-                     fmt_bytes(dev.used_memory_peak).c_str(),
-                     fmt_bytes(dev.total_memory).c_str(),
-                     peak_pct);
-        std::fprintf(stderr, "   Alloc: %llu calls | Free: %llu calls\n",
-                     (unsigned long long)dev.alloc_calls,
-                     (unsigned long long)dev.free_calls);
-        if (!dev.gemm_by_dtype.empty()) {
-            std::fprintf(stderr, "   GEMM:");
-            for (const auto& [dtype, stats] : dev.gemm_by_dtype) {
-                std::fprintf(stderr, " %s=%llu", dtype.c_str(), (unsigned long long)stats.first);
-            }
-            std::fprintf(stderr, "\n");
-        }
-        if (dev.kernel_launch_total > 0) {
-            std::fprintf(stderr, "   Kernels: %llu total\n", (unsigned long long)dev.kernel_launch_total);
-        }
-        if (!dev.compat_events.empty()) {
-            std::fprintf(stderr, "   COMPAT WARNINGS:");
-            for (const auto& [op, dtype, count] : dev.compat_events) {
-                std::fprintf(stderr, " %s(%s)x%llu",
-                             op.c_str(), dtype.c_str(), (unsigned long long)count);
-            }
-            std::fprintf(stderr, "\n");
-        }
-        if (!dev.unsupported_api_events.empty()) {
-            std::fprintf(stderr, "   UNSUPPORTED APIS:");
-            for (const auto& [op, behavior, policy, count] :
-                 dev.unsupported_api_events) {
-                std::fprintf(
-                    stderr,
-                    " %s(%s,%s)x%llu",
-                    op.c_str(),
-                    behavior.c_str(),
-                    policy.c_str(),
-                    (unsigned long long)count);
-            }
-            std::fprintf(stderr, "\n");
-        }
-        std::fprintf(stderr, "------------------------------------------------------\n");
-    }
-
-    if (host_io.memcpy_calls > 0) {
-        std::fprintf(stderr, " Host IO: %llu calls, %s\n",
-                     (unsigned long long)host_io.memcpy_calls,
-                     fmt_bytes(host_io.memcpy_bytes).c_str());
-    }
-
-    std::fprintf(stderr, "======================================================\n\n");
-}
-
-void dump_active_cuda_report() {
-    const char* report_path = std::getenv("FAKEGPU_REPORT_PATH");
-    if (!report_path || !*report_path) {
-        report_path = "fake_gpu_report.json";
-    }
-
-    fake_gpu::GlobalState& gs = fake_gpu::GlobalState::instance();
-    std::vector<fake_gpu::DeviceReportStats> devices = gs.snapshot_device_report();
-    fake_gpu::HostIoStats host_io = gs.snapshot_host_io();
-    if (devices.empty()) {
-        FILE* existing = std::fopen(report_path, "r");
-        if (existing) {
-            std::fclose(existing);
-        }
-        return;
-    }
-
-    uint64_t total_alloc_bytes = 0;
-    uint64_t total_free_bytes = 0;
-    uint64_t total_h2d_bytes = 0;
-    uint64_t total_d2h_bytes = 0;
-    uint64_t total_d2d_bytes = 0;
-    uint64_t total_peer_tx_bytes = 0;
-    uint64_t total_peer_rx_bytes = 0;
-    uint64_t total_memset_bytes = 0;
-    uint64_t total_cublas_gemm_flops = 0;
-    uint64_t total_cublaslt_matmul_flops = 0;
-
-    uint64_t total_alloc_calls = 0;
-    uint64_t total_free_calls = 0;
-    uint64_t total_h2d_calls = 0;
-    uint64_t total_d2h_calls = 0;
-    uint64_t total_d2d_calls = 0;
-    uint64_t total_peer_tx_calls = 0;
-    uint64_t total_peer_rx_calls = 0;
-    uint64_t total_memset_calls = 0;
-    uint64_t total_cublas_gemm_calls = 0;
-    uint64_t total_cublaslt_matmul_calls = 0;
-
-    for (const auto& dev : devices) {
-        total_alloc_bytes = saturating_add_u64(total_alloc_bytes, dev.alloc_bytes);
-        total_free_bytes = saturating_add_u64(total_free_bytes, dev.free_bytes);
-        total_h2d_bytes = saturating_add_u64(total_h2d_bytes, dev.memcpy_h2d_bytes);
-        total_d2h_bytes = saturating_add_u64(total_d2h_bytes, dev.memcpy_d2h_bytes);
-        total_d2d_bytes = saturating_add_u64(total_d2d_bytes, dev.memcpy_d2d_bytes);
-        total_peer_tx_bytes = saturating_add_u64(total_peer_tx_bytes, dev.memcpy_peer_tx_bytes);
-        total_peer_rx_bytes = saturating_add_u64(total_peer_rx_bytes, dev.memcpy_peer_rx_bytes);
-        total_memset_bytes = saturating_add_u64(total_memset_bytes, dev.memset_bytes);
-        total_cublas_gemm_flops = saturating_add_u64(total_cublas_gemm_flops, dev.cublas_gemm_flops);
-        total_cublaslt_matmul_flops = saturating_add_u64(total_cublaslt_matmul_flops, dev.cublaslt_matmul_flops);
-
-        total_alloc_calls = saturating_add_u64(total_alloc_calls, dev.alloc_calls);
-        total_free_calls = saturating_add_u64(total_free_calls, dev.free_calls);
-        total_h2d_calls = saturating_add_u64(total_h2d_calls, dev.memcpy_h2d_calls);
-        total_d2h_calls = saturating_add_u64(total_d2h_calls, dev.memcpy_d2h_calls);
-        total_d2d_calls = saturating_add_u64(total_d2d_calls, dev.memcpy_d2d_calls);
-        total_peer_tx_calls = saturating_add_u64(total_peer_tx_calls, dev.memcpy_peer_tx_calls);
-        total_peer_rx_calls = saturating_add_u64(total_peer_rx_calls, dev.memcpy_peer_rx_calls);
-        total_memset_calls = saturating_add_u64(total_memset_calls, dev.memset_calls);
-        total_cublas_gemm_calls = saturating_add_u64(total_cublas_gemm_calls, dev.cublas_gemm_calls);
-        total_cublaslt_matmul_calls = saturating_add_u64(total_cublaslt_matmul_calls, dev.cublaslt_matmul_calls);
-    }
-
-    FILE* out = std::fopen(report_path, "w");
-    if (!out) return;
-
-    const fake_gpu::BackendConfig& config = fake_gpu::BackendConfig::instance();
-
-    std::fprintf(out, "{\n");
-    std::fprintf(out, "  \"report_version\": \"%s\",\n", FAKEGPU_VERSION);
-    std::fprintf(out, "  \"mode\": \"%s\",\n", fake_gpu::mode_name(config.mode()));
-    std::fprintf(
-        out,
-        "  \"unsupported_api_policy\": \"%s\",\n",
-        fake_gpu::unsupported_api_policy_name(config.unsupported_api_policy()));
-    std::fprintf(out, "  \"host_io\": {\n");
-    std::fprintf(out, "    \"memcpy_calls\": %llu,\n", (unsigned long long)host_io.memcpy_calls);
-    std::fprintf(out, "    \"memcpy_bytes\": %llu\n", (unsigned long long)host_io.memcpy_bytes);
-    std::fprintf(out, "  },\n");
-    std::fprintf(out, "  \"summary\": {\n");
-    std::fprintf(out, "    \"device_count\": %llu,\n", (unsigned long long)devices.size());
-    std::fprintf(out, "    \"alloc\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                 (unsigned long long)total_alloc_calls, (unsigned long long)total_alloc_bytes);
-    std::fprintf(out, "    \"free\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                 (unsigned long long)total_free_calls, (unsigned long long)total_free_bytes);
-    std::fprintf(out, "    \"io\": {\n");
-    std::fprintf(out, "      \"h2d\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                 (unsigned long long)total_h2d_calls, (unsigned long long)total_h2d_bytes);
-    std::fprintf(out, "      \"d2h\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                 (unsigned long long)total_d2h_calls, (unsigned long long)total_d2h_bytes);
-    std::fprintf(out, "      \"d2d\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                 (unsigned long long)total_d2d_calls, (unsigned long long)total_d2d_bytes);
-    std::fprintf(out, "      \"peer_tx\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                 (unsigned long long)total_peer_tx_calls, (unsigned long long)total_peer_tx_bytes);
-    std::fprintf(out, "      \"peer_rx\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                 (unsigned long long)total_peer_rx_calls, (unsigned long long)total_peer_rx_bytes);
-    std::fprintf(out, "      \"memset\": {\"calls\": %llu, \"bytes\": %llu}\n",
-                 (unsigned long long)total_memset_calls, (unsigned long long)total_memset_bytes);
-    std::fprintf(out, "    },\n");
-    std::fprintf(out, "    \"compute\": {\n");
-    std::fprintf(out, "      \"cublas_gemm\": {\"calls\": %llu, \"flops\": %llu},\n",
-                 (unsigned long long)total_cublas_gemm_calls, (unsigned long long)total_cublas_gemm_flops);
-    std::fprintf(out, "      \"cublaslt_matmul\": {\"calls\": %llu, \"flops\": %llu}\n",
-                 (unsigned long long)total_cublaslt_matmul_calls, (unsigned long long)total_cublaslt_matmul_flops);
-    std::fprintf(out, "    }\n");
-    std::fprintf(out, "  },\n");
-    std::fprintf(out, "  \"devices\": [\n");
-
-    for (size_t i = 0; i < devices.size(); ++i) {
-        const auto& dev = devices[i];
-        const uint64_t device_total_io_bytes = saturating_add_u64(
-            saturating_add_u64(
-                saturating_add_u64(dev.memcpy_h2d_bytes, dev.memcpy_d2h_bytes),
-                saturating_add_u64(dev.memcpy_d2d_bytes, dev.memcpy_peer_tx_bytes)),
-            saturating_add_u64(dev.memcpy_peer_rx_bytes, dev.memset_bytes));
-        const uint64_t device_total_flops =
-            saturating_add_u64(dev.cublas_gemm_flops, dev.cublaslt_matmul_flops);
-
-        std::fprintf(out, "    {\n");
-        std::fprintf(out, "      \"index\": %d,\n", dev.index);
-        std::fprintf(out, "      \"name\": \"%s\",\n", dev.name.c_str());
-        std::fprintf(out, "      \"uuid\": \"%s\",\n", dev.uuid.c_str());
-        std::fprintf(out, "      \"gpu_profile\": {\n");
-        std::fprintf(out, "        \"architecture\": \"%s\",\n", dev.architecture.c_str());
-        std::fprintf(out, "        \"compute_capability\": \"%d.%d\",\n", dev.compute_major, dev.compute_minor);
-        std::fprintf(out, "        \"supported_types\": [");
-        for (size_t t = 0; t < dev.supported_types.size(); ++t) {
-            std::fprintf(out, "\"%s\"%s",
-                         dev.supported_types[t].c_str(),
-                         (t + 1 < dev.supported_types.size() ? ", " : ""));
-        }
-        std::fprintf(out, "]\n");
-        std::fprintf(out, "      },\n");
-        std::fprintf(out, "      \"total_memory\": %llu,\n", (unsigned long long)dev.total_memory);
-        std::fprintf(out, "      \"used_memory_peak\": %llu,\n", (unsigned long long)dev.used_memory_peak);
-        std::fprintf(out, "      \"used_memory_current\": %llu,\n", (unsigned long long)dev.used_memory_current);
-        std::fprintf(out, "      \"alloc\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                     (unsigned long long)dev.alloc_calls, (unsigned long long)dev.alloc_bytes);
-        std::fprintf(out, "      \"free\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                     (unsigned long long)dev.free_calls, (unsigned long long)dev.free_bytes);
-        std::fprintf(out, "      \"io\": {\n");
-        std::fprintf(out, "        \"h2d\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                     (unsigned long long)dev.memcpy_h2d_calls, (unsigned long long)dev.memcpy_h2d_bytes);
-        std::fprintf(out, "        \"d2h\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                     (unsigned long long)dev.memcpy_d2h_calls, (unsigned long long)dev.memcpy_d2h_bytes);
-        std::fprintf(out, "        \"d2d\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                     (unsigned long long)dev.memcpy_d2d_calls, (unsigned long long)dev.memcpy_d2d_bytes);
-        std::fprintf(out, "        \"peer_tx\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                     (unsigned long long)dev.memcpy_peer_tx_calls, (unsigned long long)dev.memcpy_peer_tx_bytes);
-        std::fprintf(out, "        \"peer_rx\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                     (unsigned long long)dev.memcpy_peer_rx_calls, (unsigned long long)dev.memcpy_peer_rx_bytes);
-        std::fprintf(out, "        \"memset\": {\"calls\": %llu, \"bytes\": %llu},\n",
-                     (unsigned long long)dev.memset_calls, (unsigned long long)dev.memset_bytes);
-        std::fprintf(out, "        \"total_bytes\": %llu\n", (unsigned long long)device_total_io_bytes);
-        std::fprintf(out, "      },\n");
-        std::fprintf(out, "      \"compute\": {\n");
-        std::fprintf(out, "        \"cublas_gemm\": {\"calls\": %llu, \"flops\": %llu},\n",
-                     (unsigned long long)dev.cublas_gemm_calls, (unsigned long long)dev.cublas_gemm_flops);
-        std::fprintf(out, "        \"cublaslt_matmul\": {\"calls\": %llu, \"flops\": %llu},\n",
-                     (unsigned long long)dev.cublaslt_matmul_calls, (unsigned long long)dev.cublaslt_matmul_flops);
-        std::fprintf(out, "        \"total_flops\": %llu\n", (unsigned long long)device_total_flops);
-        std::fprintf(out, "      },\n");
-        std::fprintf(out, "      \"kernel_launches\": {\n");
-        std::fprintf(out, "        \"total\": %llu", (unsigned long long)dev.kernel_launch_total);
-        if (!dev.kernel_launches.empty()) {
-            std::fprintf(out, ",\n");
-            std::fprintf(out, "        \"by_name\": {\n");
-            size_t ki = 0;
-            for (const auto& [name, count] : dev.kernel_launches) {
-                std::fprintf(out, "          \"%s\": %llu%s\n",
-                             name.c_str(),
-                             (unsigned long long)count,
-                             (ki + 1 < dev.kernel_launches.size() ? "," : ""));
-                ++ki;
-            }
-            std::fprintf(out, "        }\n");
-        } else {
-            std::fprintf(out, "\n");
-        }
-        std::fprintf(out, "      },\n");
-        std::fprintf(out, "      \"gemm_by_dtype\": {");
-        if (!dev.gemm_by_dtype.empty()) {
-            std::fprintf(out, "\n");
-            size_t gi = 0;
-            for (const auto& [dtype_name, stats_pair] : dev.gemm_by_dtype) {
-                std::fprintf(out, "        \"%s\": {\"calls\": %llu, \"flops\": %llu}%s\n",
-                             dtype_name.c_str(),
-                             (unsigned long long)stats_pair.first,
-                             (unsigned long long)stats_pair.second,
-                             (gi + 1 < dev.gemm_by_dtype.size() ? "," : ""));
-                ++gi;
-            }
-            std::fprintf(out, "      }\n");
-        } else {
-            std::fprintf(out, "}\n");
-        }
-        if (!dev.compat_events.empty()) {
-            std::fprintf(out, "      ,\"compatibility_events\": [\n");
-            for (size_t ci = 0; ci < dev.compat_events.size(); ++ci) {
-                const auto& [op, dtype, count] = dev.compat_events[ci];
-                std::fprintf(out, "        {\"operation\": \"%s\", \"dtype\": \"%s\", \"count\": %llu}%s\n",
-                             op.c_str(),
-                             dtype.c_str(),
-                             (unsigned long long)count,
-                             (ci + 1 < dev.compat_events.size() ? "," : ""));
-            }
-            std::fprintf(out, "      ]\n");
-        }
-        if (!dev.unsupported_api_events.empty()) {
-            std::fprintf(out, "      ,\"unsupported_api_events\": [\n");
-            for (size_t ui = 0; ui < dev.unsupported_api_events.size(); ++ui) {
-                const auto& [op, behavior, policy, count] =
-                    dev.unsupported_api_events[ui];
-                std::fprintf(
-                    out,
-                    "        {\"operation\": \"%s\", \"behavior\": \"%s\", "
-                    "\"policy\": \"%s\", \"count\": %llu}%s\n",
-                    op.c_str(),
-                    behavior.c_str(),
-                    policy.c_str(),
-                    (unsigned long long)count,
-                    (ui + 1 < dev.unsupported_api_events.size() ? "," : ""));
-            }
-            std::fprintf(out, "      ]\n");
-        }
-        std::fprintf(out, "    }%s\n", (i + 1 < devices.size() ? "," : ""));
-    }
-
-    std::fprintf(out, "  ]\n");
-    std::fprintf(out, "}\n");
-    std::fclose(out);
-    dump_terminal_summary(devices, host_io);
-}
-
-void ensure_report_dump_registered() {
-    // The linked ResourceMonitor owns process-exit reporting. Registering a
-    // second Driver-specific atexit writer duplicates terminal output and can
-    // overwrite the unified cross-library snapshot.
 }
 
 bool real_driver_available() {
@@ -759,7 +427,6 @@ CUresult cuInit(unsigned int Flags) {
 
     // Always initialize the fake state: hybrid/simulate virtualize device info using GlobalState.
     GlobalState::instance().initialize();
-    driver_initialized = true;
 
     if (config.mode() != FakeGpuMode::Simulate && real_driver_available()) {
         if (config.mode() == FakeGpuMode::Hybrid) {
@@ -791,7 +458,6 @@ CUresult cuDriverGetVersion(int *driverVersion) {
 
 CUresult cuDeviceGetCount(int *count) {
     if (!count) return CUDA_ERROR_INVALID_VALUE;
-    ensure_report_dump_registered();
 
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
@@ -806,7 +472,6 @@ CUresult cuDeviceGetCount(int *count) {
 
 CUresult cuDeviceGet(CUdevice *device, int ordinal) {
     if (!device) return CUDA_ERROR_INVALID_VALUE;
-    ensure_report_dump_registered();
 
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
@@ -826,7 +491,6 @@ CUresult cuDeviceGet(CUdevice *device, int ordinal) {
 
 CUresult cuDeviceGetName(char *name, int len, CUdevice dev) {
     if (!name || len <= 0) return CUDA_ERROR_INVALID_VALUE;
-    ensure_report_dump_registered();
 
     const BackendConfig& config = BackendConfig::instance();
     if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
@@ -879,18 +543,7 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
     // Log attribute queries for debugging
     FGPU_LOG("[FakeCUDA-Driver] cuDeviceGetAttribute(dev=%d, attrib=%d)\n", dev, attrib);
 
-    // Return fake but reasonable values pulled from the device profile
-    int real_cc_major = -1;
-    int real_cc_minor = -1;
-    if (config.mode() == FakeGpuMode::Hybrid && real_driver_available()) {
-        const auto& real_info = RealCudaLoader::instance().get_real_gpu_info();
-        if (real_info.valid && real_info.device_count > 0) {
-            const int real_dev = map_virtual_device_to_real(dev);
-            real_cc_major = real_info.compute_major[real_dev];
-            real_cc_minor = real_info.compute_minor[real_dev];
-        }
-    }
-
+    // Return the selected simulated device profile.
     switch (attrib) {
         case CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK:
             *pi = 1024;
@@ -953,10 +606,10 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             *pi = 1;
             break;
         case CU_DEVICE_ATTRIBUTE_PCI_BUS_ID:
-            *pi = dev;  // Use device index as bus ID
+            *pi = dev + 1;
             break;
         case CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID:
-            *pi = static_cast<int>(device.profile.pci_device_id);
+            *pi = 0;  // PCI device address, rather than the hardware product ID.
             break;
         case CU_DEVICE_ATTRIBUTE_TCC_DRIVER:
             *pi = 0;
@@ -984,20 +637,9 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
             break;
         case CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR:
             *pi = device.profile.compute_major;
-            if (real_cc_major >= 0 && device.profile.compute_major > real_cc_major) {
-                *pi = real_cc_major;
-            }
             break;
         case CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR:
             *pi = device.profile.compute_minor;
-            if (real_cc_major >= 0) {
-                if (device.profile.compute_major > real_cc_major) {
-                    *pi = real_cc_minor;
-                } else if (device.profile.compute_major == real_cc_major &&
-                           device.profile.compute_minor > real_cc_minor) {
-                    *pi = real_cc_minor;
-                }
-            }
             break;
         case CU_DEVICE_ATTRIBUTE_STREAM_PRIORITIES_SUPPORTED:
             *pi = 1;
@@ -2157,7 +1799,6 @@ CUresult cuCtxGetApiVersion(CUcontext ctx, unsigned int *version) {
 
 // Memory info
 CUresult cuMemGetInfo(size_t *free, size_t *total) {
-    ensure_report_dump_registered();
     const BackendConfig& config = BackendConfig::instance();
 
     if (config.mode() == FakeGpuMode::Passthrough && real_driver_available()) {
@@ -2306,7 +1947,10 @@ CUresult cuDeviceGetPCIBusId(char *pciBusId, int len, CUdevice dev) {
         return real_fn(pciBusId, len, real_dev);
     }
 
-    snprintf(pciBusId, len, "0000:%02x:00.0", dev);
+    CUdevice checked;
+    const CUresult result = cuDeviceGet(&checked, dev);
+    if (result != CUDA_SUCCESS) return result;
+    snprintf(pciBusId, len, "0000:%02x:00.0", checked + 1);
     return CUDA_SUCCESS;
 }
 
@@ -2322,8 +1966,10 @@ CUresult cuDeviceGetByPCIBusId(CUdevice *dev, const char *pciBusId) {
         return real_fn(dev, pciBusId);
     }
 
-    *dev = 0;  // Default to device 0
-    return CUDA_SUCCESS;
+    unsigned domain, bus, device, function;
+    if (std::sscanf(pciBusId, "%x:%x:%x.%x", &domain, &bus, &device, &function) != 4 ||
+        domain != 0 || device != 0 || function != 0) return CUDA_ERROR_INVALID_VALUE;
+    return cuDeviceGet(dev, static_cast<int>(bus) - 1);
 }
 
 CUresult cuModuleLoad(CUmodule *module, const char *fname) {

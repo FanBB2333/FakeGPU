@@ -393,8 +393,7 @@ class MachineService:
             self._check_memory(device)
         processes = self._process_rows(live, inventory, activity, now)
         ended = [p.summary(now) for p in self._processes.values() if p.status not in LIVE]
-        total = sum(device["memory"]["total_bytes"] for device in devices if device["in_layout"])
-        used = sum(device["memory"]["used_bytes"] for device in devices)
+        layout = [device for device in devices if device["in_layout"]]
         return {
             "protocol": PROTOCOL,
             "daemon": self._daemon_info(now),
@@ -405,9 +404,9 @@ class MachineService:
             "processes": processes,
             "ended": ended + list(self._ended),
             "summary": {
-                "device_count": sum(device["in_layout"] for device in devices),
-                "memory_total_bytes": total,
-                "memory_used_bytes": used,
+                "device_count": len(layout),
+                "memory_total_bytes": sum(device["memory"]["total_bytes"] for device in layout),
+                "memory_used_bytes": sum(device["memory"]["used_bytes"] for device in layout),
                 "process_count": len(processes),
                 "stalled_count": sum(process.status == "stalled" for process in live),
                 "alerts": len(self._high_memory) + len(self._oversubscribed),
@@ -602,9 +601,12 @@ class MachineService:
         return event
 
     def _restore_events(self) -> None:
-        if not self.paths.events.exists():
-            return
-        lines = self.paths.events.read_text(encoding="utf-8").splitlines()[-EVENT_BUFFER:]
+        log = self.paths.events
+        lines: deque[str] = deque(maxlen=EVENT_BUFFER)
+        for path in (log.with_suffix(".jsonl.1"), log):
+            if path.exists():
+                with path.open(encoding="utf-8") as stream:
+                    lines.extend(stream)
         for line in lines:
             try:
                 event = json.loads(line)

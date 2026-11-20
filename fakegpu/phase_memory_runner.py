@@ -36,10 +36,10 @@ def _model_inputs(plan):
         workload = _transformers_serving_workload(plan, model_dir=None)
         root = workload["model_dir"]
         index = root / "model.safetensors.index.json"
-        if index.is_file():
-            names = sorted(set(json.loads(index.read_text())["weight_map"].values()))
-        elif (root / "model.safetensors").is_file():
+        if (root / "model.safetensors").is_file():
             names = ["model.safetensors"]
+        elif index.is_file():
+            names = sorted(set(json.loads(index.read_text())["weight_map"].values()))
         else:
             raise ValueError(
                 "phase serving runner requires the native model.safetensors checkpoint family"

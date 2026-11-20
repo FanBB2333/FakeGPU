@@ -746,9 +746,18 @@ def test_llm_cli_json_without_a_path_writes_the_report_to_stdout(
     )
 
     stdout = capsys.readouterr().out
-    report, end = json.JSONDecoder().raw_decode(stdout)
+    report = json.loads(stdout)
     assert report["schema_version"] == LLM_SCHEMA_VERSION
-    assert "FakeGPU LLM inference estimate" in stdout[end:]
+
+
+def test_serving_cli_json_stdout_is_a_single_document(tmp_path, capsys):
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    assert serving_main([
+        "--model-dir", str(model_dir), "--active-sequences", "2",
+        "--prompt-tokens", "4", "--json",
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)["schema_version"] == SERVING_SCHEMA_VERSION
 
 
 def test_moe_flops_memory_and_expert_parallel_traffic_are_modeled(
@@ -1175,6 +1184,51 @@ def test_vllm_runtime_uses_current_default_and_explicit_profile_inputs(
     assert runtime_cache["num_gpu_blocks"] == 20
     assert runtime_cache["allocatable_bytes"] == 20 * block_bytes
     assert runtime_cache["block_rounding_tail_bytes"] == 7
+    # A 20-token context occupies two 16-token blocks.
+    assert runtime_cache["max_model_len_concurrency"] == 10
+
+
+def test_vllm_requires_one_max_length_request_to_initialize(tmp_path: Path) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    report = estimate_serving_request_set(
+        model_dir,
+        [{"id": "short", "prompt_tokens": 8}, {"id": "long", "prompt_tokens": 16}],
+        max_batch_size=2,
+        runtime="vllm",
+        device_capacity_bytes=2**20,
+        vllm_kv_cache_memory_bytes=16 * 32,
+    )
+
+    assert report["runtime"]["configuration"]["max_model_len_tokens"] == 17
+    assert report["runtime"]["memory"]["initialization_fits"] is False
+    assert report["scheduler"]["admitted_request_ids"] == []
+    assert report["scheduler"]["limiting_factor"] == "vllm_kv_cache_capacity"
+
+
+@pytest.mark.parametrize(("chunk_tokens", "required_blocks"), [(16, 3), (None, 4)])
+def test_vllm_sliding_window_reserves_prefill_and_boundary_blocks(
+    tmp_path: Path, chunk_tokens: int | None, required_blocks: int,
+) -> None:
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    report = estimate_serving_plan(
+        model_dir,
+        active_sequences=1,
+        max_batch_size=1,
+        prompt_tokens=32,
+        generated_tokens=1,
+        runtime="vllm",
+        kv_cache_window_tokens=16,
+        kv_cache_block_tokens=16,
+        prefill_chunk_tokens=chunk_tokens,
+        vllm_kv_cache_memory_bytes=3 * 16 * 32,
+        device_capacity_bytes=2**20,
+    )
+    runtime = report["runtime"]
+    assert runtime["kv_cache"]["max_model_len_concurrency"] == 3 / required_blocks
+    assert runtime["memory"]["initialization_fits"] is (required_blocks <= 3)
+    assert report["scheduler"]["requested_fits"] is (required_blocks <= 3)
 
 
 def test_vllm_runtime_admission_is_limited_by_reserved_kv_pool(
@@ -1214,6 +1268,21 @@ def test_vllm_runtime_admission_is_limited_by_reserved_kv_pool(
     assert report["scheduler"]["limiting_factor"] == (
         "vllm_kv_cache_capacity"
     )
+
+
+def test_vllm_cli_with_only_cache_size_leaves_admission_unknown(tmp_path, capsys):
+    model_dir = tmp_path / "model"
+    _write_model(model_dir)
+    output_path = tmp_path / "plan.json"
+    serving_main([
+        "--model-dir", str(model_dir), "--active-sequences", "1", "--prompt-tokens", "16",
+        "--runtime", "vllm", "--vllm-kv-cache-memory-bytes", "32768", "--json", str(output_path),
+    ])
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["runtime"]["kv_cache"]["num_gpu_blocks"] == 64
+    assert report["scheduler"]["requested_fits"] is None
+    assert report["scheduler"]["admissible_active_sequences"] is None
+    assert "admission: device capacity unavailable" in capsys.readouterr().out
 
 
 def test_vllm_runtime_supports_ordered_request_prefix_admission(

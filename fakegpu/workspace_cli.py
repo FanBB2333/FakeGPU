@@ -12,8 +12,8 @@ from ._cli import (
 )
 from .workspace_profiles import (
     WorkspaceProfileError,
+    _summarize_workspace_profiles,
     load_workspace_profiles,
-    workspace_profile_summary,
 )
 
 
@@ -36,14 +36,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     paths = [Path(value) for value in args.path]
     try:
         profiles = load_workspace_profiles(paths)
-        summary = workspace_profile_summary(paths)
     except WorkspaceProfileError as exc:
         usage_error(parser, exc)
 
     if args.json:
-        print(json.dumps(summary, indent=2, sort_keys=True))
+        print(json.dumps(_summarize_workspace_profiles(profiles), indent=2, sort_keys=True))
         return 0
-    print(f"Workspace profiles: {summary['profile_count']}")
+    print(f"Workspace profiles: {len(profiles)}")
     for profile in profiles:
         match = dict(profile.get("match") or {})
         stack = []

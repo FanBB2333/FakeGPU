@@ -62,6 +62,10 @@ python3 -m fakegpu plan-serving \
   report shows `num_gpu_blocks`, cache token capacity, whether initialization
   fits, and concurrency at `max_model_len`, separately from the logical KV
   demand of the requests.
+- Each maximum-length request needs whole cache blocks. For sliding-window
+  attention, the startup estimate uses the prefill chunk size as the scheduler's
+  token budget and reserves an extra block for page alignment. With unchunked
+  prefill it uses the full modeled context.
 - `--vllm-non-kv-cache-memory-bytes` replaces the modeled non-KV value with
   one from a vLLM startup profile (weights, peak activations, non-torch memory,
   and CUDA graphs).

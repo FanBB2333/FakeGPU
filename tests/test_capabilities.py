@@ -103,3 +103,9 @@ def test_capability_report_summarizes_catalog() -> None:
     assert report["summary"]["group_count"] == 5
     assert report["summary"]["explicit_api_count"] >= 25
     assert report["summary"]["policy_enforced_api_count"] >= 20
+
+
+def test_strict_capability_audit_fails_for_an_empty_build(tmp_path, capsys):
+    assert main(["--build-dir", str(tmp_path), "--strict", "--json"]) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report["export_audit"]["status"] == "no_libraries"

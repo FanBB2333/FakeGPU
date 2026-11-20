@@ -8,7 +8,7 @@ from native import finetune_event_matrix as matrix
 
 
 @pytest.mark.parametrize("framework", ["llamafactory", "axolotl"])
-@pytest.mark.parametrize("steps", [20, 29])
+@pytest.mark.parametrize("steps", [20, 24, 29])
 def test_step_schedule_keeps_terminal_and_framework_final_calls(framework, steps):
     calls = matrix._expected_calls(
         framework, steps, strategy="steps", updates_per_epoch=3
@@ -26,7 +26,7 @@ def test_step_schedule_keeps_terminal_and_framework_final_calls(framework, steps
     assert evaluations == ([0] if framework == "axolotl" else []) + list(
         range(4, steps + 1, 4)
     ) + ([] if steps % 4 == 0 else [steps])
-    assert checkpoints == list(range(6, steps + 1, 6)) + [steps]
+    assert checkpoints == sorted({*range(6, steps + 1, 6), steps})
     if framework == "llamafactory":
         assert calls[-2:] == [
             {"operation": "save_model", "optimizer_step": steps, "inside_train": False},
@@ -311,7 +311,7 @@ def _schedule_report(eval_steps, save_steps):
     }
 
 
-@pytest.mark.parametrize("intervals", [(2, 4), (4, 6), (3, 7)])
+@pytest.mark.parametrize("intervals", [(2, 4), (4, 6), (3, 3), (3, 7)])
 def test_actual_integer_schedule_drives_call_reference(tmp_path, intervals):
     report = _schedule_report(*intervals)
     path = tmp_path / "report.json"
@@ -321,7 +321,7 @@ def test_actual_integer_schedule_drives_call_reference(tmp_path, intervals):
         call["optimizer_step"]
         for call in calls
         if call["operation"] == "_save_checkpoint"
-    ] == list(range(intervals[1], 10, intervals[1])) + [9]
+    ] == sorted({*range(intervals[1], 10, intervals[1]), 9})
 
 
 @pytest.mark.parametrize(

@@ -2,7 +2,11 @@
 
 import pytest
 
-from fakegpu.training_plan import TrainingPlanError, estimate_training_plan
+from fakegpu.training_plan import (
+    TrainingPlanError,
+    estimate_training_plan,
+    normalize_training_config,
+)
 
 
 CONFIG = {
@@ -12,6 +16,37 @@ CONFIG = {
     "sharding_strategy": "full_shard",
 }
 SHAPES = [[12, 8], [12], [3, 12], [3]]
+
+
+@pytest.mark.parametrize(
+    "version,reshard,framework,strategy",
+    [
+        (1, "SHARD_GRAD_OP", "fsdp", "shard_grad_op"),
+        (2, True, "fsdp2", "full_shard"),
+        (2, False, "fsdp2", "shard_grad_op"),
+    ],
+)
+def test_accelerate_fsdp_version_and_reshard_setting(version, reshard, framework, strategy):
+    config = normalize_training_config({
+        "distributed_type": "FSDP",
+        "num_processes": 2,
+        "fsdp_config": {
+            "fsdp_version": version,
+            "fsdp_reshard_after_forward": reshard,
+        },
+    })
+    assert config["framework"] == framework
+    assert config["sharding_strategy"] == strategy
+    plan = estimate_training_plan(
+        config,
+        parameter_bytes=1176,
+        activation_bytes=0,
+        parameter_element_bytes=8,
+        parameter_shapes=SHAPES if framework == "fsdp2" and reshard else None,
+    )
+    assert plan["rank_local_storage"]["parameter_bytes"] == (
+        640 if strategy == "full_shard" else 1176
+    )
 
 
 def test_fsdp2_uneven_parameter_shapes_budget_largest_rank():
