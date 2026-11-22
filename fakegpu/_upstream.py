@@ -1018,38 +1018,21 @@ def _dist_init_process_group(
         _DIST_WORLD_SIZE, _DIST_RANK = size, index
         return None
 
+    size = 1 if world_size in (-1, None) else int(world_size)
+    index = 0 if rank in (-1, None) else int(rank)
+    if _ORIG_DIST_INIT is not None:
+        try:
+            from torch.testing._internal.distributed.fake_pg import FakeStore
+        except ModuleNotFoundError as exc:
+            if exc.name != "torch.testing._internal.distributed.fake_pg":
+                raise
+        else:
+            # PyTorch checks dist.is_initialized() while creating the fake
+            # backend to decide whether it can inherit the default group's options.
+            _ORIG_DIST_INIT(backend="fake", store=FakeStore(), rank=index, world_size=size)
     _DIST_INITIALIZED = True
     _DIST_BACKEND = _backend_name(backend)
-    _DIST_WORLD_SIZE = 1 if world_size in (-1, None) else int(world_size)
-    _DIST_RANK = 0 if rank in (-1, None) else int(rank)
-
-    # Create a real ProcessGroup using PyTorch's ``fake`` distributed backend.
-    # FSDP and other distributed modules call ``_get_default_group()`` which
-    # requires a real C++ ProcessGroup instance — our global-state-only
-    # approach is not sufficient.  The ``fake`` backend (PyTorch 2.1+)
-    # provides an in-process ProcessGroup that satisfies all type checks
-    # without needing NCCL or gloo.
-    if _ORIG_DIST_INIT is not None:
-        import os
-
-        _env_set: list[str] = []
-        if "MASTER_ADDR" not in os.environ:
-            os.environ["MASTER_ADDR"] = "localhost"
-            _env_set.append("MASTER_ADDR")
-        if "MASTER_PORT" not in os.environ:
-            os.environ["MASTER_PORT"] = "29500"
-            _env_set.append("MASTER_PORT")
-        try:
-            _ORIG_DIST_INIT(
-                backend="fake",
-                rank=_DIST_RANK,
-                world_size=_DIST_WORLD_SIZE,
-            )
-        except Exception:
-            pass  # Fall back to global-state-only mode
-        finally:
-            for key in _env_set:
-                os.environ.pop(key, None)
+    _DIST_WORLD_SIZE, _DIST_RANK = size, index
     return None
 
 
